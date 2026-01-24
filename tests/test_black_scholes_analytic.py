@@ -1,6 +1,5 @@
 import math
 import numpy as np
-import pytest
 
 from qpl.models.black_scholes import bs_price
 

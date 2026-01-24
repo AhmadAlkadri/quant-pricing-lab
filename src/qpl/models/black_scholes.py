@@ -1,10 +1,24 @@
 from __future__ import annotations
 
-import numpy as np
+from dataclasses import dataclass
 from typing import Union
+
+import numpy as np
 from scipy.special import erf
 
+from ..exceptions import InvalidInputError
+
 ArrayLike = Union[float, int, np.ndarray]
+
+
+@dataclass(frozen=True)
+class BlackScholesModel:
+    sigma: float
+
+    def __post_init__(self) -> None:
+        if self.sigma < 0:
+            raise InvalidInputError("sigma must be >= 0")
+
 
 
 def _norm_cdf(x: np.ndarray) -> np.ndarray:
@@ -12,6 +26,7 @@ def _norm_cdf(x: np.ndarray) -> np.ndarray:
     Standard normal CDF using erf. Vectorized.
     """
     return 0.5 * (1.0 + erf(x / np.sqrt(2.0)))
+
 
 
 def bs_price(
@@ -49,36 +64,39 @@ def bs_price(
     scalar or np.ndarray
         Price(s) matching the shape of S.
     """
-    if T <= 0:
-        # At expiry: discounted payoff is just payoff at T=0 (no discounting needed)
-        # but keep consistent with standard convention: price = intrinsic value.
-        S_arr = np.asarray(S, dtype=float)
-        if kind.lower() == "call":
-            out = np.maximum(S_arr - K, 0.0)
-        elif kind.lower() == "put":
-            out = np.maximum(K - S_arr, 0.0)
-        else:
-            raise ValueError("kind must be 'call' or 'put'")
-        return out.item() if np.isscalar(S) else out
+    if T < 0:
+        raise InvalidInputError("T must be >= 0")
+    if sigma < 0:
+        raise InvalidInputError("sigma must be >= 0")
+    if K <= 0:
+        raise InvalidInputError("K must be > 0")
 
-    if sigma <= 0:
-        # Zero vol: deterministic forward under q, price is discounted intrinsic of forward payoff
-        S_arr = np.asarray(S, dtype=float)
-        forward = S_arr * np.exp((r - q) * T)
-        disc = np.exp(-r * T)
-        if kind.lower() == "call":
-            out = disc * np.maximum(forward - K, 0.0)
-        elif kind.lower() == "put":
-            out = disc * np.maximum(K - forward, 0.0)
-        else:
-            raise ValueError("kind must be 'call' or 'put'")
-        return out.item() if np.isscalar(S) else out
+    S_arr = np.asarray(S, dtype=float)
+    if np.any(S_arr <= 0):
+        raise InvalidInputError("S must be > 0")
 
     kind_l = kind.lower()
     if kind_l not in {"call", "put"}:
-        raise ValueError("kind must be 'call' or 'put'")
+        raise InvalidInputError("kind must be 'call' or 'put'")
 
-    S_arr = np.asarray(S, dtype=float)
+    if T == 0:
+        # At expiry: discounted payoff is just payoff at T=0 (no discounting needed)
+        # but keep consistent with standard convention: price = intrinsic value.
+        if kind_l == "call":
+            out = np.maximum(S_arr - K, 0.0)
+        else:
+            out = np.maximum(K - S_arr, 0.0)
+        return out.item() if np.isscalar(S) else out
+
+    if sigma == 0:
+        # Zero vol: deterministic forward under q, price is discounted intrinsic of forward payoff
+        forward = S_arr * np.exp((r - q) * T)
+        disc = np.exp(-r * T)
+        if kind_l == "call":
+            out = disc * np.maximum(forward - K, 0.0)
+        else:
+            out = disc * np.maximum(K - forward, 0.0)
+        return out.item() if np.isscalar(S) else out
 
     sqrtT = np.sqrt(T)
     d1 = (np.log(S_arr / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * sqrtT)

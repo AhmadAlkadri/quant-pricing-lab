@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 
 from qpl.instruments.payoffs import call_payoff, put_payoff
 
