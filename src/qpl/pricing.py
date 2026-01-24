@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from .engines.analytic.black_scholes import greeks_european, price_european
+from .engines.analytic.black_scholes import greeks_european, price_european as price_european_analytic
 from .engines.base import GreeksResult, PriceResult
+from .engines.mc.pricers import MCConfig, price_european as price_european_mc
 from .exceptions import InvalidInputError, NotSupportedError
 from .instruments.options import EuropeanOption
 from .market.market import Market
@@ -19,19 +20,39 @@ def price(
     method: Literal["analytic", "mc", "pde"] = "analytic",
     **kwargs: Any,
 ) -> PriceResult:
-    if method != "analytic":
-        raise NotSupportedError(f"method '{method}' is not supported")
-    if kwargs:
-        raise InvalidInputError("Unexpected keyword arguments for method 'analytic'")
+    if method == "analytic":
+        if kwargs:
+            raise InvalidInputError("Unexpected keyword arguments for method 'analytic'")
 
-    if (
-        isinstance(instrument, EuropeanOption)
-        and isinstance(model, BlackScholesModel)
-        and isinstance(market, Market)
-    ):
-        return price_european(instrument, model, market)
+        if (
+            isinstance(instrument, EuropeanOption)
+            and isinstance(model, BlackScholesModel)
+            and isinstance(market, Market)
+        ):
+            return price_european_analytic(instrument, model, market)
 
-    raise NotSupportedError("Unsupported instrument/model/market combination")
+        raise NotSupportedError("Unsupported instrument/model/market combination")
+
+    if method == "mc":
+        cfg = kwargs.get("cfg")
+        extra_kwargs = {key: value for key, value in kwargs.items() if key != "cfg"}
+        if cfg is None:
+            raise InvalidInputError("cfg is required for method 'mc'")
+        if extra_kwargs:
+            raise InvalidInputError("Unexpected keyword arguments for method 'mc'")
+        if not isinstance(cfg, MCConfig):
+            raise InvalidInputError("cfg must be an instance of MCConfig")
+
+        if (
+            isinstance(instrument, EuropeanOption)
+            and isinstance(model, BlackScholesModel)
+            and isinstance(market, Market)
+        ):
+            return price_european_mc(instrument, model, market, cfg=cfg)
+
+        raise NotSupportedError("Unsupported instrument/model/market combination")
+
+    raise NotSupportedError(f"method '{method}' is not supported")
 
 
 
@@ -43,16 +64,20 @@ def greeks(
     method: Literal["analytic", "mc", "pde"] = "analytic",
     **kwargs: Any,
 ) -> GreeksResult:
-    if method != "analytic":
-        raise NotSupportedError(f"method '{method}' is not supported")
-    if kwargs:
-        raise InvalidInputError("Unexpected keyword arguments for method 'analytic'")
+    if method == "analytic":
+        if kwargs:
+            raise InvalidInputError("Unexpected keyword arguments for method 'analytic'")
 
-    if (
-        isinstance(instrument, EuropeanOption)
-        and isinstance(model, BlackScholesModel)
-        and isinstance(market, Market)
-    ):
-        return greeks_european(instrument, model, market)
+        if (
+            isinstance(instrument, EuropeanOption)
+            and isinstance(model, BlackScholesModel)
+            and isinstance(market, Market)
+        ):
+            return greeks_european(instrument, model, market)
 
-    raise NotSupportedError("Unsupported instrument/model/market combination")
+        raise NotSupportedError("Unsupported instrument/model/market combination")
+
+    if method == "mc":
+        raise NotSupportedError("Greeks not supported for method 'mc' yet")
+
+    raise NotSupportedError(f"method '{method}' is not supported")
