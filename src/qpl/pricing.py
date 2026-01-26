@@ -17,7 +17,7 @@ def price(
     model: Any,
     market: Any,
     *,
-    method: Literal["analytic", "mc", "pde"] = "analytic",
+    method: Literal["analytic", "mc"] = "analytic",
     **kwargs: Any,
 ) -> PriceResult:
     if method == "analytic":
@@ -61,7 +61,7 @@ def greeks(
     model: Any,
     market: Any,
     *,
-    method: Literal["analytic", "mc", "pde"] = "analytic",
+    method: Literal["analytic", "mc"] = "analytic",
     **kwargs: Any,
 ) -> GreeksResult:
     if method == "analytic":

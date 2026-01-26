@@ -1,8 +1,10 @@
 # Quant Pricing Lab (qpl)
 
-A small, well-tested Python codebase for option pricing via:
-- **Monte Carlo (Milestone A)**: path simulation, variance reduction, MC Greeks
-- **PDE / Finite Differences (Milestone B)**: Black–Scholes PDE solver, Greeks from grids, comparisons vs analytics/MC
+A small, well-tested Python codebase for option pricing with:
+- **Analytic Black–Scholes**: European price + Greeks
+- **Monte Carlo (GBM)**: European pricing with stderr (terminal sampling; optional multi-step discretization via `n_steps`)
+
+Planned: MC Greeks + variance reduction, PDE/finite-difference pricer, benchmarking.
 
 ## Quickstart
 

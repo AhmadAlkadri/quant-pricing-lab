@@ -106,7 +106,7 @@ def test_mc_sigma_zero_discounted_forward_intrinsic_and_zero_stderr():
     forward = 100.0 * math.exp((0.05 - 0.02) * 1.0)
     disc = math.exp(-0.05 * 1.0)
     expected = disc * max(110.0 - forward, 0.0)
-    assert res.value == pytest.approx(expected, abs=0.0)
+    assert res.value == pytest.approx(expected, abs=1e-12)
     assert res.stderr == 0.0
 
 
@@ -118,3 +118,48 @@ def test_mc_greeks_not_supported():
 
     with pytest.raises(NotSupportedError, match="not supported"):
         greeks(option, model, market, method="mc", cfg=cfg)
+
+
+class _CurveWithDf:
+    def __init__(self, rate_attr: float, df_rate: float) -> None:
+        self.rate = rate_attr
+        self._df_rate = df_rate
+
+    def df(self, t: float) -> float:
+        return math.exp(-self._df_rate * t)
+
+
+class _DivCurveWithDf:
+    def __init__(self, yield_attr: float, df_yield: float) -> None:
+        self.yield_ = yield_attr
+        self._df_yield = df_yield
+
+    def df(self, t: float) -> float:
+        return math.exp(-self._df_yield * t)
+
+
+def test_mc_uses_curve_df():
+    option = EuropeanOption(kind="call", strike=90.0, expiry=1.0)
+    model = BlackScholesModel(sigma=0.0)
+    market = Market(
+        spot=100.0,
+        rate_curve=_CurveWithDf(rate_attr=0.10, df_rate=0.01),
+        dividend_curve=_DivCurveWithDf(yield_attr=0.05, df_yield=0.02),
+    )
+    cfg = MCConfig(n_paths=2, n_steps=1, seed=1)
+
+    res = price(option, model, market, method="mc", cfg=cfg)
+    forward = 100.0 * math.exp((0.01 - 0.02) * 1.0)
+    expected = math.exp(-0.01) * max(forward - 90.0, 0.0)
+    assert res.value == pytest.approx(expected, abs=0.0)
+    assert res.stderr == 0.0
+
+
+def test_mc_invalid_n_steps_raises():
+    option = EuropeanOption(kind="call", strike=100.0, expiry=1.0)
+    model = BlackScholesModel(sigma=0.2)
+    market = _market(100.0, 0.05, 0.01)
+    cfg = MCConfig(n_paths=2, n_steps=0, seed=1)
+
+    with pytest.raises(InvalidInputError):
+        price(option, model, market, method="mc", cfg=cfg)

@@ -11,7 +11,7 @@ from ..base import GreeksResult, PriceResult
 
 
 def _norm_cdf(x: float) -> float:
-    # Scalar version; keep in sync with qpl.models.black_scholes._norm_cdf (vectorized).
+    # TODO(CDF-DUP): unify with qpl.models.black_scholes._norm_cdf (vectorized).
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
@@ -46,14 +46,17 @@ def price_european(
     model: BlackScholesModel,
     market: Market,
 ) -> PriceResult:
+    T = option.expiry
+    r = market.rate(T)
+    q = market.dividend_yield(T)
     value = float(
         bs_price(
             S=market.spot,
             K=option.strike,
-            T=option.expiry,
-            r=market.rate_curve.rate,
+            T=T,
+            r=r,
             sigma=model.sigma,
-            q=market.dividend_curve.yield_,
+            q=q,
             kind=option.kind,
         )
     )
@@ -69,8 +72,8 @@ def greeks_european(
     S = market.spot
     K = option.strike
     T = option.expiry
-    r = market.rate_curve.rate
-    q = market.dividend_curve.yield_
+    r = market.rate(T)
+    q = market.dividend_yield(T)
     sigma = model.sigma
 
     d1, d2, sqrtT = _d1_d2(S=S, K=K, T=T, r=r, q=q, sigma=sigma)

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "qpl"
 version = "0.1.0"
-description = "Quant Pricing Lab: Monte Carlo and PDE engines for option pricing (portfolio project)."
+description = "Quant Pricing Lab: analytic and Monte Carlo engines for option pricing (portfolio project)."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

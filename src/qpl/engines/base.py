@@ -11,6 +11,11 @@ class PricingEngine(Protocol):
 
 @dataclass(frozen=True)
 class PriceResult:
+    """Pricing result.
+
+    stderr is None for deterministic/analytic methods; for Monte Carlo it is the
+    standard error of the estimator (0.0 for deterministic edge cases).
+    """
     value: float
     stderr: float | None = None
     meta: dict[str, Any] | None = None
