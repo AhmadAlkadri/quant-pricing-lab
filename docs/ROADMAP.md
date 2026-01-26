@@ -1,22 +1,11 @@
-
-### `docs/ROADMAP.md`
-```markdown
 # Roadmap
 
-## Milestone A — Monte Carlo Engine
-- [ ] GBM path generator (exact discretization)
-- [ ] European option pricing
-- [ ] Greeks: pathwise + likelihood ratio (at least Delta)
-- [ ] Variance reduction: antithetic + control variates
-- [ ] Convergence plots and runtime benchmarks
+## DONE
+- [x] Milestone A: Analytic Black–Scholes pricer + Greeks + dispatcher + tests
+- [x] Milestone B: Monte Carlo European pricer (GBM) + stderr + dispatcher + tests + example
+- [x] Patch 1: MC test robustness + edge cases + roadmap update
 
-## Milestone B — PDE Engine (Finite Differences)
-- [ ] Black–Scholes PDE setup
-- [ ] Theta scheme (explicit/implicit/Crank–Nicolson)
-- [ ] Boundary conditions + stability notes
-- [ ] Greeks from grid
-- [ ] Compare vs analytic BS and Monte Carlo
-- [ ] (Stretch) American put with PSOR
-
-## Milestone C — Case Study
-- [ ] Barrier option: MC vs PDE tradeoffs
+## NEXT
+1) MC Greeks (finite-difference first, then pathwise/LR)
+2) Benchmark harness (pytest-benchmark or ASV) + CI wiring for ruff/typecheck
+3) PDE FD pricer for European under BS
