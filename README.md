@@ -3,8 +3,9 @@
 A small, well-tested Python codebase for option pricing with:
 - **Analytic Black–Scholes**: European price + Greeks
 - **Monte Carlo (GBM)**: European pricing with stderr (terminal sampling; optional multi-step discretization via `n_steps`)
+- **PDE / Finite Differences**: European Black–Scholes pricing via theta scheme (call/put only)
 
-Planned: MC Greeks + variance reduction, PDE/finite-difference pricer, benchmarking.
+Planned: MC Greeks + variance reduction, benchmarking.
 
 ## Quickstart
 
