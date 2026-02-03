@@ -110,14 +110,15 @@ def test_mc_sigma_zero_discounted_forward_intrinsic_and_zero_stderr():
     assert res.stderr == 0.0
 
 
-def test_mc_greeks_not_supported():
+def test_mc_greeks_supported():
     option = EuropeanOption(kind="call", strike=100.0, expiry=1.0)
     model = BlackScholesModel(sigma=0.2)
     market = _market(100.0, 0.05, 0.01)
     cfg = MCConfig(n_paths=2, seed=1)
 
-    with pytest.raises(NotSupportedError, match="not supported"):
-        greeks(option, model, market, method="mc", cfg=cfg)
+    res = greeks(option, model, market, method="mc", cfg=cfg)
+    assert res.meta is not None
+    assert res.meta["method"] == "mc"
 
 
 class _CurveWithDf:
@@ -163,3 +164,53 @@ def test_mc_invalid_n_steps_raises():
 
     with pytest.raises(InvalidInputError):
         price(option, model, market, method="mc", cfg=cfg)
+
+
+def test_mc_greeks_match_analytic_call():
+    option = EuropeanOption(kind="call", strike=100.0, expiry=1.0)
+    model = BlackScholesModel(sigma=0.2)
+    market = _market(100.0, 0.05, 0.01)
+    cfg = MCConfig(n_paths=200_000, n_steps=1, seed=42)
+    bumps = {"spot": 1e-2, "sigma": 1e-4, "r": 1e-5}
+
+    g_mc = greeks(option, model, market, method="mc", cfg=cfg, bumps=bumps)
+    g_an = greeks(option, model, market, method="analytic")
+
+    assert abs(g_mc.delta - g_an.delta) < 5e-3
+    assert abs(g_mc.gamma - g_an.gamma) < 5e-3
+    assert abs(g_mc.vega - g_an.vega) < 2e-1
+    assert abs(g_mc.rho - g_an.rho) < 2e-1
+    assert g_mc.meta is not None
+    assert g_mc.meta["method"] == "mc"
+    assert "spot" in g_mc.meta["bumps"]
+    assert "sigma" in g_mc.meta["bumps"]
+    assert "r" in g_mc.meta["bumps"]
+
+
+def test_mc_greeks_match_analytic_put():
+    option = EuropeanOption(kind="put", strike=110.0, expiry=0.75)
+    model = BlackScholesModel(sigma=0.25)
+    market = _market(105.0, 0.04, 0.02)
+    cfg = MCConfig(n_paths=200_000, n_steps=1, seed=42)
+    bumps = {"spot": max(abs(market.spot) * 1e-4, 1e-6), "sigma": 1e-4, "r": 1e-5}
+
+    g_mc = greeks(option, model, market, method="mc", cfg=cfg, bumps=bumps)
+    g_an = greeks(option, model, market, method="analytic")
+
+    assert abs(g_mc.delta - g_an.delta) < 5e-3
+    assert abs(g_mc.gamma - g_an.gamma) < 5e-3
+    assert abs(g_mc.vega - g_an.vega) < 2e-1
+    assert abs(g_mc.rho - g_an.rho) < 2e-1
+
+
+def test_mc_greeks_validation_errors():
+    option = EuropeanOption(kind="call", strike=100.0, expiry=1.0)
+    model = BlackScholesModel(sigma=0.2)
+    market = _market(100.0, 0.05, 0.01)
+    cfg = MCConfig(n_paths=2, n_steps=1, seed=1)
+
+    with pytest.raises(InvalidInputError):
+        greeks(option, model, market, method="mc")
+
+    with pytest.raises(InvalidInputError):
+        greeks(option, model, market, method="mc", cfg=cfg, bumps=1.0)
