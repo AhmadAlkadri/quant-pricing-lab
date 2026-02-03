@@ -18,6 +18,11 @@ def main() -> None:
     analytic = price(option, model, market, method="analytic")
     mc = price(option, model, market, method="mc", cfg=MCConfig(n_paths=100_000, seed=7))
 
+    if mc.stderr is None:
+        raise RuntimeError("MC stderr is None; expected a Monte Carlo result.")
+    if mc.stderr == 0.0:
+        raise RuntimeError("MC stderr is zero; z-score is undefined.")
+
     z_score = (mc.value - analytic.value) / mc.stderr
 
     print(f"analytic={analytic.value:.6f}")
