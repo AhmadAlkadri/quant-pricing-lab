@@ -214,3 +214,6 @@ def test_mc_greeks_validation_errors():
 
     with pytest.raises(InvalidInputError):
         greeks(option, model, market, method="mc", cfg=cfg, bumps=1.0)
+
+    with pytest.raises(InvalidInputError):
+        greeks(option, model, market, method="mc", cfg=cfg, bumps={"spot": 1e-4}, extra=1)
