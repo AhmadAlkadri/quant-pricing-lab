@@ -137,6 +137,7 @@ def greeks_european(
     }
 
     if t == 0.0:
+        meta["t0"] = True
         return GreeksResult(
             delta=0.0,
             gamma=0.0,

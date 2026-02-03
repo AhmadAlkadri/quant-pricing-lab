@@ -104,20 +104,13 @@ def greeks(
     if method == "mc":
         cfg = kwargs.get("cfg")
         bumps = kwargs.get("bumps")
-        fd = kwargs.get("fd")
-        extra_kwargs = {
-            key: value for key, value in kwargs.items() if key not in {"cfg", "bumps", "fd"}
-        }
+        extra_kwargs = {key: value for key, value in kwargs.items() if key not in {"cfg", "bumps"}}
         if cfg is None:
             raise InvalidInputError("cfg is required for method 'mc'")
         if extra_kwargs:
             raise InvalidInputError("Unexpected keyword arguments for method 'mc'")
         if not isinstance(cfg, MCConfig):
             raise InvalidInputError("cfg must be an instance of MCConfig")
-        if bumps is not None and fd is not None:
-            raise InvalidInputError("Use only one of bumps or fd for method 'mc'")
-        if bumps is None:
-            bumps = fd
         if bumps is not None and not isinstance(bumps, dict):
             raise InvalidInputError("bumps must be a dict of bump sizes")
 
