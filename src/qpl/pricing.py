@@ -2,19 +2,26 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from .engines.analytic.black_scholes import greeks_european, price_european as price_european_analytic
+from .engines.analytic.black_scholes import (
+    greeks_european,
+    price_european as price_european_analytic,
+)
 from .engines.base import GreeksResult, PriceResult
 from .engines.mc.pricers import (
     MCConfig,
     greeks_european as greeks_european_mc,
     price_european as price_european_mc,
 )
-from .engines.pde.pricers import PDEConfig, price_european as price_european_pde
+from .engines.pde.pricers import (
+    PDEConfig,
+    greeks_european as greeks_european_pde,
+    price_european as price_european_pde,
+)
+
 from .exceptions import InvalidInputError, NotSupportedError
 from .instruments.options import EuropeanOption
 from .market.market import Market
 from .models.black_scholes import BlackScholesModel
-
 
 
 def price(
@@ -79,7 +86,6 @@ def price(
     raise NotSupportedError(f"method '{method}' is not supported")
 
 
-
 def greeks(
     instrument: Any,
     model: Any,
@@ -124,6 +130,22 @@ def greeks(
         raise NotSupportedError("Unsupported instrument/model/market combination")
 
     if method == "pde":
-        raise NotSupportedError("Greeks not supported for method 'pde' yet")
+        cfg = kwargs.get("cfg")
+        extra_kwargs = {key: value for key, value in kwargs.items() if key != "cfg"}
+        if cfg is None:
+            raise InvalidInputError("cfg is required for method 'pde'")
+        if extra_kwargs:
+            raise InvalidInputError("Unexpected keyword arguments for method 'pde'")
+        if not isinstance(cfg, PDEConfig):
+            raise InvalidInputError("cfg must be an instance of PDEConfig")
+
+        if (
+            isinstance(instrument, EuropeanOption)
+            and isinstance(model, BlackScholesModel)
+            and isinstance(market, Market)
+        ):
+            return greeks_european_pde(instrument, model, market, cfg=cfg)
+
+        raise NotSupportedError("Unsupported instrument/model/market combination")
 
     raise NotSupportedError(f"method '{method}' is not supported")

@@ -9,7 +9,7 @@ from ...exceptions import InvalidInputError
 from ...instruments.options import EuropeanOption
 from ...market.market import Market
 from ...models.black_scholes import BlackScholesModel
-from ..base import PriceResult
+from ..base import GreeksResult, PriceResult
 
 
 @dataclass(frozen=True)
@@ -159,7 +159,13 @@ def price_european(
         v[0] = v0_np1
         v[-1] = vmax_np1
 
-    price = float(np.interp(s0, s_grid, v))
+    # Use CubicSpline for smoother interpolation (essential for Gamma via FD)
+    # np.interp is piecewise linear -> 2nd derivative is 0 or undefined.
+    from scipy.interpolate import CubicSpline
+
+    cs = CubicSpline(s_grid, v)
+    price = float(cs(s0))
+
     meta = {
         "method": "pde",
         "model": "BlackScholes",
@@ -169,3 +175,51 @@ def price_european(
         "s_max": s_max,
     }
     return PriceResult(value=price, meta=meta)
+
+
+def greeks_european(
+    option: EuropeanOption,
+    model: BlackScholesModel,
+    market: Market,
+    *,
+    cfg: PDEConfig,
+) -> GreeksResult:
+    """Compute Delta and Gamma via finite differences on PDE price."""
+    from dataclasses import replace
+
+    # Finite difference bump size
+    # Uses a larger bump (1%) to smooth out grid interpolation artifacts for Gamma
+    s0 = market.spot
+    h = max(0.01 * s0, 1e-4)
+
+    # Prepare markets shifted up and down
+    market_up = replace(market, spot=s0 + h)
+    market_down = replace(market, spot=s0 - h)
+
+    # Compute 3 prices: V(S+h), V(S-h), V(S)
+    # Note: V(S) is strictly needed for Gamma. For Delta method-neutral,
+    # central diff is (V(S+h) - V(S-h)) / 2h.
+    # PDE grid alignment might introduce noise if h < ds, but for now we trust interp.
+    res_up = price_european(option, model, market_up, cfg=cfg)
+    res_down = price_european(option, model, market_down, cfg=cfg)
+    res_mid = price_european(option, model, market, cfg=cfg)  # Needed for Gamma
+
+    v_up = res_up.value
+    v_down = res_down.value
+    v_mid = res_mid.value
+
+    delta = (v_up - v_down) / (2 * h)
+    gamma = (v_up - 2 * v_mid + v_down) / (h * h)
+
+    return GreeksResult(
+        delta=delta,
+        gamma=gamma,
+        vega=math.nan,
+        theta=math.nan,
+        rho=math.nan,
+        meta={
+            "method": "pde",
+            "bump_size": h,
+            "pde_meta": res_mid.meta,
+        },
+    )
