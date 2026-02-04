@@ -12,6 +12,7 @@ Agent Contract
 - If >3 plausible causes exist, write a quick experiment or add instrumentation before changing code.
 - If still uncertain after 2 iterations, produce a minimal repro and stop.
 - Complexity receipts: any new abstraction must state why it exists, the bug it prevents, its cost, and what happens if omitted.
+- Numerical engines must be accompanied by *empirical convergence evidence*. (Examples/notebooks must be reproducibility and interpretable).
 - Public API or architectural changes require a new ADR (or update + supersede).
 - Preserve determinism expectations (MC seed, PDE determinism) unless an ADR says otherwise.
 - Keep error types consistent (`InvalidInputError`, `NotSupportedError`) and validate at boundaries.
