@@ -23,6 +23,7 @@ dev = [
   "mypy>=1.8",
   "ipykernel>=6.0",
   "jupyter>=1.0",
+  "nbstripout>=0.7",
 ]
 
 [tool.pytest.ini_options]

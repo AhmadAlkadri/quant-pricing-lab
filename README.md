@@ -13,6 +13,7 @@ Planned: variance reduction, benchmarking.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
+./scripts/setup_git.sh
 pytest
 ```
 
