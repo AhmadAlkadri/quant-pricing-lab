@@ -35,11 +35,11 @@ def main() -> None:
     g_mc = greeks(option, model, market, method="mc", cfg=mc_cfg, bumps=bumps)
     print(
         "greeks_analytic="
-        f"delta:{g_an.delta:.6f} gamma:{g_an.gamma:.6f} vega:{g_an.vega:.6f} rho:{g_an.rho:.6f}"
+        f"delta:{g_an.delta:.6f} gamma:{g_an.gamma:.6f} vega:{g_an.vega:.6f} theta:{g_an.theta:.6f} rho:{g_an.rho:.6f}"
     )
     print(
         "greeks_mc="
-        f"delta:{g_mc.delta:.6f} gamma:{g_mc.gamma:.6f} vega:{g_mc.vega:.6f} rho:{g_mc.rho:.6f}"
+        f"delta:{g_mc.delta:.6f} gamma:{g_mc.gamma:.6f} vega:{g_mc.vega:.6f} theta:{g_mc.theta:.6f} rho:{g_mc.rho:.6f}"
     )
 
 

@@ -190,11 +190,52 @@ def greeks_european(
     value_dn = _price_rate(r - dr)
     rho = (value_up - value_dn) / (2.0 * dr)
 
+    # Theta implementation via finite difference (backward or central)
+    # We use backward diff (V(t) - V(t-dt))/dt to avoid looking into the future
+    # which might exceed expiry if we used forward diff, though t+dt is usually fine.
+    # However, for Theta, we explicitly want -dV/dt.
+    
+    # We'll use a simple approach: if t is large enough, bump time backwards.
+    # If t is too close to 0, bump forward?
+    # Actually, standard definition Theta = -dV/dt.
+    # Approximation: -(V(t + dt) - V(t)) / dt  (forward diff in time)
+    # Or: -(V(t) - V(t - dt)) / dt (backward diff in time)
+    
+    # Let's use Backward Diff: Theta ~ (V(t - dt) - V(t)) / dt
+    # This corresponds to "passage of time" reducing time-to-expiry.
+    # New expiry t' = t - dt.
+    
+    dt = _bump("time", min(1e-4, t / 2.0))
+    # Safety: ensure we don't go negative or too small
+    if t <= dt:
+         dt = t * 0.5
+
+    def _price_time_shifted(new_t: float) -> float:
+        # We need to construct a new option with modified expiry
+        # OR just call price_european with a modified option.
+        # However, option is immutable (frozen).
+        # We can use dataclasses.replace
+        from dataclasses import replace
+        new_opt = replace(option, expiry=new_t)
+        return price_european(new_opt, model, market, cfg=cfg).value
+
+    # Calculate V(t-dt)
+    # Note: price_european handles t=0 logic if dt~t
+    val_minus = _price_time_shifted(t - dt)
+    
+    # Theta = (val_minus - base) / dt
+    # Explain: 
+    #   V(t_now) = base (time to expiry T)
+    #   V(t_later) = val_minus (time to expiry T - dt)
+    #   Theta approx (V(t_later) - V(t_now)) / dt
+    #   = (val_minus - base) / dt
+    theta = (val_minus - base) / dt
+
     return GreeksResult(
         delta=delta,
         gamma=gamma,
         vega=vega,
-        theta=0.0,
+        theta=theta,
         rho=rho,
         meta=meta,
     )
