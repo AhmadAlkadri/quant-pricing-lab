@@ -110,11 +110,16 @@ Top 10 cheapest checks
 - ADR rules: one decision per ADR, keep under 1 page, include status and supersedes links. (source: AGENT/adr/0000-template.md)
 
 9) Roadmap: next 3 increments (vertical slices only)
-- Add a benchmark harness (pytest-benchmark or ASV) with at least one BS analytic and one MC benchmark plus docs. (source: docs/ROADMAP.md)
-- Add accuracy/regression baselines comparing analytic vs PDE vs MC with explicit tolerances. (source: docs/ROADMAP.md)
-- CI/polish: add ruff/pyright checks and tighten docs/examples wiring. (source: docs/ROADMAP.md)
+- [Immediate] Enable PDE Greeks (Delta/Gamma): `pricing.greeks(..., method='pde')`.
+- [Immediate] Fix MC Theta: currently returns 0.0, needs bump logic.
+- [Queued] Binary/Digital Options (Analytic): new instrument `BinaryOption`.
+- [Queued] Benchmark Harness: standard perf tracking.
 
 10) Open questions / risks
-- ROADMAP lists MC Greeks as next work, but MC Greeks already exist; verify and update ROADMAP if needed. Verify: inspect `src/qpl/engines/mc/pricers.py` and tests, then align `docs/ROADMAP.md`. (source: docs/ROADMAP.md; src/qpl/engines/mc/pricers.py)
 - README Quickstart code block appears unclosed; verify and fix if needed. Verify: re-open `README.md` and confirm markdown renders cleanly. (source: README.md)
 - Version sync risk: `pyproject.toml` and `qpl.__version__` must stay aligned. Verify: compare values and define an update rule. (source: pyproject.toml; src/qpl/__init__.py)
+
+11) Execution Principle: Thin Vertical Slices
+- We simply do not build "layers". We build **slices**.
+- A slice = Public API + Engine Logic + Test + Golden Path update.
+- See `AGENT/adr/0002-thin-vertical-slices.md`.
