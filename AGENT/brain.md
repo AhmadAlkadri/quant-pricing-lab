@@ -36,6 +36,12 @@ Agent Contract
 - Non-goal: multi-asset or stochastic rate/dividend frameworks (single-spot market with flat curves). (source: src/qpl/market/market.py; src/qpl/market/curves.py)
 - Non-goal: CLI or service interface (no console scripts defined). (source: pyproject.toml)
 
+## Notebook Hygiene
+- Notebooks live in `notebooks/` and follow a strict numbering scheme: `NN_description.ipynb`.
+- Numbers increase monotonically (`00`, `01`, `02`, ...).
+- Output is stripped via `nbstripout` (enforced by `.gitattributes`).
+- Dependencies: Must use repo environment; no cells should fail.
+
 2) Public API surface (current) - truth source: ADR-0001
 - Stable: `qpl.pricing.price` and `qpl.pricing.greeks` dispatcher APIs. (source: src/qpl/pricing.py)
 - Stable: `qpl.instruments` exports `EuropeanOption`, `call_payoff`, `put_payoff`. (source: src/qpl/instruments/__init__.py)
