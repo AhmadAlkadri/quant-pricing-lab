@@ -8,27 +8,32 @@ A small, well-tested Python codebase for option pricing with:
 MC Greeks supported for European options via finite differences (CRN).
 Planned: variance reduction, benchmarking.
 
-## Quickstart
+## Release: v0.1.0
+
+Quant Pricing Lab is a compact Python lab for European option pricing under the Black–Scholes
+assumptions, with analytic pricing/Greeks plus Monte Carlo and PDE (theta-scheme) engines for
+vanilla calls and puts. It is intentionally narrow in scope: no non-European or path-dependent
+instruments, no models beyond Black–Scholes, and no multi-asset or production trading framework.
+
+Golden Path:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-./scripts/setup_git.sh
+python -m pip install -e ".[dev]"
+python examples/bs_analytic.py
 pytest
 ```
+
+Stability / Compatibility: v0.x — the public API may change; see
+`AGENT/adr/0001-public-api-truth-source.md` for the current stable surface.
 
 ## License
 MIT
 
-## Project brain
+## Project Brain / Contribution workflow
 
-This repository maintains lightweight architectural context and decision history in `AGENT/`:
-
-- `brain.md` — current architecture, invariants, and contributor/agent contract
-- `adr/` — Architecture Decision Records (why key design choices were made)
-- `steering-brief.md` — short summaries of recent changes and next steps
-
-Contributors and AI agents should read `AGENT/brain.md` before making structural or API changes.
+See `AGENT/brain.md` (architecture + invariants), `AGENT/adr/` (decision records), and
+`AGENT/steering-brief.md` (recent changes). Read `AGENT/brain.md` before structural or API changes.
 
 ## Notebook hygiene
 
