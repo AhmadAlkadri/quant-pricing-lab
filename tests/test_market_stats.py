@@ -132,3 +132,33 @@ def test_rolling_realized_volatility_value():
     # index 2: (ret 0, 1) -> valid
     assert np.isnan(vol[1]) 
     assert vol[2] == pytest.approx(expected, rel=1e-4)
+
+def test_fit_normal_returns_values():
+    """Test parameter fitting."""
+    from qpl.market.stats import fit_normal_returns
+    
+    # Create synthetic returns with mean 0.001 and std 0.01
+    np.random.seed(42)
+    # N=10000 large sample to converge
+    rets = np.random.normal(0.001, 0.01, size=10000)
+    
+    params = fit_normal_returns(rets, annualization=1.0)
+    
+    # Check close to true values
+    assert params.mu_daily == pytest.approx(0.001, abs=1e-3)
+    assert params.sigma_daily == pytest.approx(0.01, abs=1e-3)
+    # Annualization 1.0 -> same
+    assert params.mu_annual == params.mu_daily
+    assert params.sigma_annual == params.sigma_daily
+
+def test_fit_normal_annualization():
+    """Test annualization logic."""
+    from qpl.market.stats import fit_normal_returns
+    
+    rets = [0.01, 0.01] # Mean 0.01, Std 0
+    params = fit_normal_returns(rets, annualization=100)
+    
+    assert params.mu_daily == 0.01
+    assert params.mu_annual == 1.0  # 0.01 * 100
+    assert params.sigma_daily == 0.0
+    assert params.sigma_annual == 0.0

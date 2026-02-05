@@ -198,4 +198,57 @@ def rolling_realized_volatility(
     result = np.full(len(prices), np.nan)
     result[1:] = rolling_vol.values
     
+    result = np.full(len(prices), np.nan)
+    result[1:] = rolling_vol.values
+    
     return result
+
+
+from dataclasses import dataclass
+
+@dataclass
+class NormalParams:
+    mu_daily: float
+    sigma_daily: float
+    mu_annual: float
+    sigma_annual: float
+
+def fit_normal_returns(
+    returns: Union[Sequence[float], np.ndarray],
+    *,
+    annualization: float = 252.0
+) -> NormalParams:
+    """
+    Fit a Normal distribution to the returns.
+    
+    Calculates sample mean and standard deviation (unbiased),
+    both daily and annualized.
+    
+    mu_annual ~ mu_daily * annualization
+    sigma_annual ~ sigma_daily * sqrt(annualization)
+    
+    Parameters
+    ----------
+    returns : array-like
+        Log returns.
+    annualization : float
+        Annualization factor.
+        
+    Returns
+    -------
+    NormalParams
+        Fitted parameters.
+    """
+    r = np.asanyarray(returns, dtype=float)
+    if len(r) < 2:
+        raise InvalidInputError("Need at least 2 returns to fit parameters.")
+        
+    mu = np.mean(r)
+    sigma = np.std(r, ddof=1)
+    
+    return NormalParams(
+        mu_daily=float(mu),
+        sigma_daily=float(sigma),
+        mu_annual=float(mu * annualization),
+        sigma_annual=float(sigma * np.sqrt(annualization))
+    )
