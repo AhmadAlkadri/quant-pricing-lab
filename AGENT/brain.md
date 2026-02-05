@@ -116,12 +116,55 @@ Top 10 cheapest checks
 - [Next] Binary/Digital Options (Analytic): new instrument `BinaryOption`.
   - Criteria: `BinaryOption` class, analytic price formula ($e^{-rT} N(d_2)$ for Call), `pricing` dispatcher update (analytic only), tests, and `examples/binary_demo.py`.
 - [Queued] Benchmark Harness: standard perf tracking.
+- [Queued] MC Variance Reduction (Antithetic).
 
-10) Open questions / risks
+10) Next Thin Vertical Slices: Implied Volatility & Time-Series Grounding
+
+1) Implied Volatility Solver (Analytic, European)
+   - User story: As a quant, I want to compute implied volatility from an observed option price so I can invert the Black–Scholes model.
+   - Notes:
+     - Analytic Black–Scholes only.
+     - Robust root-finding.
+     - Deterministic tests and example script.
+   - Rationale: Core quant concept; small surface area; unlocks calibration workflows.
+
+2) Implied Volatility Teaching Notebook
+   - User story: As a learner, I want to understand what implied volatility means and how it behaves as option prices change.
+   - Notes:
+     - Demonstrate monotonicity of price vs σ.
+     - ATM vs ITM/OTM sensitivity.
+     - Repricing consistency (σ → price → implied σ).
+   - Rationale: High pedagogical value; pure vertical polish on the solver.
+
+3) Historical Volatility Estimation from Time Series
+   - User story: As a quant, I want to estimate σ from historical returns so I can compare realized vs implied volatility.
+   - Notes:
+     - Load historical prices.
+     - Compute log returns and annualized realized volatility.
+     - Minimal statistics, no option pricing yet.
+   - Rationale: Bridges theory to data; thin, self-contained slice.
+
+4) Implied vs Realized Volatility Comparison
+   - User story: As a practitioner, I want to compare implied volatility to realized volatility to see when Black–Scholes assumptions break down.
+   - Notes:
+     - Rolling realized volatility.
+     - Sample implied volatility.
+     - Visual comparison over time.
+   - Rationale: Ties together inversion + data; intuitive and compelling.
+
+5) Simple Time-Series Model Fit for Returns (μ, σ)
+   - User story: As a quant, I want to fit μ and σ from historical data and evaluate how well BS assumptions hold.
+   - Notes:
+     - Estimate drift and volatility.
+     - Compare empirical return distribution to Gaussian.
+   - Rationale: Explicitly introduces model-vs-reality pressure; prepares ground for richer models later.
+
+
+11) Open questions / risks
 - README Quickstart code block appears unclosed; verify and fix if needed. Verify: re-open `README.md` and confirm markdown renders cleanly. (source: README.md)
 - Version sync risk: `pyproject.toml` and `qpl.__version__` must stay aligned. Verify: compare values and define an update rule. (source: pyproject.toml; src/qpl/__init__.py)
 
-11) Execution Principle: Thin Vertical Slices
+12) Execution Principle: Thin Vertical Slices
 - We simply do not build "layers". We build **slices**.
 - A slice = Public API + Engine Logic + Test + Golden Path update.
 - See `AGENT/adr/0002-thin-vertical-slices.md`.
