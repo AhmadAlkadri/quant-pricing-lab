@@ -111,9 +111,10 @@ Top 10 cheapest checks
 - ADR rules: one decision per ADR, keep under 1 page, include status and supersedes links. (source: AGENT/adr/0000-template.md)
 
 9) Roadmap: next 3 increments (vertical slices only)
-- [Immediate] Enable PDE Greeks (Delta/Gamma): `pricing.greeks(..., method='pde')`.
-- [Immediate] Fix MC Theta: currently returns 0.0, needs bump logic.
-- [Queued] Binary/Digital Options (Analytic): new instrument `BinaryOption`.
+- [Done] Enable PDE Greeks (Delta/Gamma): `pricing.greeks(..., method='pde')`. Implemented in `src/qpl/engines/pde/pricers.py`.
+- [Done] Fix MC Theta: `greeks(..., method='mc')` returns non-zero Theta. Validated in `tests/test_mc_greeks.py`.
+- [Next] Binary/Digital Options (Analytic): new instrument `BinaryOption`.
+  - Criteria: `BinaryOption` class, analytic price formula ($e^{-rT} N(d_2)$ for Call), `pricing` dispatcher update (analytic only), tests, and `examples/binary_demo.py`.
 - [Queued] Benchmark Harness: standard perf tracking.
 
 10) Open questions / risks
