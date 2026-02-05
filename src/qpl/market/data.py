@@ -71,6 +71,13 @@ def get_prices(
     if os.path.exists(cache_path):
         try:
             df = pd.read_parquet(cache_path)
+            
+            # Restore frequency if possible (parquet does not persist it)
+            if isinstance(df.index, pd.DatetimeIndex) and df.index.freq is None:
+                inferred_freq = pd.infer_freq(df.index)
+                if inferred_freq:
+                    df.index.freq = inferred_freq
+
             print(f"[MarketData] Loaded {ticker} from cache: {cache_path}")
             return df
         except Exception as e:

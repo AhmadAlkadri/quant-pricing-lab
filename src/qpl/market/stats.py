@@ -198,8 +198,7 @@ def rolling_realized_volatility(
     result = np.full(len(prices), np.nan)
     result[1:] = rolling_vol.values
     
-    result = np.full(len(prices), np.nan)
-    result[1:] = rolling_vol.values
+
     
     return result
 

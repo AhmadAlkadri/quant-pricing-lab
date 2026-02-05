@@ -3,7 +3,7 @@ Tests for market statistics utilities.
 """
 import pytest
 import numpy as np
-from qpl.market.stats import log_returns, realized_volatility
+from qpl.market.stats import log_returns, realized_volatility, rolling_realized_volatility
 from qpl.exceptions import InvalidInputError
 
 def test_log_returns_basic():
