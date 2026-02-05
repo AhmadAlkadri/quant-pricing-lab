@@ -17,6 +17,9 @@ pip install -e ".[dev]"
 pytest
 ```
 
+## License
+MIT
+
 ## Project brain
 
 This repository maintains lightweight architectural context and decision history in `AGENT/`:
