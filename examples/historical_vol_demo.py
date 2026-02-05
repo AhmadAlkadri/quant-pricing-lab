@@ -1,46 +1,64 @@
 """
-Demo of Historical Volatility Estimation.
-
-This script demonstrates:
-1. Creating a synthetic price series.
-2. Computing annualized historical volatility.
+Demo: Historical Volatility Estimation from Market Data (Slice 3).
 """
+import sys
 import numpy as np
-import matplotlib.pyplot as plt
-from qpl.utils.statistics import historical_volatility
+import pandas as pd
+from unittest.mock import MagicMock
+
+# --- MOCKING SETUP ---
+# Since this demo might be run in an environment without internet or valid yfinance,
+# we need to robustly handle the missing dependency or just use the system one if available.
+# However, the user request asks for a "minimal demo that ties together: get_prices -> compute realized sigma".
+# To ensure this runs reliably for the user right now (given previous issues), I will
+# wrap the get_prices call.
+
+try:
+    from qpl.market.data import get_prices
+except ImportError:
+    print("Warning: qpl.market.data could not be imported. Check dependencies.")
+    sys.exit(1)
+
+from qpl.market.stats import log_returns, realized_volatility
 
 def main():
-    print("--- Historical Volatility Demo ---")
+    print("--- Historical Volatility from Time Series ---")
     
-    # 1. Generate synthetic prices (Geometric Brownian Motion)
-    # S_t = S_{t-1} * exp((mu - 0.5*sigma^2)*dt + sigma*sqrt(dt)*Z)
-    np.random.seed(42)  # For reproducibility
+    ticker = "SPY"
+    start = "2023-01-01"
+    end = "2023-06-30"
     
-    sigma_true = 0.30   # 30% volatility
-    mu = 0.05           # 5% drift
-    dt = 1/252          # Daily steps
-    n_days = 252 * 2    # 2 years of data
-    S0 = 100.0
+    print(f"1. Fetching prices for {ticker} ({start} to {end})...")
+    try:
+        # Use cache_dir='.' or default to make it visible
+        df = get_prices(ticker, start, end)
+        print(f"   Retrieved {len(df)} records.")
+        print(f"   Head:\n{df.head(3)}")
+    except Exception as e:
+        print(f"   Failed to fetch data: {e}")
+        print("   -> Creating synthetic data for demonstration purposes.")
+        dates = pd.date_range(start, end, freq="B") # Business days
+        prices = 100 * np.exp(np.cumsum(np.random.normal(0, 0.01, size=len(dates))))
+        df = pd.DataFrame({"Close": prices}, index=dates)
     
-    prices = [S0]
-    for _ in range(n_days):
-        z = np.random.normal()
-        ret = (mu - 0.5 * sigma_true**2) * dt + sigma_true * np.sqrt(dt) * z
-        prices.append(prices[-1] * np.exp(ret))
+    # 2. Compute Log Returns
+    # Access the numpy array from the DataFrame
+    prices_arr = df["Close"].values
     
-    prices = np.array(prices)
-    print(f"Generated {len(prices)} prices with true vol = {sigma_true:.2%}")
-    print(f"Prices: {prices[:5]} ... {prices[-5:]}")
+    try:
+        rets = log_returns(prices_arr)
+        print(f"\n2. Computed {len(rets)} log returns.")
+        print(f"   First 5 returns: {rets[:5]}")
+    except Exception as e:
+        print(f"   Error computing returns: {e}")
+        return
+
+    # 3. Compute Realized Volatility
+    # Default: annualization=252 (daily), demean=True
+    vol_ann = realized_volatility(rets)
     
-    # 2. Compute historical volatility
-    vol_est = historical_volatility(prices, annualization_factor=252, demean=True)
-    
-    print(f"\nEstimated Volatility (demean=True):  {vol_est:.4f} ({vol_est:.2%})")
-    print(f"Error compared to True Vol: {vol_est - sigma_true:.4f}")
-    
-    # Check without demeaning (assuming 0 mean return)
-    vol_est_nodean = historical_volatility(prices, annualization_factor=252, demean=False)
-    print(f"Estimated Volatility (demean=False): {vol_est_nodean:.4f} ({vol_est_nodean:.2%})")
+    print(f"\n3. Annualized Realized Volatility: {vol_ann:.4f} ({vol_ann:.2%})")
+    print("   (Assumes 252 trading days per year)")
 
 if __name__ == "__main__":
     main()
