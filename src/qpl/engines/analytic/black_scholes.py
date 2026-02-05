@@ -113,3 +113,91 @@ def greeks_european(
         rho=rho,
         meta={"method": "analytic", "model": "BlackScholes"},
     )
+
+
+def implied_volatility(
+    price: float,
+    option: EuropeanOption,
+    market: Market,
+    *,
+    lower: float = 1e-6,
+    upper: float = 5.0,
+    tol: float = 1e-7,
+    max_iter: int = 100,
+) -> float:
+    """Compute implied volatility via Brent's method.
+
+    Raises:
+        InvalidInputError: if price is outside arbitrage bounds or inputs invalid.
+        RuntimeError: if solver fails to converge.
+    """
+    from scipy.optimize import brentq
+
+    if price < 0:
+        raise InvalidInputError("Option price must be non-negative")
+
+    T = option.expiry
+    # If T=0, IV is undefined (or requires intrinsic match).
+    if T <= 0.0:
+        raise InvalidInputError("Cannot compute implied vol for T<=0")
+
+    S = market.spot
+    K = option.strike
+    r = market.rate(T)
+    q = market.dividend_yield(T)
+
+    df_r = math.exp(-r * T)
+    df_q = math.exp(-q * T)
+
+    # Arbitrage bounds
+    if option.kind == "call":
+        # Call value C >= max(0, S*df_q - K*df_r) and C < S*df_q
+        intrinsic = max(0.0, S * df_q - K * df_r)
+        max_val = S * df_q
+        if not (intrinsic <= price < max_val):
+             raise InvalidInputError(
+                 f"Call price {price} outside bounds [{intrinsic:.4f}, {max_val:.4f})"
+             )
+    else:
+        # Put value P >= max(0, K*df_r - S*df_q) and P < K*df_r
+        intrinsic = max(0.0, K * df_r - S * df_q)
+        max_val = K * df_r
+        if not (intrinsic <= price < max_val):
+             raise InvalidInputError(
+                 f"Put price {price} outside bounds [{intrinsic:.4f}, {max_val:.4f})"
+             )
+
+    # If price is extremely close to intrinsic, sigma -> 0.
+    if abs(price - intrinsic) < 1e-9:
+        return 0.0
+
+    def objective(sigma: float) -> float:
+        val = float(
+            bs_price(
+                S=S,
+                K=K,
+                T=T,
+                r=r,
+                sigma=sigma,
+                q=q,
+                kind=option.kind,
+            )
+        )
+        return val - price
+
+    # Check bounds
+    y_low = objective(lower)
+    y_high = objective(upper)
+
+    if y_low * y_high > 0:
+        # If both same sign, we can't bracket.
+        # If y_low > 0, model price at min vol is already > target price (shouldn't happen if bound checked?)
+        # If y_high < 0, model price at max vol is < target price (vol > upper)
+        msg = f"Cannot bracket implied vol in [{lower}, {upper}]. Errs: low={y_low:.2e}, high={y_high:.2e}"
+        raise InvalidInputError(msg)
+
+    try:
+        iv = brentq(objective, lower, upper, xtol=tol, maxiter=max_iter)
+        return float(iv)
+    except Exception as e:
+        raise RuntimeError(f"Implied vol solver failed: {e}")
