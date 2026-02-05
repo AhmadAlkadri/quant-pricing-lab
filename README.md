@@ -26,3 +26,11 @@ This repository maintains lightweight architectural context and decision history
 - `steering-brief.md` — short summaries of recent changes and next steps
 
 Contributors and AI agents should read `AGENT/brain.md` before making structural or API changes.
+
+## Notebook hygiene
+
+This repo uses nbstripout to keep notebooks deterministic.
+After clone:
+```bash
+python -m nbstripout --install --attributes .gitattributes
+```
