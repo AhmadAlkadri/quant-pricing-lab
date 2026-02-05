@@ -24,3 +24,4 @@ venv/
 
 # IDE
 .vscode/
+.market_cache/

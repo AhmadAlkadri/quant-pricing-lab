@@ -151,6 +151,14 @@ Top 10 cheapest checks
      - Minimal statistics, no option pricing yet.
    - Rationale: Bridges theory to data; thin, self-contained slice.
 
+3a) Market Data Retrieval + Local Caching (v0)
+   - User story: As a developer, I want a robust way to fetch prices without flaky network calls breaking my analysis.
+   - Notes:
+     - Fetch historical data (e.g. from Stooq/Yahoo).
+     - Local caching (filesystem) for determinism.
+     - "Data plumbing" only; no analytics.
+   - Rationale: Infrastructure slice to support Slice 3 and 4; ensures tests/demos work offline.
+
 4) Implied vs Realized Volatility Comparison
    - User story: As a practitioner, I want to compare implied volatility to realized volatility to see when Black–Scholes assumptions break down.
    - Notes:
