@@ -27,7 +27,10 @@ def log_returns(prices: Union[Sequence[float], np.ndarray]) -> np.ndarray:
     InvalidInputError
         If prices has fewer than 2 elements.
     """
-    prices_arr = np.asanyarray(prices, dtype=float)
+    prices_arr = np.asanyarray(prices, dtype=float).squeeze()
+    if prices_arr.ndim != 1:
+        raise InvalidInputError(f"Prices must be 1-dimensional, got {prices_arr.ndim}D")
+
     if len(prices_arr) < 2:
         raise InvalidInputError("At least 2 prices are required to compute returns.")
     
