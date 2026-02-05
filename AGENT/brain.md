@@ -17,6 +17,7 @@ Agent Contract
 - Preserve determinism expectations (MC seed, PDE determinism) unless an ADR says otherwise.
 - Keep error types consistent (`InvalidInputError`, `NotSupportedError`) and validate at boundaries.
 - Prefer minimal disruption: avoid refactors unless they unlock the task.
+- **Clean Working Tree**: Agents must not report completion unless `git status` is clean. When renaming files, always verify deletions are staged.
 
 0) Repo at a glance
 - Purpose: small Python lab for European option pricing with analytic Black-Scholes, Monte Carlo, and PDE engines. (source: README.md; src/qpl/engines/analytic/black_scholes.py; src/qpl/engines/mc/pricers.py; src/qpl/engines/pde/pricers.py)
