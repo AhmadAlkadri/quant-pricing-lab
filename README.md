@@ -25,15 +25,15 @@ pytest
 ```
 
 Stability / Compatibility: v0.x — the public API may change; see
-`AGENT/adr/0001-public-api-truth-source.md` for the current stable surface.
+`.agents/brain/adr/0001-public-api-truth-source.md` for the current stable surface.
 
 ## License
 MIT
 
 ## Project Brain / Contribution workflow
 
-See `AGENT/brain.md` (architecture + invariants), `AGENT/adr/` (decision records), and
-`AGENT/steering-brief.md` (recent changes). Read `AGENT/brain.md` before structural or API changes.
+See `.agents/brain/brain.md` (architecture + invariants), `.agents/brain/adr/` (decision records), and
+`.agents/brain/steering-brief.md` (recent changes). Read `.agents/brain/brain.md` before structural or API changes.
 
 ## Notebook hygiene
 
@@ -42,3 +42,4 @@ After clone:
 ```bash
 python -m nbstripout --install --attributes .gitattributes
 ```
+
