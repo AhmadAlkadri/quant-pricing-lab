@@ -50,6 +50,25 @@ from itertools import pairwise
 import numpy as np
 import pytest
 
+from qpl.cases import (
+    CIR_LEVELS,
+    CIR_PATHS,
+    CIR_SEED,
+    GBM_LEVELS,
+    GBM_PATHS,
+    GBM_SEED,
+    GBM_SMALL_DRIFT_MU,
+    GBM_STUDY_SPEC,
+    SDE_CIR_CALL_CASES,
+    SDE_CIR_MEAN_CASES,
+    SDE_PRICE_BIAS_CASES,
+    SDE_STRONG_CASES,
+    SDE_WEAK_CALL_CASES,
+    SDE_WEAK_IDENTITY_CASES,
+    CIRSpec,
+    SDECase,
+)
+from qpl.cases.sde_discretization import CIR_FELLER_OK, CIR_FELLER_VIOLATED
 from qpl.engines.mc.sde import (
     cir_expected_excess,
     cir_moments,
@@ -62,38 +81,21 @@ from qpl.engines.mc.sde import (
 from qpl.models.black_scholes import bs_price
 from qpl.validation import fit_convergence_order, strong_error, weak_error
 
-# --- GBM study -------------------------------------------------------------
-GBM_S0 = 100.0
-GBM_MU = 0.2
-GBM_SIGMA = 0.2
-GBM_T = 1.0
-GBM_STRIKE = 100.0
-GBM_LEVELS: tuple[int, ...] = (8, 16, 32, 64, 128)
-GBM_PATHS = 100_000
-GBM_SEED = 20250913
+# The study settings and every expected order, band and note live in
+# `qpl.cases.sde_discretization`; each test below re-measures one row. The
+# bands are derived there from the seed-to-seed spread of the fit and from the
+# pre-asymptotic gap to the theoretical order, whichever dominates.
+GBM = GBM_STUDY_SPEC
+GBM_S0, GBM_MU, GBM_SIGMA = GBM.s0, GBM.mu, GBM.sigma
+GBM_T, GBM_STRIKE = GBM.expiry, GBM.strike
+SMALL_DRIFT_MU = GBM_SMALL_DRIFT_MU
+CIR_V0 = CIR_FELLER_OK.v0
+CIR_T = CIR_FELLER_OK.expiry
+CIR_STRIKE = CIR_FELLER_OK.strike
 
-SMALL_DRIFT_MU = 0.05
 
-# --- CIR study -------------------------------------------------------------
-CIR_FELLER_OK = {"kappa": 2.0, "theta": 0.04, "xi": 0.2}
-CIR_FELLER_VIOLATED = {"kappa": 0.5, "theta": 0.04, "xi": 1.0}
-CIR_V0 = 0.04
-CIR_T = 1.0
-CIR_STRIKE = 0.05
-CIR_LEVELS: tuple[int, ...] = (4, 8, 16, 32)
-CIR_PATHS = 400_000
-CIR_SEED = 4242
-
-# Bands. The strong orders are pre-asymptotic rather than noisy: the seed-to-
-# seed spread of the fitted Euler strong order over seeds {20250913, 7, 99} is
-# 0.0017, while the fit sits 0.015 above 1/2 because the ladder starts at
-# h = 1/8. The weak orders are the other way round -- the Euler weak fit moves
-# 0.03 between those seeds because its noise floor is high (see point 3 above)
-# and the Milstein one moves 0.0002. Each band is roughly three times the
-# larger of those two effects.
-STRONG_BAND = 0.05
-WEAK_BAND_EULER = 0.08
-WEAK_BAND_MILSTEIN = 0.03
+def _row_id(case: SDECase) -> str:
+    return case.row.id
 
 
 def _gbm_study(mu: float, n_paths: int, seed: int) -> dict[str, object]:
@@ -127,12 +129,8 @@ def gbm_study() -> dict[str, object]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("scheme", "expected_order"), [("euler", 0.5), ("milstein", 1.0)]
-)
-def test_strong_order_on_gbm(
-    gbm_study: dict[str, object], scheme: str, expected_order: float
-) -> None:
+@pytest.mark.parametrize("case", SDE_STRONG_CASES, ids=_row_id)
+def test_strong_order_on_gbm(gbm_study: dict[str, object], case: SDECase) -> None:
     """CONVERGENCE_ORDER: ``E|X^h_T - X_T|`` on a shared Brownian path.
 
     100 000 paths, five levels ``h = 1/8 ... 1/128``, coarse increments summed
@@ -150,12 +148,12 @@ def test_strong_order_on_gbm(
     errors = [
         strong_error(approx, exact)
         for approx, exact in zip(
-            gbm_study[scheme], gbm_study[f"{scheme}_exact"], strict=True
+            gbm_study[case.scheme], gbm_study[f"{case.scheme}_exact"], strict=True
         )
     ]
     assert min(abs(e.z) for e in errors) > 100.0
     fit = fit_convergence_order(gbm_study["h"], [e.value for e in errors])
-    assert abs(fit.order - expected_order) < STRONG_BAND
+    assert abs(fit.order - case.row.expected) < case.row.tolerance
     assert fit.residual < 0.03
 
 
@@ -211,12 +209,9 @@ def test_first_moment_of_both_schemes_is_exactly_the_same_geometric_series(
         assert abs(float(np.mean(sample)) - predicted) <= 4.0 * stderr
 
 
-@pytest.mark.parametrize(
-    ("scheme", "band"),
-    [("euler", WEAK_BAND_EULER), ("milstein", WEAK_BAND_MILSTEIN)],
-)
+@pytest.mark.parametrize("case", SDE_WEAK_IDENTITY_CASES, ids=_row_id)
 def test_weak_order_identity_payoff(
-    gbm_study: dict[str, object], scheme: str, band: float
+    gbm_study: dict[str, object], case: SDECase
 ) -> None:
     """CONVERGENCE_ORDER: ``|E X^h_T - E X_T|``, ``f(x) = x``.
 
@@ -228,23 +223,21 @@ def test_weak_order_identity_payoff(
     errors = [
         weak_error(approx, reference_values=exact)
         for approx, exact in zip(
-            gbm_study[scheme], gbm_study[f"{scheme}_exact"], strict=True
+            gbm_study[case.scheme], gbm_study[f"{case.scheme}_exact"], strict=True
         )
     ]
     assert all(e.value < 0.0 for e in errors)  # the geometric series undershoots
     fit = fit_convergence_order(gbm_study["h"], [abs(e.value) for e in errors])
-    assert abs(fit.order - 1.0) < band
+    assert abs(fit.order - case.row.expected) < case.row.tolerance
     closed_form_constant = GBM_S0 * math.exp(GBM_MU * GBM_T) * GBM_MU**2 * GBM_T / 2.0
     assert abs(math.exp(fit.log_constant) / closed_form_constant - 1.0) < 0.08
 
 
-@pytest.mark.parametrize(
-    ("scheme", "band", "min_z"),
-    [("euler", WEAK_BAND_EULER, 15.0), ("milstein", WEAK_BAND_MILSTEIN, 150.0)],
-)
-def test_weak_order_call_payoff(
-    gbm_study: dict[str, object], scheme: str, band: float, min_z: float
-) -> None:
+_CALL_MIN_Z = {"euler": 15.0, "milstein": 150.0}
+
+
+@pytest.mark.parametrize("case", SDE_WEAK_CALL_CASES, ids=_row_id)
+def test_weak_order_call_payoff(gbm_study: dict[str, object], case: SDECase) -> None:
     """CONVERGENCE_ORDER: ``|E (X^h_T - K)^+ - E (X_T - K)^+|``.
 
     Measured order 1.0088 (Euler, residual 0.0109, constant 2.5642) and 0.9946
@@ -266,12 +259,12 @@ def test_weak_order_call_payoff(
             reference_values=np.maximum(exact - strike, 0.0),
         )
         for approx, exact in zip(
-            gbm_study[scheme], gbm_study[f"{scheme}_exact"], strict=True
+            gbm_study[case.scheme], gbm_study[f"{case.scheme}_exact"], strict=True
         )
     ]
-    assert min(abs(e.z) for e in errors) > min_z
+    assert min(abs(e.z) for e in errors) > _CALL_MIN_Z[case.scheme]
     fit = fit_convergence_order(gbm_study["h"], [abs(e.value) for e in errors])
-    assert abs(fit.order - 1.0) < band
+    assert abs(fit.order - case.row.expected) < case.row.tolerance
     assert fit.residual < 0.05
 
 
@@ -310,7 +303,10 @@ def test_euler_weak_error_is_unmeasurable_at_a_small_drift() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_euler_pricing_bias_is_order_one_in_dt(gbm_study: dict[str, object]) -> None:
+@pytest.mark.parametrize("case", SDE_PRICE_BIAS_CASES, ids=_row_id)
+def test_euler_pricing_bias_is_order_one_in_dt(
+    gbm_study: dict[str, object], case: SDECase
+) -> None:
     """CONVERGENCE_ORDER: the price bias, and the constant it carries.
 
     Read the GBM study as a risk-neutral market: ``r = mu = 0.2``, ``q = 0``,
@@ -348,7 +344,7 @@ def test_euler_pricing_bias_is_order_one_in_dt(gbm_study: dict[str, object]) -> 
         )
 
     fit = fit_convergence_order(gbm_study["h"], [abs(b) for b in biases])
-    assert abs(fit.order - 1.0) < WEAK_BAND_EULER
+    assert abs(fit.order - case.row.expected) < case.row.tolerance
     assert 1.8 < math.exp(fit.log_constant) < 2.4
 
     # The controlled estimator resolves the bias at every level ...
@@ -372,11 +368,11 @@ def test_euler_pricing_bias_is_order_one_in_dt(gbm_study: dict[str, object]) -> 
 # ---------------------------------------------------------------------------
 
 
-def _cir_terminal(params: dict[str, float], n_steps: int) -> np.ndarray:
+def _cir_terminal(spec: CIRSpec, n_steps: int) -> np.ndarray:
     return simulate(
-        cir_sde(**params),
-        CIR_V0,
-        uniform_time_grid(CIR_T, n_steps),
+        cir_sde(**spec.params),
+        spec.v0,
+        uniform_time_grid(spec.expiry, n_steps),
         CIR_PATHS,
         scheme="euler",
         truncation="full",
@@ -411,8 +407,8 @@ def test_full_truncation_has_no_measurable_mean_bias_when_feller_holds(
     that residual is what says the slope is reading noise. Reported as "no
     measurable bias beyond the coarsest step", not as an order.
     """
-    mean, _ = cir_moments(CIR_V0, CIR_T, **CIR_FELLER_OK)
-    assert math.isclose(mean, CIR_FELLER_OK["theta"], rel_tol=1e-12)
+    mean, _ = cir_moments(CIR_V0, CIR_T, **CIR_FELLER_OK.params)
+    assert math.isclose(mean, CIR_FELLER_OK.theta, rel_tol=1e-12)
     errors = [
         weak_error(sample, reference_mean=mean) for sample in cir_terminals["feller_ok"]
     ]
@@ -424,8 +420,9 @@ def test_full_truncation_has_no_measurable_mean_bias_when_feller_holds(
     assert fit.residual > 0.1
 
 
+@pytest.mark.parametrize("case", SDE_CIR_MEAN_CASES, ids=_row_id)
 def test_full_truncation_mean_bias_is_degraded_when_feller_fails(
-    cir_terminals: dict[str, list[np.ndarray]],
+    cir_terminals: dict[str, list[np.ndarray]], case: SDECase
 ) -> None:
     """CONVERGENCE_ORDER: measured 0.68, **below** the order-1 expectation.
 
@@ -437,33 +434,24 @@ def test_full_truncation_mean_bias_is_degraded_when_feller_fails(
     than first order and not a clean power law either. This is the slice's
     expected "degraded in the violated case", measured.
     """
-    mean, _ = cir_moments(CIR_V0, CIR_T, **CIR_FELLER_VIOLATED)
+    spec = case.cir_spec
+    mean, _ = cir_moments(spec.v0, spec.expiry, **spec.params)
     errors = [
-        weak_error(sample, reference_mean=mean)
-        for sample in cir_terminals["feller_violated"]
+        weak_error(sample, reference_mean=mean) for sample in cir_terminals[case.regime]
     ]
     assert all(e.value < 0.0 for e in errors)
     assert min(abs(e.z) for e in errors) > 5.0
     fit = fit_convergence_order(
-        [CIR_T / n for n in CIR_LEVELS], [abs(e.value) for e in errors]
+        [spec.expiry / n for n in CIR_LEVELS], [abs(e.value) for e in errors]
     )
-    assert 0.55 < fit.order < 0.85
+    assert abs(fit.order - case.row.expected) < case.row.tolerance
+    assert fit.order < 0.85  # the claim is that it is BELOW first order
     assert abs(errors[0].value / mean) > 0.25
 
 
-@pytest.mark.parametrize(
-    ("regime", "params", "expected_order", "band"),
-    [
-        ("feller_ok", CIR_FELLER_OK, 1.00, 0.15),
-        ("feller_violated", CIR_FELLER_VIOLATED, 0.94, 0.06),
-    ],
-)
+@pytest.mark.parametrize("case", SDE_CIR_CALL_CASES, ids=_row_id)
 def test_full_truncation_weak_order_on_a_variance_call(
-    cir_terminals: dict[str, list[np.ndarray]],
-    regime: str,
-    params: dict[str, float],
-    expected_order: float,
-    band: float,
+    cir_terminals: dict[str, list[np.ndarray]], case: SDECase
 ) -> None:
     """CONVERGENCE_ORDER: ``E[(v_T - 0.05)^+]`` against the exact law.
 
@@ -486,15 +474,18 @@ def test_full_truncation_weak_order_on_a_variance_call(
     claim that it is **below** one; a 0.15 band on the other is an honest
     statement that this budget cannot distinguish 0.97 from 1.09.
     """
-    reference = cir_expected_excess(CIR_V0, CIR_T, strike=CIR_STRIKE, **params)
+    spec = case.cir_spec
+    reference = cir_expected_excess(
+        spec.v0, spec.expiry, strike=spec.strike, **spec.params
+    )
     errors = [
-        weak_error(np.maximum(sample - CIR_STRIKE, 0.0), reference_mean=reference)
-        for sample in cir_terminals[regime]
+        weak_error(np.maximum(sample - spec.strike, 0.0), reference_mean=reference)
+        for sample in cir_terminals[case.regime]
     ]
     assert all(e.value > 0.0 for e in errors)  # truncation over-prices the call
     assert min(abs(e.z) for e in errors) > 5.0
     fit = fit_convergence_order(
-        [CIR_T / n for n in CIR_LEVELS], [abs(e.value) for e in errors]
+        [spec.expiry / n for n in CIR_LEVELS], [abs(e.value) for e in errors]
     )
-    assert abs(fit.order - expected_order) < band
+    assert abs(fit.order - case.row.expected) < case.row.tolerance
     assert fit.residual < 0.12

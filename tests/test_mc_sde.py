@@ -24,6 +24,15 @@ from itertools import pairwise
 import numpy as np
 import pytest
 
+from qpl.cases import (
+    CIR_NEGATIVITY_PATHS,
+    CIR_NEGATIVITY_SEED,
+    CIR_NEGATIVITY_STEPS,
+    GBM_STUDY_SPEC,
+    SDE_NEGATIVITY_CASES,
+    SDECase,
+)
+from qpl.cases.sde_discretization import CIR_FELLER_OK, CIR_FELLER_VIOLATED
 from qpl.engines.mc.processes import simulate_gbm_exact
 from qpl.engines.mc.sde import (
     SDEModel,
@@ -38,16 +47,20 @@ from qpl.engines.mc.sde import (
 )
 from qpl.exceptions import InvalidInputError
 
-GBM_S0 = 100.0
-GBM_MU = 0.2
-GBM_SIGMA = 0.2
-GBM_T = 1.0
+GBM_S0 = GBM_STUDY_SPEC.s0
+GBM_MU = GBM_STUDY_SPEC.mu
+GBM_SIGMA = GBM_STUDY_SPEC.sigma
+GBM_T = GBM_STUDY_SPEC.expiry
 
-# Feller condition 2 kappa theta >= xi^2, equivalently the noncentral
-# chi-square degrees of freedom 4 kappa theta / xi^2 >= 2.
-CIR_FELLER_OK = {"kappa": 2.0, "theta": 0.04, "xi": 0.2}  # d = 8.0
-CIR_FELLER_VIOLATED = {"kappa": 0.5, "theta": 0.04, "xi": 1.0}  # d = 0.08
-CIR_V0 = 0.04
+# `CIR_FELLER_OK` has Feller number 4 kappa theta / xi^2 = 8.0 and
+# `CIR_FELLER_VIOLATED` has 0.08; the Feller condition 2 kappa theta >= xi^2 is
+# exactly "Feller number >= 2". Both specs, and the negativity settings and
+# measured frequencies below, live in `qpl.cases.sde_discretization`.
+CIR_V0 = CIR_FELLER_OK.v0
+CIR_PARAMS = {
+    "feller_ok": CIR_FELLER_OK.params,
+    "feller_violated": CIR_FELLER_VIOLATED.params,
+}
 
 
 def _log_gbm_model() -> SDEModel:
@@ -90,7 +103,7 @@ def test_gbm_schemes_are_deterministic_per_seed(scheme: str) -> None:
 
 def test_cir_exact_sampler_is_deterministic_per_seed() -> None:
     """EXACT_IDENTITY: the noncentral chi-square draws are seeded too."""
-    model = cir_sde(**CIR_FELLER_VIOLATED)
+    model = cir_sde(**CIR_PARAMS["feller_violated"])
     grid = uniform_time_grid(1.0, 4)
     a = simulate(model, CIR_V0, grid, 2_000, scheme="exact", seed=11)
     b = simulate(model, CIR_V0, grid, 2_000, scheme="exact", seed=11)
@@ -233,12 +246,9 @@ def test_milstein_gbm_differs_from_the_exact_factor_at_third_order() -> None:
 
 
 @pytest.mark.parametrize(
-    ("label", "params", "expected_df"),
-    [("feller_ok", CIR_FELLER_OK, 8.0), ("feller_violated", CIR_FELLER_VIOLATED, 0.08)],
+    ("label", "expected_df"), [("feller_ok", 8.0), ("feller_violated", 0.08)]
 )
-def test_cir_transition_parameters_and_moments(
-    label: str, params: dict[str, float], expected_df: float
-) -> None:
+def test_cir_transition_parameters_and_moments(label: str, expected_df: float) -> None:
     """CLOSED_FORM: the ncx2 parameters and the moments they imply.
 
     ``d = 4 kappa theta / xi^2`` is the Feller number: ``d >= 2`` is exactly
@@ -248,6 +258,7 @@ def test_cir_transition_parameters_and_moments(
     restatement of it.
     """
     t = 1.0
+    params = CIR_PARAMS[label]
     df, nc, scale = cir_transition_parameters(CIR_V0, t, **params)
     assert math.isclose(df, expected_df, rel_tol=1e-12)
     assert (df >= 2.0) == (2.0 * params["kappa"] * params["theta"] >= params["xi"] ** 2)
@@ -265,13 +276,8 @@ def test_cir_transition_parameters_and_moments(
     assert math.isclose(mean, float(scale * (df + nc)), rel_tol=1e-12)
 
 
-@pytest.mark.parametrize(
-    ("label", "params"),
-    [("feller_ok", CIR_FELLER_OK), ("feller_violated", CIR_FELLER_VIOLATED)],
-)
-def test_cir_exact_sampler_reproduces_the_transition_moments(
-    label: str, params: dict[str, float]
-) -> None:
+@pytest.mark.parametrize("label", ["feller_ok", "feller_violated"])
+def test_cir_exact_sampler_reproduces_the_transition_moments(label: str) -> None:
     """STATISTICAL: sampler mean and variance against the closed forms.
 
     200 000 paths, four steps (so the sampler is exercised as a *transition*,
@@ -283,6 +289,7 @@ def test_cir_exact_sampler_reproduces_the_transition_moments(
     """
     n_paths = 200_000
     t = 1.0
+    params = CIR_PARAMS[label]
     model = cir_sde(**params)
     terminal = simulate(
         model, CIR_V0, uniform_time_grid(t, 4), n_paths, scheme="exact", seed=5
@@ -302,13 +309,8 @@ def test_cir_exact_sampler_reproduces_the_transition_moments(
     assert abs(sample_var - var) <= 4.0 * var_se
 
 
-@pytest.mark.parametrize(
-    ("label", "params"),
-    [("feller_ok", CIR_FELLER_OK), ("feller_violated", CIR_FELLER_VIOLATED)],
-)
-def test_cir_expected_excess_matches_the_exact_sampler(
-    label: str, params: dict[str, float]
-) -> None:
+@pytest.mark.parametrize("label", ["feller_ok", "feller_violated"])
+def test_cir_expected_excess_matches_the_exact_sampler(label: str) -> None:
     """STATISTICAL: the quadrature reference against a sample of the same law.
 
     `cir_expected_excess` integrates the noncentral chi-square tail; this test
@@ -318,6 +320,7 @@ def test_cir_expected_excess_matches_the_exact_sampler(
     the survival function, the other draws from it.
     """
     t, strike, n_paths = 1.0, 0.05, 200_000
+    params = CIR_PARAMS[label]
     reference = cir_expected_excess(CIR_V0, t, strike=strike, **params)
     terminal = simulate(
         cir_sde(**params), CIR_V0, uniform_time_grid(t, 1), n_paths, scheme="exact", seed=8
@@ -332,22 +335,35 @@ def test_cir_expected_excess_matches_the_exact_sampler(
 # (c, first half) the boundary that Euler cannot see
 # ---------------------------------------------------------------------------
 
-CIR_NEG_STEPS = 50
-CIR_NEG_PATHS = 50_000
-CIR_NEG_SEED = 11
-# Measured fractions of paths that reach a negative state at least once, at
-# the settings above. NEGATIVE_FINDING rows; see the module docstring.
-CIR_NEGATIVE_FRACTION = {"feller_ok": 2.6e-04, "feller_violated": 0.9117}
-CIR_NAN_FRACTION = {"feller_ok": 2.6e-04, "feller_violated": 0.9097}
-
-
-@pytest.mark.parametrize(
-    ("label", "params"),
-    [("feller_ok", CIR_FELLER_OK), ("feller_violated", CIR_FELLER_VIOLATED)],
+_NEGATIVE_CASES = tuple(
+    c for c in SDE_NEGATIVITY_CASES if c.payoff == "negative_fraction"
 )
-def test_plain_euler_on_cir_goes_negative_and_then_undefined(
-    label: str, params: dict[str, float]
-) -> None:
+_NAN_CASES = tuple(c for c in SDE_NEGATIVITY_CASES if c.payoff == "nan_fraction")
+
+
+def _row_id(case: SDECase) -> str:
+    return case.row.id
+
+
+def _negative_row(regime: str) -> SDECase:
+    return next(c for c in _NEGATIVE_CASES if c.regime == regime)
+
+
+def _euler_cir_paths(case: SDECase, truncation: str) -> np.ndarray:
+    spec = case.cir_spec
+    return simulate(
+        cir_sde(**spec.params),
+        spec.v0,
+        uniform_time_grid(spec.expiry, CIR_NEGATIVITY_STEPS),
+        CIR_NEGATIVITY_PATHS,
+        scheme="euler",
+        truncation=truncation,
+        seed=CIR_NEGATIVITY_SEED,
+    ).values
+
+
+@pytest.mark.parametrize("case", _NEGATIVE_CASES, ids=_row_id)
+def test_plain_euler_on_cir_goes_negative_and_then_undefined(case: SDECase) -> None:
     """NEGATIVE_FINDING: plain Euler does not merely go negative, it *stops*.
 
     ``b(v) = xi sqrt(v)`` cannot be evaluated at a negative state, so the step
@@ -358,35 +374,18 @@ def test_plain_euler_on_cir_goes_negative_and_then_undefined(
     a path whose first negative state is the terminal one is never evaluated
     again.
     """
-    model = cir_sde(**params)
-    paths = simulate(
-        model,
-        CIR_V0,
-        uniform_time_grid(1.0, CIR_NEG_STEPS),
-        CIR_NEG_PATHS,
-        scheme="euler",
-        truncation="none",
-        seed=CIR_NEG_SEED,
-    ).values
+    paths = _euler_cir_paths(case, "none")
+    nan_row = next(c for c in _NAN_CASES if c.regime == case.regime).row
 
     negative = float(np.mean(np.nanmin(paths, axis=1) < 0.0))
     undefined = float(np.mean(np.isnan(paths).any(axis=1)))
-    assert abs(negative - CIR_NEGATIVE_FRACTION[label]) <= 0.01 * max(
-        CIR_NEGATIVE_FRACTION[label], 0.02
-    )
-    assert abs(undefined - CIR_NAN_FRACTION[label]) <= 0.01 * max(
-        CIR_NAN_FRACTION[label], 0.02
-    )
+    assert abs(negative - case.row.expected) <= case.row.tolerance
+    assert abs(undefined - nan_row.expected) <= nan_row.tolerance
     assert undefined <= negative
 
 
-@pytest.mark.parametrize(
-    ("label", "params"),
-    [("feller_ok", CIR_FELLER_OK), ("feller_violated", CIR_FELLER_VIOLATED)],
-)
-def test_full_truncation_keeps_cir_defined_but_not_positive(
-    label: str, params: dict[str, float]
-) -> None:
+@pytest.mark.parametrize("case", _NEGATIVE_CASES, ids=_row_id)
+def test_full_truncation_keeps_cir_defined_but_not_positive(case: SDECase) -> None:
     """NEGATIVE_FINDING, and the slice statement's expectation corrected.
 
     The slice said full truncation "does not" produce negative values. It
@@ -398,24 +397,14 @@ def test_full_truncation_keeps_cir_defined_but_not_positive(
     not on offer and would need a different scheme (Andersen's QE, or the
     exact sampler).
     """
-    model = cir_sde(**params)
-    grid = uniform_time_grid(1.0, CIR_NEG_STEPS)
-    plain = simulate(
-        model, CIR_V0, grid, CIR_NEG_PATHS, scheme="euler", truncation="none",
-        seed=CIR_NEG_SEED,
-    ).values
-    full = simulate(
-        model, CIR_V0, grid, CIR_NEG_PATHS, scheme="euler", truncation="full",
-        seed=CIR_NEG_SEED,
-    ).values
+    plain = _euler_cir_paths(case, "none")
+    full = _euler_cir_paths(case, "full")
 
     assert np.all(np.isfinite(full))
     negative_full = float(np.mean(np.min(full, axis=1) < 0.0))
     negative_plain = float(np.mean(np.nanmin(plain, axis=1) < 0.0))
     assert negative_full == negative_plain
-    assert abs(negative_full - CIR_NEGATIVE_FRACTION[label]) <= 0.01 * max(
-        CIR_NEGATIVE_FRACTION[label], 0.02
-    )
+    assert abs(negative_full - case.row.expected) <= case.row.tolerance
     # Pathwise identity up to the first negative state, which is what forces
     # the frequencies above to be equal.
     safe = ~np.isnan(plain)
@@ -433,7 +422,8 @@ def test_milstein_on_cir_is_finite_at_the_boundary() -> None:
     failure this guards, and it is asserted here so the field cannot be
     deleted as unused.
     """
-    model = cir_sde(**CIR_FELLER_VIOLATED)
+    params = CIR_PARAMS["feller_violated"]
+    model = cir_sde(**params)
     grid = uniform_time_grid(1.0, 50)
     good = simulate(
         model, CIR_V0, grid, 5_000, scheme="milstein", truncation="full", seed=1
@@ -442,7 +432,7 @@ def test_milstein_on_cir_is_finite_at_the_boundary() -> None:
 
     def db_dx(x: np.ndarray, t: float) -> np.ndarray:
         with np.errstate(divide="ignore"):
-            return CIR_FELLER_VIOLATED["xi"] / (2.0 * np.sqrt(x))
+            return params["xi"] / (2.0 * np.sqrt(x))
 
     from_factors = simulate(
         model,
@@ -539,8 +529,8 @@ def test_simulate_validation_errors() -> None:
             seed=1,
         )
     with pytest.raises(InvalidInputError):
-        simulate(cir_sde(**CIR_FELLER_OK), CIR_V0, grid, 10, scheme="exact",
-                 normals=np.zeros((10, 4)))
+        simulate(cir_sde(**CIR_PARAMS["feller_ok"]), CIR_V0, grid, 10,
+                 scheme="exact", normals=np.zeros((10, 4)))
 
 
 def test_helper_validation_errors() -> None:
@@ -563,8 +553,8 @@ def test_helper_validation_errors() -> None:
     with pytest.raises(InvalidInputError):
         cir_sde(2.0, 0.04, 0.0)
     with pytest.raises(InvalidInputError):
-        cir_transition_parameters(-1.0, 1.0, **CIR_FELLER_OK)
+        cir_transition_parameters(-1.0, 1.0, **CIR_PARAMS["feller_ok"])
     with pytest.raises(InvalidInputError):
-        cir_transition_parameters(0.04, 0.0, **CIR_FELLER_OK)
+        cir_transition_parameters(0.04, 0.0, **CIR_PARAMS["feller_ok"])
     with pytest.raises(InvalidInputError):
-        cir_expected_excess(0.04, 1.0, strike=-1.0, **CIR_FELLER_OK)
+        cir_expected_excess(0.04, 1.0, strike=-1.0, **CIR_PARAMS["feller_ok"])
