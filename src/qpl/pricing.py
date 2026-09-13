@@ -16,6 +16,10 @@ from .engines.analytic.asian import (
     greeks_asian as greeks_asian_analytic,
     price_asian as price_asian_analytic,
 )
+from .engines.analytic.barrier import (
+    greeks_barrier as greeks_barrier_analytic,
+    price_barrier as price_barrier_analytic,
+)
 from .engines.analytic.black_scholes import (
     ANALYTIC_METHOD_SPEC,
     greeks_european as greeks_european_analytic,
@@ -78,6 +82,7 @@ from .engines.tree.pricers import (
 from .instruments.options import (
     AmericanOption,
     AsianOption,
+    BarrierOption,
     DigitalOption,
     EuropeanOption,
 )
@@ -210,6 +215,18 @@ def _register_builtin_engines() -> None:
         spec=MC_METHOD_SPEC,
         price=price_asian_mc,
         greeks=greeks_asian_mc,
+    )
+    # Slice 12: the single barrier, path-dependent AND discontinuous at once.
+    # The analytic entry prices the continuously monitored contract and refuses
+    # a discrete schedule by inspecting the instrument, which is the whole
+    # reason the monitoring convention lives on the contract rather than in a
+    # config object.
+    barrier = {"instrument_type": BarrierOption, "model_type": BlackScholesModel}
+    register(
+        **barrier,
+        spec=ANALYTIC_METHOD_SPEC,
+        price=price_barrier_analytic,
+        greeks=greeks_barrier_analytic,
     )
 
 

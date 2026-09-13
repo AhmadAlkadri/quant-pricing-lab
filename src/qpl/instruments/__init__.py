@@ -1,10 +1,13 @@
 from .options import (
+    BARRIER_TYPES,
     AmericanOption,
     AsianOption,
+    BarrierOption,
     DigitalOption,
     EuropeanOption,
     VanillaOption,
     uniform_fixing_times,
+    uniform_monitoring_times,
 )
 from .payoffs import (
     arithmetic_average,
@@ -16,8 +19,10 @@ from .payoffs import (
 )
 
 __all__ = [
+    "BARRIER_TYPES",
     "AmericanOption",
     "AsianOption",
+    "BarrierOption",
     "DigitalOption",
     "EuropeanOption",
     "VanillaOption",
@@ -28,4 +33,5 @@ __all__ = [
     "geometric_average",
     "put_payoff",
     "uniform_fixing_times",
+    "uniform_monitoring_times",
 ]
