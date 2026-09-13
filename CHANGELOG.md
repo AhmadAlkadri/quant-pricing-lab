@@ -2,6 +2,40 @@
 
 All notable changes to `qpl` are documented in this file.
 
+## Unreleased
+
+> Slice 0 of the Textbook-Driven Development curriculum campaign (ADR-0004; see
+> `docs/CURRICULUM.md`). None of this has reached `main` yet.
+
+### Added
+
+- `qpl.validation`: `fit_convergence_order`/`refinement_errors` (empirical convergence-order
+  measurement) and the `EvidenceClass`/`BenchmarkRow` evidence taxonomy.
+- `PDEConfig.strike_alignment` (`"none"` default, bit-identical; `"midpoint"`), fixing the
+  strike-on-a-grid-node convergence pathology. Measured on `S=K=100, r=5%, q=0, sigma=20%, T=1`,
+  European call, Crank-Nicolson, `n_s=n_t=n` for `n` in `{50,100,200,400,800}`: unaligned fitted
+  order 1.126 (log-residual 0.860, non-monotone), aligned fitted order 1.997 (residual 0.022).
+  Implicit-Euler temporal order, isolated on a fixed aligned grid: 0.997 (residual 3e-04). Full
+  derivation and tables: `docs/notes/pde_strike_alignment.md`.
+- `qpl.cases.european_black_scholes`: an importable, tested benchmark-case layer (parity, limits,
+  known values, monotonicity) with a cross-engine (analytic/PDE/MC) test.
+- `[data]` and `[oracle]` optional extras, split out of core dependencies (numpy/scipy/matplotlib
+  only); optional imports (pandas/yfinance/QuantLib) are guarded at call time with a clear
+  `NotSupportedError` + install hint. `tests/oracle/` collects only when QuantLib is installed.
+- CI now runs two jobs, `tests-core` (`.[dev]`) and `tests-full` (`.[dev,data,oracle]`), both with
+  `ruff check .` then `pytest -q`.
+
+### Changed
+
+- `labs/` is documented as private by design and gitignored (never published), not withheld
+  pending review; `docs/labs_to_library_map.md` renamed to `docs/curriculum_provenance.md`.
+- `docs/ROADMAP.md` superseded by `docs/CURRICULUM.md`.
+
+### Docs
+
+- Added `docs/CURRICULUM.md`, `docs/notes/pde_strike_alignment.md`, and ADR-0004
+  (`.agents/brain/adr/0004-textbook-driven-development.md`).
+
 ## v0.2.0 (Unreleased)
 
 > Labs 01-08 are private, textbook-driven workbooks under `labs/` (gitignored, never published).

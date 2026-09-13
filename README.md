@@ -10,10 +10,11 @@ Planned: variance reduction, benchmarking.
 
 ## Release: v0.1.0
 
-Quant Pricing Lab is a compact Python lab for European option pricing under the Black–Scholes
+Quant Pricing Lab is a Python numerical-methods lab for option pricing under the Black–Scholes
 assumptions, with analytic pricing/Greeks plus Monte Carlo and PDE (theta-scheme) engines for
-vanilla calls and puts. It is intentionally narrow in scope: no non-European or path-dependent
-instruments, no models beyond Black–Scholes, and no multi-asset or production trading framework.
+vanilla calls and puts, and a dynamic-programming/binomial American put engine
+(`qpl.engines.dp`). It does not aim for instrument breadth or a production trading framework;
+scope grows only along the phase plan in `docs/CURRICULUM.md`, one evidence-backed case at a time.
 
 Golden Path:
 
@@ -37,6 +38,17 @@ the `cases` layer, and short derivation notes.
 Development phase: exploratory pre-1.0. API churn is expected, labs are authoritative,
 and backward compatibility is not guaranteed. See `AGENTS.md` and
 `.agents/brain/adr/0003-pre-1-0-lab-authority-and-api-churn.md`.
+
+## Textbook-Driven Development
+
+`qpl` is built by re-deriving a textbook or literature result independently, turning it into an
+executable pricing case, cross-checking it against an independent method, and backing it with
+convergence or statistical evidence before it becomes a package capability. See
+`docs/CURRICULUM.md` for the full loop, the literature spine, the evidence classes, and the phase
+plan; the tested public curriculum is the `qpl.cases` layer plus the short derivation notes under
+`docs/notes/`. Optional extras keep the core install light: `pip install -e ".[dev]"` for
+development, add `.[data]` for the frozen (out-of-curriculum) market-data strand, and `.[oracle]`
+for QuantLib-Python as an independent pricing oracle.
 
 ## License
 MIT
