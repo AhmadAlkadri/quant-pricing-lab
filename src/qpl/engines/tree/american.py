@@ -1,7 +1,10 @@
-"""American option pricing on the Cox-Ross-Rubinstein lattice.
+"""American option pricing on a recombining binomial lattice.
 
 The lattice is the one in `qpl.engines.tree.lattice`, shared with the European
-pricer; the only difference is the step. Where the European engine rolls back
+pricer, and either parameterisation it offers (`TreeConfig.scheme`, "crr" or
+"leisen-reimer") works here unchanged: nothing below reads anything but
+``up``, ``down``, ``p`` and ``discount``. The only difference from the
+European pricer is the step. Where the European engine rolls back
 the discounted expectation, the American engine takes
 
     V(t_j, S) = max( intrinsic(S),  e^{-r dt} E[ V(t_{j+1}, S') | S ] )
@@ -42,7 +45,7 @@ from ...market.curves import FlatDividendCurve, FlatRateCurve
 from ...market.market import Market
 from ...models.black_scholes import BlackScholesModel
 from ..base import GreeksResult, PriceResult
-from .lattice import CRRLattice, crr_parameters, crr_spot_level
+from .lattice import BinomialLattice, crr_spot_level, lattice_parameters
 from .pricers import (
     RHO_BUMP,
     VEGA_BUMP,
@@ -78,7 +81,7 @@ class _Rollback:
     early_exercise_node_count: int
 
 
-def _spot_levels(market: Market, lattice: CRRLattice):
+def _spot_levels(market: Market, lattice: BinomialLattice):
     """Return a callable giving the spot nodes at one time level.
 
     Precomputing ``u**i`` and ``d**i`` once turns the whole lattice into `O(n)`
@@ -116,7 +119,7 @@ def _boundary_node(spots: np.ndarray, mask: np.ndarray, *, kind: str) -> float:
 def _rollback(
     option: AmericanOption,
     market: Market,
-    lattice: CRRLattice,
+    lattice: BinomialLattice,
     *,
     capture: tuple[int, ...],
 ) -> _Rollback:
@@ -291,7 +294,7 @@ def price_american(
     ------
     InvalidInputError
         If `cfg` is out of range, or if the lattice violates the no-arbitrage
-        condition (see `qpl.engines.tree.lattice.crr_parameters`).
+        condition (see `qpl.engines.tree.lattice.lattice_parameters`).
     """
     _validate(cfg, min_steps=1)
 
@@ -301,7 +304,10 @@ def price_american(
         lattice = (
             None
             if t == 0.0
-            else crr_parameters(
+            else lattice_parameters(
+                scheme=cfg.scheme,
+                spot=market.spot,
+                strike=option.strike,
                 sigma=0.0,
                 expiry=t,
                 rate=market.rate(t),
@@ -319,7 +325,10 @@ def price_american(
         )
         return PriceResult(value=float(value), meta=meta)
 
-    lattice = crr_parameters(
+    lattice = lattice_parameters(
+        scheme=cfg.scheme,
+        spot=market.spot,
+        strike=option.strike,
         sigma=model.sigma,
         expiry=t,
         rate=market.rate(t),
@@ -356,7 +365,10 @@ def greeks_american(
     depend only on the node values and node spots, not on how the values were
     produced. Early exercise changes the values; it does not change how a slope
     is read off two of them. The derivations are in
-    `qpl.engines.tree.pricers.greeks_european`.
+    `qpl.engines.tree.pricers.greeks_european`. On a Leisen-Reimer lattice the
+    theta estimator takes its off-centre correction, for the reason set out in
+    `lattice_delta_gamma_theta`; delta and gamma need none, being written in
+    terms of the node spots already.
 
     Two things are worth stating about accuracy, since there is no closed form
     to compare an American Greek against:
@@ -407,8 +419,15 @@ def greeks_american(
 
     r = market.rate(t)
     q = market.dividend_yield(t)
-    lattice = crr_parameters(
-        sigma=model.sigma, expiry=t, rate=r, dividend_yield=q, n_steps=cfg.n_steps
+    lattice = lattice_parameters(
+        scheme=cfg.scheme,
+        spot=market.spot,
+        strike=option.strike,
+        sigma=model.sigma,
+        expiry=t,
+        rate=r,
+        dividend_yield=q,
+        n_steps=cfg.n_steps,
     )
     rolled = _rollback(option, market, lattice, capture=(0, 1, 2))
 
@@ -422,6 +441,7 @@ def greeks_american(
         s1=s1,
         s2=s2,
         dt=lattice.dt,
+        spot=None if lattice.spot_centred else s0,
     )
 
     def _price(mdl: BlackScholesModel, mkt: Market) -> float:

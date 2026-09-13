@@ -91,7 +91,7 @@ def test_tree_config_validation() -> None:
 
     with pytest.raises(InvalidInputError, match="n_steps must be >= 1"):
         price(option, model, market, method="tree", cfg=TreeConfig(n_steps=0))
-    with pytest.raises(InvalidInputError, match="scheme must be 'crr'"):
+    with pytest.raises(InvalidInputError, match="scheme must be one of"):
         price(
             option,
             model,
