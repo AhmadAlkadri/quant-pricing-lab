@@ -232,6 +232,56 @@ _SMOKE_CASES = [
         ],
     ),
     (
+        # Euler against Milstein on one GBM, at five step counts, with the
+        # exact sampler on the SAME Brownian path as both. The curated keys
+        # are the ones a run that had lost the coupling or the point would not
+        # print: `strong_order euler=+0.51` next to `milstein=+0.99` is the
+        # slice in two lines, and `weak_call_z_decay euler=0.276` against
+        # `milstein=0.981` is the finding -- the coupled weak estimator's
+        # noise floor is the scheme's own STRONG error, so Euler's
+        # signal-to-noise falls by 3.6x down the same ladder on which
+        # Milstein's is flat.
+        "sde_convergence.py",
+        [],
+        [
+            "example=sde_convergence",
+            "case=gbm",
+            "analytic_call=19.6298871",
+            "strong_order euler=+0.51",
+            "strong_order milstein=+0.99",
+            "weak_identity_order euler=+0.99",
+            "weak_identity_order milstein=+0.99",
+            "weak_call_order euler=+1.00",
+            "weak_call_order milstein=+0.99",
+            "weak_call_z_decay euler=0.27",
+            "weak_call_z_decay milstein=0.98",
+            "weak_identity_closed_form_constant=2.4428",
+            "price_bias_order=+1.00",
+            "bias_pct=-1.29",
+        ],
+    ),
+    (
+        # The square-root diffusion, where Euler meets a boundary it cannot
+        # cross. `plain_negative=0.911` equal to `full_negative=0.911` with
+        # `full_nan=0.00000` is the whole CIR finding: full truncation keeps
+        # the recursion defined and changes the negative frequency not at all.
+        "sde_convergence.py",
+        ["--case", "cir"],
+        [
+            "case=cir",
+            "feller_satisfied=True",
+            "feller_satisfied=False",
+            "negativity feller_ok feller_number=8.00 plain_negative=0.00026",
+            "negativity feller_violated feller_number=0.08 plain_negative=0.911",
+            "full_negative=0.911",
+            "plain_nan=0.909",
+            "full_nan=0.00000",
+            "cir_order feller_ok call=+1.0",
+            "cir_order feller_violated call=+0.96",
+            "cir_order feller_violated mean=+0.64",
+        ],
+    ),
+    (
         "american_put_binomial_dp.py",
         [],
         [
