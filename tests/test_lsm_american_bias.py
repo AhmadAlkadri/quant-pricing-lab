@@ -49,11 +49,26 @@ import math
 import numpy as np
 import pytest
 
-from qpl.cases import LS2001_ROW1, bermudan_value_on_lattice
+from qpl.cases import (
+    AMERICAN_LSM_CASES,
+    LS2001_BERMUDAN_EXERCISES_PER_YEAR,
+    LS2001_ROW1,
+    LSM_LATTICE_N_STEPS,
+    bermudan_value_on_lattice,
+)
 from qpl.engines.mc.american import lsm_rollback, simulate_exercise_grid
 from qpl.engines.mc.greeks import reduce_to_units
+from qpl.validation import EvidenceClass
 
-EXERCISE_DATES = 50
+IN_SAMPLE_BIAS_ROW = next(
+    case.row
+    for case in AMERICAN_LSM_CASES
+    if case.row.id == "lsm_in_sample_estimator_is_biased_high"
+)
+"""The row this file evaluates: its `tolerance` is the number of standard
+errors every configuration's in-sample gap must exceed."""
+
+EXERCISE_DATES = LS2001_BERMUDAN_EXERCISES_PER_YEAR
 SMALL_PATHS = 2_000
 LARGE_PATHS = 8_000
 N_SEEDS = 24
@@ -64,7 +79,7 @@ BASES = ("laguerre", "polynomial")
 DEGREES = (2, 3, 5)
 CONFIGS = tuple((basis, degree) for basis in BASES for degree in DEGREES)
 
-LATTICE_N_STEPS = 5_000
+LATTICE_N_STEPS = LSM_LATTICE_N_STEPS
 
 
 def _mean_and_stderr(values: np.ndarray) -> tuple[float, float]:
@@ -163,8 +178,12 @@ def test_the_in_sample_estimator_is_biased_high(
     direction Glasserman section 8.6 predicts and the reason
     `MCConfig.lsm_in_sample` defaults to `False`.
     """
+    assert IN_SAMPLE_BIAS_ROW.evidence is EvidenceClass.STATISTICAL
     mean, stderr = _mean_and_stderr(small_sample_study[config]["gap"])
-    assert mean > 3.0 * stderr, (config, mean, stderr)
+    z_score = mean / stderr
+    assert z_score > IN_SAMPLE_BIAS_ROW.expected + IN_SAMPLE_BIAS_ROW.tolerance, (
+        config, mean, stderr, IN_SAMPLE_BIAS_ROW.notes,
+    )
 
 
 def test_the_in_sample_bias_decays_like_one_over_the_path_count(

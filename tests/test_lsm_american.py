@@ -42,9 +42,24 @@ import pytest
 
 from qpl.cases import (
     AMERICAN_BRACKETED_LIMIT,
+    AMERICAN_LSM_ATM_BERMUDAN_GAP,
+    AMERICAN_LSM_ATM_DATES,
+    AMERICAN_LSM_ATM_FINITE_SAMPLE_BIAS,
+    AMERICAN_LSM_ATM_PATHS,
+    AMERICAN_LSM_ATM_SEED,
+    AMERICAN_LSM_BOUNDARY_TIMES,
+    AMERICAN_LSM_CASES,
     AMERICAN_REFERENCE_SPEC,
     LS2001_BRACKETED_LIMIT,
+    LS2001_LSM_PATHS,
+    LS2001_LSM_SEED,
+    LS2001_PUBLISHED_LSM_STDERR,
     LS2001_ROW1,
+    LSM_BASIS,
+    LSM_DEGREE,
+    LSM_EXERCISE_FREQUENCIES,
+    LSM_LATTICE_N_STEPS,
+    LSM_STDERR_MULTIPLE,
     AmericanBSSpec,
     bermudan_value_on_lattice,
 )
@@ -52,35 +67,22 @@ from qpl.engines.mc.pricers import MCConfig
 from qpl.engines.pde.pricers import PDEConfig
 from qpl.engines.tree import TreeConfig
 from qpl.pricing import price
-from qpl.validation import fit_convergence_order
+from qpl.validation import EvidenceClass, fit_convergence_order
 
 # --------------------------------------------------------------------------
-# Shared settings.
+# Shared settings. Every number comes from `qpl.cases`; nothing numeric is
+# chosen in this file except the seeds of the two studies that need several.
 # --------------------------------------------------------------------------
 
-LATTICE_N_STEPS = 5_000
-"""Lattice size for every Bermudan reference here.
-
-Divisible by 10, 50 and 250, so all three exercise grids land exactly on
-lattice levels. Its own discretisation error is measured: against `n = 50000`
-the values move by 1.1e-04 (Longstaff-Schwartz row) and 1.8e-04 (ATM), which
-is thirty times smaller than the Monte Carlo standard errors it is compared
-against, and 0.10 s buys all three.
-"""
-
-EXERCISE_FREQUENCIES = (10, 50, 250)
-"""The three exercise grids the `1/m` study uses."""
-
-LS_PUBLISHED_LSM_VALUE = 4.472
-LS_PUBLISHED_LSM_STDERR = 0.010
-"""Longstaff & Schwartz (2001) Table 1 row 1, their own LSM estimate and the
-standard error printed beside it. Used as a fixture with the citation carried
-in `qpl.cases.american_black_scholes._LS_SOURCE`; no table is reproduced."""
-
-LS_PAPER_PATHS = 100_000
+LATTICE_N_STEPS = LSM_LATTICE_N_STEPS
+EXERCISE_FREQUENCIES = LSM_EXERCISE_FREQUENCIES
 LS_PAPER_DATES = 50
-LS_PAPER_DEGREE = 3
-LS_SEED = 20260913
+"""Longstaff & Schwartz's exercise frequency for a one-year option; the same
+`LS2001_BERMUDAN_EXERCISES_PER_YEAR` the Slice 2 rows use."""
+
+
+def _row(case_id: str):
+    return next(c.row for c in AMERICAN_LSM_CASES if c.row.id == case_id)
 
 
 def _lsm(spec: AmericanBSSpec, **kwargs) -> object:
@@ -149,25 +151,33 @@ def test_longstaff_schwartz_row_one_in_sample() -> None:
     (`LS2001_BRACKETED_LIMIT`), and Slice 2 pinned that distinction as a
     negative finding.
     """
+    row = _row("ls2001_row1_lsm_reproduces_the_published_simulation_value")
+    assert row.evidence is EvidenceClass.PUBLISHED_BENCHMARK
+    assert "Longstaff" in row.source
+
     result = _lsm(
         LS2001_ROW1,
-        n_paths=LS_PAPER_PATHS,
-        seed=LS_SEED,
+        n_paths=LS2001_LSM_PATHS,
+        seed=LS2001_LSM_SEED,
         variance_reduction="antithetic",
         exercise_dates=LS_PAPER_DATES,
-        lsm_basis="laguerre",
-        lsm_degree=LS_PAPER_DEGREE,
+        lsm_basis=LSM_BASIS,
+        lsm_degree=LSM_DEGREE,
         lsm_in_sample=True,
     )
 
     assert result.meta is not None
     assert result.meta["lsm_in_sample"] is True
-    assert result.meta["n_basis_functions"] == 4
-    assert result.meta["n_estimator_units"] == LS_PAPER_PATHS // 2
+    assert result.meta["n_basis_functions"] == LSM_DEGREE + 1
+    assert result.meta["n_estimator_units"] == LS2001_LSM_PATHS // 2
 
-    distance = abs(result.value - LS_PUBLISHED_LSM_VALUE)
-    assert distance < 3.0 * result.stderr, (result.value, result.stderr)
-    assert 0.004 < result.stderr <= LS_PUBLISHED_LSM_STDERR, result.stderr
+    # Two readings of the same claim: the row's fixed budget (three times the
+    # standard error this engine was measured to report) and the budget this
+    # run's own standard error implies. Both, so that a change which quietly
+    # inflated the reported standard error could not widen the test with it.
+    assert abs(result.value - row.expected) <= row.tolerance, (result.value, row.notes)
+    assert abs(result.value - row.expected) < LSM_STDERR_MULTIPLE * result.stderr
+    assert 0.004 < result.stderr <= LS2001_PUBLISHED_LSM_STDERR, result.stderr
 
 
 def test_longstaff_schwartz_row_one_out_of_sample_matches_the_lattice_bermudan() -> None:
@@ -186,21 +196,26 @@ def test_longstaff_schwartz_row_one_out_of_sample_matches_the_lattice_bermudan()
     bias at this path count is about -1.5e-03 -- a tenth of a percent, and
     about one standard error of a single run.
     """
+    row = _row("ls2001_row1_lsm_out_of_sample_matches_the_50_date_bermudan")
+    assert row.evidence is EvidenceClass.STATISTICAL
+
     lattice = bermudan_value_on_lattice(
         LS2001_ROW1, n_steps=LATTICE_N_STEPS, n_exercise=LS_PAPER_DATES
     )
     result = _lsm(
         LS2001_ROW1,
-        n_paths=LS_PAPER_PATHS,
-        seed=LS_SEED,
+        n_paths=LS2001_LSM_PATHS,
+        seed=LS2001_LSM_SEED,
         variance_reduction="antithetic",
         exercise_dates=LS_PAPER_DATES,
-        lsm_degree=LS_PAPER_DEGREE,
+        lsm_degree=LSM_DEGREE,
     )
 
     assert result.meta is not None
     assert result.meta["lsm_in_sample"] is False
-    assert abs(result.value - lattice) < 3.0 * result.stderr, (result.value, lattice)
+    gap = result.value - lattice
+    assert abs(gap - row.expected) <= row.tolerance, (gap, row.notes)
+    assert abs(gap) < LSM_STDERR_MULTIPLE * result.stderr, (gap, result.stderr)
     # And it is below the continuously-exercisable value by about the Bermudan
     # gap, which is the point of (c) below.
     assert result.value < LS2001_BRACKETED_LIMIT
@@ -229,6 +244,7 @@ def test_the_bermudan_gap_is_first_order_in_one_over_the_exercise_count() -> Non
     order 1/2 (which is what a *barrier*'s discrete-monitoring bias would give,
     and is the reason to state the order rather than assume it) and order 2.
     """
+    row = _row("lsm_bermudan_gap_is_first_order_in_the_exercise_count")
     gaps = [
         LS2001_BRACKETED_LIMIT
         - bermudan_value_on_lattice(LS2001_ROW1, n_steps=LATTICE_N_STEPS, n_exercise=m)
@@ -238,7 +254,7 @@ def test_the_bermudan_gap_is_first_order_in_one_over_the_exercise_count() -> Non
     assert gaps[0] > gaps[1] > gaps[2]
 
     fit = fit_convergence_order([1.0 / m for m in EXERCISE_FREQUENCIES], gaps)
-    assert 0.9 <= fit.order <= 1.1, fit.order
+    assert abs(fit.order - row.expected) <= row.tolerance, (fit.order, row.notes)
     assert fit.residual < 0.05, fit.residual
     assert gaps[1] == pytest.approx(8.8e-3, abs=2e-4), gaps[1]
 
@@ -331,21 +347,6 @@ def test_the_lsm_estimator_cannot_resolve_the_bermudan_gap_at_250_dates(
 # (d) Three discretisations of the ATM American put.
 # --------------------------------------------------------------------------
 
-ATM_LSM_DATES = 250
-ATM_LSM_PATHS = 100_000
-ATM_LSM_SEED = 7
-
-ATM_BERMUDAN_GAP = 2.46e-3
-"""`AMERICAN_BRACKETED_LIMIT - bermudan(250)` at `n = 5000`: the part of the
-gap that is the instrument and not the estimator. Recomputed in the test."""
-
-ATM_FINITE_SAMPLE_LOW_BIAS = 1.89e-2
-"""Measured residual low bias of the out-of-sample estimator at
-`(250 dates, 100 000 antithetic paths)`, from ten seeds: the mean estimate is
-6.06911 against a lattice Bermudan of 6.087958 (`n = 10000`). See the test
-docstring -- this term is the one the slice statement did not anticipate."""
-
-
 def test_atm_put_agrees_with_the_lattice_and_the_grid() -> None:
     """Evidence class: INDEPENDENT_ENGINE, third discretisation: simulation.
 
@@ -387,6 +388,9 @@ def test_atm_put_agrees_with_the_lattice_and_the_grid() -> None:
     discretisation, and the reason it is only 1% is written above rather than
     hidden in a round number.
     """
+    row = _row("atm_american_put_lsm_agrees_with_the_lattice_and_the_grid")
+    assert row.evidence is EvidenceClass.INDEPENDENT_ENGINE
+
     spec = AMERICAN_REFERENCE_SPEC
     tree = price(
         spec.option(), spec.model(), spec.market(), method="tree",
@@ -400,22 +404,29 @@ def test_atm_put_agrees_with_the_lattice_and_the_grid() -> None:
     ).value
     lsm = _lsm(
         spec,
-        n_paths=ATM_LSM_PATHS,
-        seed=ATM_LSM_SEED,
+        n_paths=AMERICAN_LSM_ATM_PATHS,
+        seed=AMERICAN_LSM_ATM_SEED,
         variance_reduction="antithetic",
-        exercise_dates=ATM_LSM_DATES,
-        lsm_degree=3,
+        exercise_dates=AMERICAN_LSM_ATM_DATES,
+        lsm_degree=LSM_DEGREE,
     )
 
     bermudan = bermudan_value_on_lattice(
-        spec, n_steps=LATTICE_N_STEPS, n_exercise=ATM_LSM_DATES
+        spec, n_steps=LATTICE_N_STEPS, n_exercise=AMERICAN_LSM_ATM_DATES
     )
     bermudan_gap = AMERICAN_BRACKETED_LIMIT - bermudan
-    assert bermudan_gap == pytest.approx(ATM_BERMUDAN_GAP, abs=2e-4), bermudan_gap
+    assert bermudan_gap == pytest.approx(AMERICAN_LSM_ATM_BERMUDAN_GAP, abs=2e-4)
 
-    budget = bermudan_gap + ATM_FINITE_SAMPLE_LOW_BIAS + 3.0 * lsm.stderr
-    assert abs(lsm.value - tree) < budget, (lsm.value, tree, budget)
-    assert abs(lsm.value - pde) < budget, (lsm.value, pde, budget)
+    worst = max(abs(lsm.value - tree), abs(lsm.value - pde))
+    assert abs(worst - row.expected) <= row.tolerance, (worst, row.notes)
+    # The same budget rebuilt from this run's own standard error, so an
+    # inflated stderr cannot widen the test.
+    budget = (
+        bermudan_gap
+        + AMERICAN_LSM_ATM_FINITE_SAMPLE_BIAS
+        + LSM_STDERR_MULTIPLE * lsm.stderr
+    )
+    assert worst < budget, (worst, budget)
     # The two deterministic engines agree far better than either agrees with
     # the simulation, which is what makes the wide budget a statement about
     # Monte Carlo and not about them.
@@ -425,15 +436,6 @@ def test_atm_put_agrees_with_the_lattice_and_the_grid() -> None:
 # --------------------------------------------------------------------------
 # (g) The exercise boundary implied by the regression.
 # --------------------------------------------------------------------------
-
-BOUNDARY_TIMES = (0.10, 0.25, 0.50, 0.75, 0.90)
-BOUNDARY_TOLERANCE = 1.2
-"""Absolute tolerance on the boundary spot, in the same units as the strike.
-
-Derived in `test_exercise_boundary_tracks_the_lattice_and_the_grid`; 1.8 times
-the worst measured deviation, and about 3% of the strike.
-"""
-
 
 def test_exercise_boundary_tracks_the_lattice_and_the_grid() -> None:
     """Evidence class: STATISTICAL. Noisy by construction; reported as such.
@@ -473,6 +475,7 @@ def test_exercise_boundary_tracks_the_lattice_and_the_grid() -> None:
     about 3% of the strike; a tighter budget would be asserting that a sample's
     extreme order statistic is a boundary estimator, which it is not.
     """
+    row = _row("lsm_exercise_boundary_tracks_the_grid_and_the_lattice")
     spec = LS2001_ROW1
     pde = price(
         spec.option(), spec.model(), spec.market(), method="pde",
@@ -485,8 +488,8 @@ def test_exercise_boundary_tracks_the_lattice_and_the_grid() -> None:
         cfg=TreeConfig(n_steps=2001, scheme="leisen-reimer"),
     )
     lsm = _lsm(
-        spec, n_paths=LS_PAPER_PATHS, seed=1, variance_reduction="antithetic",
-        exercise_dates=LS_PAPER_DATES, lsm_degree=3,
+        spec, n_paths=LS2001_LSM_PATHS, seed=1, variance_reduction="antithetic",
+        exercise_dates=LS_PAPER_DATES, lsm_degree=LSM_DEGREE,
     )
 
     assert pde.meta is not None and tree.meta is not None and lsm.meta is not None
@@ -497,17 +500,16 @@ def test_exercise_boundary_tracks_the_lattice_and_the_grid() -> None:
     lsm_boundary = np.asarray(lsm.meta["exercise_boundary"], dtype=float)
     lsm_times = np.asarray(lsm.meta["exercise_boundary_times"], dtype=float)
 
-    for t in BOUNDARY_TIMES:
+    for t in AMERICAN_LSM_BOUNDARY_TIMES:
         i = int(np.argmin(np.abs(pde_times - t)))
         j = int(np.argmin(np.abs(tree_times - t)))
         k = int(np.argmin(np.abs(lsm_times - t)))
         assert math.isfinite(lsm_boundary[k]), t
-        assert abs(lsm_boundary[k] - pde_boundary[i]) < BOUNDARY_TOLERANCE, (
-            t, lsm_boundary[k], pde_boundary[i],
-        )
-        assert abs(lsm_boundary[k] - tree_boundary[j]) < BOUNDARY_TOLERANCE, (
-            t, lsm_boundary[k], tree_boundary[j],
-        )
+        for reference in (pde_boundary[i], tree_boundary[j]):
+            deviation = abs(lsm_boundary[k] - reference)
+            assert abs(deviation - row.expected) <= row.tolerance, (
+                t, lsm_boundary[k], reference, row.notes,
+            )
 
     # The boundary rises toward the strike as expiry approaches: a put is
     # exercised at higher spots when there is less time left. Checked on the

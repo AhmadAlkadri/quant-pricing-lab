@@ -48,6 +48,15 @@ __all__ = [
     "AMERICAN_IDENTITY_CASES",
     "AMERICAN_LR_CASES",
     "AMERICAN_LR_LEVELS",
+    "AMERICAN_LSM_ATM_BERMUDAN_GAP",
+    "AMERICAN_LSM_ATM_DATES",
+    "AMERICAN_LSM_ATM_FINITE_SAMPLE_BIAS",
+    "AMERICAN_LSM_ATM_PATHS",
+    "AMERICAN_LSM_ATM_SEED",
+    "AMERICAN_LSM_ATM_STDERR",
+    "AMERICAN_LSM_BOUNDARY_TIMES",
+    "AMERICAN_LSM_BOUNDARY_TOLERANCE",
+    "AMERICAN_LSM_CASES",
     "AMERICAN_PDE_N",
     "AMERICAN_PDE_STRIKE_ALIGNMENT",
     "AMERICAN_PDE_TIME_STEPPING",
@@ -59,8 +68,17 @@ __all__ = [
     "LS2001_BERMUDAN_EXERCISES_PER_YEAR",
     "LS2001_BRACKETED_LIMIT",
     "LS2001_CASES",
+    "LS2001_LSM_PATHS",
+    "LS2001_LSM_SEED",
     "LS2001_N_STEPS",
+    "LS2001_PUBLISHED_LSM_STDERR",
+    "LS2001_PUBLISHED_LSM_VALUE",
     "LS2001_ROW1",
+    "LSM_BASIS",
+    "LSM_DEGREE",
+    "LSM_EXERCISE_FREQUENCIES",
+    "LSM_LATTICE_N_STEPS",
+    "LSM_STDERR_MULTIPLE",
     "PREMIUM_STRIKE_LADDER",
     "AmericanBSCase",
     "AmericanBSSpec",
@@ -809,6 +827,308 @@ AMERICAN_CROSS_ENGINE_CASES: tuple[AmericanBSCase, ...] = (
 )
 
 
+# --------------------------------------------------------------------------
+# (vii) Least-squares Monte Carlo: the third discretisation, and the first
+# American engine whose answer carries a standard error.
+#
+# Slice 11. `qpl.engines.mc.american` prices a **Bermudan** option on a chosen
+# exercise grid by the Longstaff-Schwartz regression, so three things have to
+# be kept apart and each row below says which it is checking:
+#
+#   - the published Longstaff-Schwartz *simulation* value, 4.472, which is a
+#     Bermudan value produced by an estimator with a standard error of 0.010;
+#   - the Bermudan value itself, which `bermudan_value_on_lattice` supplies
+#     with no noise at all;
+#   - the continuously-exercisable American value, `LS2001_BRACKETED_LIMIT`,
+#     which no simulation on a finite grid is estimating.
+#
+# Slice 2 already pinned that the published 4.478 is a Bermudan finite-
+# difference value and not a continuous American one. Slice 11 adds the
+# companion: 4.472 is the same instrument priced by the same paper's own
+# simulation, so it is the number an LSM reproduction should be compared with.
+#
+# Every tolerance below is a multiple of a measured standard error, never a
+# round number. The multiple is `LSM_STDERR_MULTIPLE`.
+# --------------------------------------------------------------------------
+
+LSM_STDERR_MULTIPLE = 3.0
+"""Standard errors allowed in every statistical LSM row.
+
+Three, not two: the rows are evaluated at one fixed seed each, so the relevant
+false-failure rate is per-row-per-run rather than an average over seeds, and a
+two-sigma band on nine such rows would fail somewhere about once every three
+full-suite runs on a different platform's RNG rounding."""
+
+LSM_BASIS = "laguerre"
+LSM_DEGREE = 3
+"""The basis Longstaff & Schwartz (2001) section 2 describes: a constant plus
+the first three weighted Laguerre functions, which is `lsm_degree = 3` in
+`MCConfig` (the degree counts the non-constant functions)."""
+
+LSM_LATTICE_N_STEPS = 5_000
+"""Lattice size for every Bermudan reference in these rows.
+
+Divisible by 10, 50 and 250, so each exercise grid lands exactly on lattice
+levels. Its own discretisation error is 1.1e-04 (Longstaff-Schwartz point) and
+1.8e-04 (ATM) against `n = 50000`, thirty times below the standard errors it is
+compared against."""
+
+LSM_EXERCISE_FREQUENCIES: tuple[int, ...] = (10, 50, 250)
+"""Exercise counts for the Bermudan-gap study."""
+
+LS2001_LSM_PATHS = 100_000
+LS2001_LSM_SEED = 20260913
+"""Longstaff & Schwartz's own sample size -- 100 000 paths drawn as 50 000
+antithetic pairs -- and the seed the rows are evaluated at."""
+
+LS2001_PUBLISHED_LSM_VALUE = 4.472
+LS2001_PUBLISHED_LSM_STDERR = 0.010
+"""Their Table 1 row-1 simulation value and the standard error printed with
+it. Used as fixtures with the citation in `_LS_SOURCE`; no table is
+reproduced."""
+
+_LS2001_LSM_IN_SAMPLE_STDERR = 6.032e-3
+_LS2001_LSM_OUT_OF_SAMPLE_STDERR = 6.057e-3
+"""Standard errors this engine reports at `LS2001_LSM_SEED`, measured. The
+in-sample one is 0.60 of the 0.010 printed in the table, at the same nominal
+sample size -- the difference is that the table's estimator had a different
+seed, not a different amount of information."""
+
+AMERICAN_LSM_ATM_DATES = 250
+AMERICAN_LSM_ATM_PATHS = 100_000
+AMERICAN_LSM_ATM_SEED = 7
+AMERICAN_LSM_ATM_STDERR = 1.309e-2
+"""Settings and the measured standard error for the ATM cross-method row."""
+
+AMERICAN_LSM_ATM_BERMUDAN_GAP = 2.46e-3
+"""`AMERICAN_BRACKETED_LIMIT` minus the 250-date Bermudan on the lattice: the
+part of the ATM cross-method gap that is the instrument, not the estimator."""
+
+AMERICAN_LSM_ATM_FINITE_SAMPLE_BIAS = 1.89e-2
+"""The part that is neither the instrument nor the noise.
+
+Measured over ten seeds at `(250 dates, 100 000 antithetic paths)`: the mean
+out-of-sample estimate is 6.06911 against a lattice Bermudan of 6.087958. It is
+the low bias of a policy fitted on a finite sample, it decays like `N^{-1/2}`
+(3.29e-02 at 20 000 paths, 2.30e-02 at 50 000, 1.89e-02 at 100 000), and it is
+**point-dependent**: the same measurement at `LS2001_ROW1` gives -1.5e-03, an
+order of magnitude smaller at the same settings. QuantLib's `MCAmericanEngine`
+shows the same effect at the same point, so it is the method and not this
+implementation (`tests/oracle/test_lsm_vs_quantlib.py`).
+
+The slice this row was written for expected the cross-method budget to be
+"the standard error plus the Bermudan gap". This term is larger than both and
+is why that expectation is recorded here rather than quietly absorbed."""
+
+AMERICAN_LSM_BOUNDARY_TIMES: tuple[float, ...] = (0.10, 0.25, 0.50, 0.75, 0.90)
+AMERICAN_LSM_BOUNDARY_TOLERANCE = 1.2
+"""Absolute tolerance on the LSM exercise boundary, in strike units: 1.8 times
+the worst deviation measured against the PSOR boundary over three seeds and
+five dates (0.65 on a boundary of 33 to 36, i.e. 2.0%)."""
+
+_LSM_SOURCE = (
+    "Longstaff & Schwartz (2001), Review of Financial Studies 14(1), 113-147, "
+    "sections 1-2 for the algorithm and the weighted Laguerre basis, and Table "
+    "1 row 1 for the simulation value 4.472 with standard error 0.010; "
+    "Glasserman (2003), Monte Carlo Methods in Financial Engineering, sections "
+    "8.6 (in-sample bias of a fitted continuation value) and 8.7 (high- and "
+    "low-biased estimators); Clement, Lamberton & Protter (2002), Finance and "
+    "Stochastics 6, 449-471, for convergence in the number of paths and basis "
+    "functions. Derived independently in qpl.engines.mc.american and "
+    "docs/notes/lsm_american_monte_carlo.md; the only figures taken from a "
+    "source are 4.472 and its 0.010, used as fixtures with this citation."
+)
+
+_LSM_IN_REPO_SOURCE = (
+    "derived in-repo: qpl.engines.mc.american against "
+    "qpl.cases.bermudan_value_on_lattice, qpl.engines.tree.american and "
+    "qpl.engines.pde.american; measured in tests/test_lsm_american.py and "
+    "tests/test_lsm_american_bias.py"
+)
+
+AMERICAN_LSM_CASES: tuple[AmericanBSCase, ...] = (
+    AmericanBSCase(
+        row=BenchmarkRow(
+            id="ls2001_row1_lsm_reproduces_the_published_simulation_value",
+            description=(
+                "least-squares Monte Carlo at Longstaff & Schwartz's own "
+                "settings (100 000 paths as 50 000 antithetic pairs, 50 "
+                "exercise dates, constant + three weighted Laguerre functions, "
+                "in-sample) against their published 4.472"
+            ),
+            expected=LS2001_PUBLISHED_LSM_VALUE,
+            tolerance=LSM_STDERR_MULTIPLE * _LS2001_LSM_IN_SAMPLE_STDERR,
+            evidence=EvidenceClass.PUBLISHED_BENCHMARK,
+            source=_LS_SOURCE + " " + _LSM_SOURCE,
+            notes=(
+                "Measured 4.467550 with standard error 6.032e-03 at seed "
+                "20260913; the gap to 4.472 is 4.45e-03, or 0.74 of this run's "
+                "own standard error and 0.44 of the 0.010 the table prints. "
+                "The tolerance is three standard errors, so this is a "
+                "statistical statement about a published estimate and not a "
+                "claim that two Monte Carlo runs at different seeds agree to "
+                "four figures. The value is a 50-date BERMUDAN value: the "
+                "continuously-exercisable American put at this specification "
+                "is LS2001_BRACKETED_LIMIT = 4.4867, and the companion "
+                "negative-finding row above says so."
+            ),
+        ),
+        specs=(LS2001_ROW1,),
+    ),
+    AmericanBSCase(
+        row=BenchmarkRow(
+            id="ls2001_row1_lsm_out_of_sample_matches_the_50_date_bermudan",
+            description=(
+                "the same settings with the policy fitted on an independent "
+                "path set (Glasserman section 8.7) against the 50-date "
+                "Bermudan on the CRR lattice; expected value is the gap"
+            ),
+            expected=0.0,
+            tolerance=LSM_STDERR_MULTIPLE * _LS2001_LSM_OUT_OF_SAMPLE_STDERR,
+            evidence=EvidenceClass.STATISTICAL,
+            source=_LSM_IN_REPO_SOURCE,
+            notes=(
+                "Measured 4.472996 with standard error 6.057e-03 against a "
+                "lattice Bermudan of 4.477922 at n=5000: gap -4.93e-03, or "
+                "0.81 standard errors. Over ten seeds the mean is 4.47634 "
+                "(standard error of the mean 1.43e-03), so the residual low "
+                "bias at 100 000 paths is about -1.5e-03 at this point. The "
+                "reference is deliberately the lattice Bermudan and not the "
+                "published 4.472: this estimator has a different bias "
+                "direction from the one the table reports, so comparing it "
+                "with a published simulation would be comparing two different "
+                "estimators of the same quantity."
+            ),
+        ),
+        specs=(LS2001_ROW1,),
+    ),
+    AmericanBSCase(
+        row=BenchmarkRow(
+            id="lsm_bermudan_gap_is_first_order_in_the_exercise_count",
+            description=(
+                "the gap between the Bermudan and the continuously-exercisable "
+                "value is O(1/m) in the number of exercise dates; expected "
+                "value is the order"
+            ),
+            expected=1.0,
+            tolerance=0.1,
+            evidence=EvidenceClass.CONVERGENCE_ORDER,
+            source=_LSM_IN_REPO_SOURCE,
+            notes=(
+                "Measured on the lattice, where there is no noise: gaps "
+                "4.4029e-02, 8.750e-03 and 1.672e-03 at m = 10, 50, 250 "
+                "against LS2001_BRACKETED_LIMIT, successive ratios 5.03 and "
+                "5.23 over a fivefold refinement, fitted order 1.0176 with a "
+                "log-space RMS residual of 0.0080. The band excludes order 1/2 "
+                "(which is what a barrier's discrete-monitoring bias gives, "
+                "and the reason to measure rather than assume) and order 2. "
+                "The same study CANNOT be run through the simulation: at "
+                "m = 250 the gap is 0.2 of a single 50 000-path run's standard "
+                "error, so the order would be a fit to the seed."
+            ),
+        ),
+        specs=(LS2001_ROW1,),
+    ),
+    AmericanBSCase(
+        row=BenchmarkRow(
+            id="atm_american_put_lsm_agrees_with_the_lattice_and_the_grid",
+            description=(
+                "the ATM American put from three discretisations -- "
+                "Leisen-Reimer lattice, PSOR grid, and a path sample; expected "
+                "value is the worst gap between the simulation and either"
+            ),
+            expected=0.0,
+            tolerance=(
+                AMERICAN_LSM_ATM_BERMUDAN_GAP
+                + AMERICAN_LSM_ATM_FINITE_SAMPLE_BIAS
+                + LSM_STDERR_MULTIPLE * AMERICAN_LSM_ATM_STDERR
+            ),
+            evidence=EvidenceClass.INDEPENDENT_ENGINE,
+            source=_LSM_IN_REPO_SOURCE,
+            notes=(
+                "Measured: Leisen-Reimer 6.09033758 at n=8001, PSOR 6.08995244 "
+                "at n_s=n_t=800, LSM 6.05330 with standard error 1.309e-02 at "
+                "250 dates and 100 000 antithetic paths. The tolerance is the "
+                "sum of three named terms -- Bermudan gap 2.46e-03, "
+                "finite-sample low bias 1.89e-02, three standard errors "
+                "3.93e-02 -- and the middle one is the largest thing the slice "
+                "statement did not anticipate (see "
+                "AMERICAN_LSM_ATM_FINITE_SAMPLE_BIAS). At 1.0% of the value "
+                "this is a much weaker agreement than the 1.5e-03 the "
+                "tree-and-grid row gets, which is the honest price of a third "
+                "discretisation that is a sample rather than a mesh."
+            ),
+        ),
+        specs=(AMERICAN_REFERENCE_SPEC,),
+    ),
+    AmericanBSCase(
+        row=BenchmarkRow(
+            id="lsm_exercise_boundary_tracks_the_grid_and_the_lattice",
+            description=(
+                "the exercise boundary implied by the fitted regression "
+                "against the PSOR and Leisen-Reimer boundaries at five dates; "
+                "expected value is the worst deviation"
+            ),
+            expected=0.0,
+            tolerance=AMERICAN_LSM_BOUNDARY_TOLERANCE,
+            evidence=EvidenceClass.STATISTICAL,
+            source=_LSM_IN_REPO_SOURCE,
+            notes=(
+                "The LSM boundary at a date is the largest sampled spot at "
+                "which exercising beat the fitted continuation, which is an "
+                "upper order statistic of a sample and therefore biased "
+                "upward; it is also a Bermudan boundary and it carries the "
+                "regression's approximation error at exactly the place where "
+                "intrinsic and continuation nearly coincide. Measured against "
+                "the PSOR boundary over seeds 1, 2, 3 at t = 0.10 ... 0.90: "
+                "+0.65, +0.30, +0.49, +0.16, -0.36 worst-case, on a boundary "
+                "running 33.08 to 36.31. The lattice's own boundary sits 0.10 "
+                "to 0.28 below the grid's, which sets the scale. The sign is "
+                "informative: the fitted policy exercises too eagerly early in "
+                "the option's life, which is the same suboptimality the price's "
+                "low bias measures."
+            ),
+        ),
+        specs=(LS2001_ROW1,),
+    ),
+    AmericanBSCase(
+        row=BenchmarkRow(
+            id="lsm_in_sample_estimator_is_biased_high",
+            description=(
+                "fitting and valuing the exercise policy on the same paths "
+                "biases the estimate upward; the compared quantity is each "
+                "configuration's in-sample gap divided by its own standard "
+                "error, and every one must EXCEED expected + tolerance"
+            ),
+            expected=0.0,
+            tolerance=LSM_STDERR_MULTIPLE,
+            evidence=EvidenceClass.STATISTICAL,
+            source=_LSM_IN_REPO_SOURCE,
+            notes=(
+                "Measured with a PAIRED design at 2 000 paths over 24 seeds -- "
+                "two path sets per seed, a policy fitted on each, both valued "
+                "on the same set, so the valuation noise cancels. Gaps "
+                "+0.03794 to +0.07436, every one at better than five of its "
+                "own standard errors. The naive unpaired comparison (run "
+                "in-sample, run out-of-sample, subtract) reads -0.0022 +- "
+                "0.0028 over 20 seeds at 50 000 paths: the wrong sign and not "
+                "significant. The bias decays like 1/N (fitted order 1.020 "
+                "between 2 000 and 8 000 paths) and grows with the number of "
+                "basis functions (+0.0283 +- 0.0068 going from four "
+                "coefficients to six), which is Glasserman section 8.6. "
+                "The row is shaped like the negative-finding rows above -- the "
+                "assertion is that the measured quantity EXCEEDS "
+                "expected + tolerance -- because the claim is a SIGN with a "
+                "confidence attached, not a distance to a number. Measured "
+                "z-scores 5.7, 7.5, 10.2, 7.2, 9.7 and 8.9 against the "
+                "required 3.0; evaluated in tests/test_lsm_american_bias.py."
+            ),
+        ),
+        specs=(LS2001_ROW1,),
+    ),
+)
+
+
 ALL_AMERICAN_CASES: tuple[AmericanBSCase, ...] = (
     LS2001_CASES
     + AMERICAN_IDENTITY_CASES
@@ -816,4 +1136,5 @@ ALL_AMERICAN_CASES: tuple[AmericanBSCase, ...] = (
     + AMERICAN_REFERENCE_CASES
     + AMERICAN_LR_CASES
     + AMERICAN_CROSS_ENGINE_CASES
+    + AMERICAN_LSM_CASES
 )

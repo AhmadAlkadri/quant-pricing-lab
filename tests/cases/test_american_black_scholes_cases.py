@@ -26,6 +26,8 @@ from qpl.cases import (
     AMERICAN_IDENTITY_CASES,
     AMERICAN_LR_CASES,
     AMERICAN_LR_LEVELS,
+    AMERICAN_LSM_ATM_DATES,
+    AMERICAN_LSM_CASES,
     AMERICAN_PDE_N,
     AMERICAN_PDE_STRIKE_ALIGNMENT,
     AMERICAN_PDE_TIME_STEPPING,
@@ -36,7 +38,14 @@ from qpl.cases import (
     LS2001_BERMUDAN_EXERCISES_PER_YEAR,
     LS2001_BRACKETED_LIMIT,
     LS2001_CASES,
+    LS2001_LSM_PATHS,
     LS2001_N_STEPS,
+    LS2001_PUBLISHED_LSM_STDERR,
+    LS2001_PUBLISHED_LSM_VALUE,
+    LS2001_ROW1,
+    LSM_DEGREE,
+    LSM_EXERCISE_FREQUENCIES,
+    LSM_LATTICE_N_STEPS,
     AmericanBSCase,
     bermudan_value_on_lattice,
 )
@@ -425,6 +434,70 @@ def test_the_longstaff_schwartz_bracketed_limit_is_the_continuous_value() -> Non
     """
     assert LS2001_BRACKETED_LIMIT == pytest.approx(4.4867, abs=1e-4)
     assert abs(LS2001_BRACKETED_LIMIT - 4.478) == pytest.approx(8.7e-3, abs=5e-5)
+
+
+# --------------------------------------------------------------------------
+# The least-squares Monte Carlo rows (Slice 11)
+# --------------------------------------------------------------------------
+
+
+def test_the_lsm_rows_are_evaluated_elsewhere_and_say_where() -> None:
+    """The six `AMERICAN_LSM_CASES` rows are wired, not orphaned.
+
+    They are evaluated in `tests/test_lsm_american.py` (five) and
+    `tests/test_lsm_american_bias.py` (one) rather than here, because each one
+    needs a simulation with a specific path count and seed and this file is the
+    lattice/grid file. What is checked here is that they exist, that they are
+    in `ALL_AMERICAN_CASES`, and that the settings the rows publish are the
+    ones an evaluator would need -- a row whose sample size lived only in a
+    test would be a tolerance with no derivation attached.
+    """
+    ids = {case.row.id for case in AMERICAN_LSM_CASES}
+    assert len(ids) == len(AMERICAN_LSM_CASES)
+    assert ids <= {case.row.id for case in ALL_AMERICAN_CASES}
+
+    evidence = {case.row.evidence for case in AMERICAN_LSM_CASES}
+    assert EvidenceClass.PUBLISHED_BENCHMARK in evidence
+    assert EvidenceClass.INDEPENDENT_ENGINE in evidence
+    assert EvidenceClass.STATISTICAL in evidence
+    assert EvidenceClass.CONVERGENCE_ORDER in evidence
+
+    assert LS2001_LSM_PATHS % 2 == 0, "antithetic sampling needs an even count"
+    assert LSM_DEGREE + 1 == 4, "constant plus three weighted Laguerre functions"
+    for n_exercise in LSM_EXERCISE_FREQUENCIES:
+        assert LSM_LATTICE_N_STEPS % n_exercise == 0, n_exercise
+    assert AMERICAN_LSM_ATM_DATES in (250,)
+    assert LSM_LATTICE_N_STEPS % AMERICAN_LSM_ATM_DATES == 0
+
+
+def test_the_published_lsm_value_is_the_bermudan_one_not_the_american_one() -> None:
+    """Evidence class: PUBLISHED_BENCHMARK, and what it is a benchmark *for*.
+
+    Longstaff & Schwartz's Table 1 row 1 prints two numbers for this
+    specification: 4.478 from finite differences and 4.472 from their own
+    simulation. Slice 2 pinned that the first is a 50-exercise-date Bermudan
+    value and not a continuous American one; the same is true of the second,
+    and this check says so in numbers rather than in prose.
+
+    The lattice Bermudan at 50 dates is 4.477922, which is 5.9e-03 above the
+    published simulation value -- the size of a Monte Carlo standard error, not
+    of a modelling difference. The continuous American value is 4.4866721476,
+    which is 1.47e-02 above it -- two and a half standard errors, and in the
+    direction more exercise opportunity has to move a value.
+    """
+    lattice = bermudan_value_on_lattice(
+        LS2001_ROW1,
+        n_steps=LSM_LATTICE_N_STEPS,
+        n_exercise=LS2001_BERMUDAN_EXERCISES_PER_YEAR,
+    )
+    assert lattice - LS2001_PUBLISHED_LSM_VALUE == pytest.approx(5.9e-3, abs=5e-4)
+    assert LS2001_BRACKETED_LIMIT - LS2001_PUBLISHED_LSM_VALUE == pytest.approx(
+        1.47e-2, abs=5e-4
+    )
+    # The published simulation value and the published finite-difference value
+    # in the same row differ by less than one of the simulation's own standard
+    # errors, which is what makes them the same instrument.
+    assert abs(LS2001_PUBLISHED_LSM_VALUE - 4.478) < LS2001_PUBLISHED_LSM_STDERR
 
 
 def test_every_american_row_states_its_evidence_and_source() -> None:
