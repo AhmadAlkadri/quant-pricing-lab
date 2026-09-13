@@ -388,6 +388,62 @@ _SMOKE_CASES = [
         ],
     ),
     (
+        # The barrier on a grid. The curated keys are the ones a run that had
+        # lost the point would not print: `grid_order uniform_off_node=+0.70`
+        # next to `+2.06` and `+1.99` is the whole slice in three lines -- the
+        # same contract, the same scheme, and a full order of difference that
+        # comes from nothing but where the nodes are -- and
+        # `effective_barrier=93.87` at `n=100` on the off-node row is the
+        # mechanism, a barrier displaced by more than a whole spacing.
+        "barrier_pde_grid.py",
+        [],
+        [
+            "example=barrier_pde_grid",
+            "case=grid",
+            "analytic_continuous=4.5125986078",
+            "grid_order uniform_on_node=+2.06",
+            "grid_order uniform_off_node=+0.70",
+            "grid_order sinh_on_node=+1.99",
+            "effective_barrier=93.87",
+            "off_node_over_on_node=182.1",
+            "uniform_over_sinh=18.0 13.0",
+        ],
+    ),
+    (
+        # The concentration scan, which exists for one contrast:
+        # `barrier_gain= 22.1` against `vanilla_gain=  0.1` in the same row.
+        # A mesh that concentrates at the barrier is not free accuracy, and the
+        # example says so in the same table rather than in a footnote.
+        "barrier_pde_grid.py",
+        ["--case", "mesh"],
+        [
+            "case=mesh",
+            "barrier_gain= 22.1",
+            "vanilla_gain=  0.1",
+            "default_concentration=0.05",
+            "mesh_reading=",
+        ],
+    ),
+    (
+        # Discrete monitoring. `discrete_gap_order=+0.44` next to
+        # `bgk_gap_order=+0.43` is the finding that the deficit from one half
+        # belongs to the continuity correction and not to the grid;
+        # `gap_over_bgk=0.99` is the correction predicting this engine's own
+        # gap; and `relative=3.395e-16` is in-out parity on the discrete system.
+        "barrier_pde_grid.py",
+        ["--case", "discrete"],
+        [
+            "case=discrete",
+            "discrete m= 160",
+            "projections=160",
+            "gap_over_bgk=0.99",
+            "discrete_gap_order=+0.44",
+            "bgk_gap_order=+0.43",
+            "parity n=  100",
+            "relative=3.395e-16",
+        ],
+    ),
+    (
         "american_put_binomial_dp.py",
         [],
         [

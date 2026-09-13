@@ -388,6 +388,8 @@ def _legacy_uniform_grid(strike: float, spot: float, cfg: Any) -> SpotGrid:
             "s_min": 0.0,
             "s_max": float(s_max),
             "ds": float(ds),
+            "ds_min": float(ds),
+            "ds_max": float(ds),
             "strike_alignment": cfg.strike_alignment,
         },
     )
