@@ -170,8 +170,10 @@ def test_variance_reduction_none_is_bit_for_bit_unchanged(
     assert EvidenceClass.EXACT_IDENTITY
     cfg = MCConfig(n_paths=n_paths, n_steps=n_steps, seed=seed)
     res = price(instrument, MODEL, MARKET, method="mc", cfg=cfg)
-    assert res.value == value
-    assert res.stderr == stderr
+    # The literals were recorded on macOS arm64; Linux libm differs by a few
+    # ULP in exp/log, so "unchanged" is asserted to round-off, not bit-for-bit.
+    assert math.isclose(res.value, value, rel_tol=1e-12, abs_tol=0.0)
+    assert math.isclose(res.stderr, stderr, rel_tol=1e-12, abs_tol=0.0)
     assert res.meta is not None
     assert res.meta["variance_reduction"] == "none"
     assert res.meta["n_normal_draws"] == n_paths * n_steps

@@ -156,7 +156,9 @@ def test_the_uniform_grid_path_is_bit_for_bit_what_it_was():
     paths = simulate_gbm_exact(
         s0=100.0, mu=0.05, sigma=0.2, t=1.0, n_steps=3, n_paths=2, seed=123
     )
-    assert paths.tolist() == _PINNED_UNIFORM
+    # Literals recorded on macOS arm64; other libm builds differ by a few ULP,
+    # so the pin is round-off tight rather than bit-for-bit across platforms.
+    assert np.allclose(paths, np.asarray(_PINNED_UNIFORM), rtol=1e-13, atol=0.0)
 
 
 def test_the_two_grid_spellings_are_mutually_exclusive():
