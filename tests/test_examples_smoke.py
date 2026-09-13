@@ -113,7 +113,10 @@ _SMOKE_CASES = [
         # the whole slice in two lines -- the order-2 lattice on a jump and the
         # order-1 grid -- and `sawtooth_sign_changes=2` pins that CRR's error
         # off the money changes sign inside a single window of consecutive odd
-        # n. `mc_greeks=not_supported` pins the refusal.
+        # n. The `mc_greeks` lines pin Slice 10's estimators: the pathwise one
+        # is refused because its payoff derivative is identically zero, and the
+        # bumped theta's z-score is three orders of magnitude larger than the
+        # likelihood-ratio one on the same seed and the same paths.
         "digital_option_cross_method.py",
         [],
         [
@@ -128,7 +131,10 @@ _SMOKE_CASES = [
             "pde_order cn_unaligned_projected=+2.0",
             "pde_order rannacher_aligned=+1.9",
             "mc_stderr_order=+0.4999",
-            "mc_greeks=not_supported",
+            "mc_greeks pathwise=refused_zero_derivative",
+            "mc_greeks likelihood_ratio delta estimate=",
+            "mc_greeks bump theta estimate=",
+            "z=+531.",
         ],
     ),
     (

@@ -42,11 +42,12 @@ from qpl.engines.analytic.digital import digital_price
 from qpl.engines.mc.pricers import MCConfig
 from qpl.engines.pde.pricers import PDEConfig
 from qpl.engines.tree import TreeConfig
+from qpl.exceptions import NotSupportedError
 from qpl.instruments.options import DigitalOption
 from qpl.market.curves import FlatDividendCurve, FlatRateCurve
 from qpl.market.market import Market
 from qpl.models.black_scholes import BlackScholesModel
-from qpl.pricing import price
+from qpl.pricing import greeks, price
 from qpl.validation import fit_convergence_order
 
 SPOT = 100.0
@@ -56,6 +57,10 @@ RATE = 0.05
 DIVIDEND = 0.0
 SIGMA = 0.20
 CASH = 1.0
+
+GREEKS_PATHS = 200_000
+"""Paths for the Greek table. Large enough that the likelihood-ratio z-scores
+are meaningful and the bumped theta's failure is unambiguous."""
 
 TREE_LEVELS = (101, 201, 401, 801)
 """Odd, so both schemes accept them."""
@@ -231,6 +236,52 @@ def _monte_carlo(option, model, market, exact: float) -> None:
     print(f"mc_stderr_order={_order(MC_LEVELS, stderrs):+.4f}")
 
 
+def _monte_carlo_greeks(option, model, market) -> None:
+    """The three Greek estimators on the same digital, at the same seed.
+
+    `pathwise` is refused: the almost-everywhere derivative of an indicator is
+    identically zero, so it would return 0.0 rather than fail. `bump` and
+    `likelihood_ratio` both run, and the `z` column is what separates them --
+    the bumped theta is dozens of standard errors out because the paths that
+    cross the strike when the maturity moves by 1e-04 are too rare to appear in
+    the sample at all.
+    """
+    exact = greeks(option, model, market, method="analytic")
+    try:
+        greeks(
+            option,
+            model,
+            market,
+            method="mc",
+            cfg=MCConfig(
+                n_paths=GREEKS_PATHS, seed=MC_SEED, greeks_estimator="pathwise"
+            ),
+        )
+    except NotSupportedError:
+        print("mc_greeks pathwise=refused_zero_derivative")
+
+    print("mc_greeks_table estimator greek estimate stderr analytic z")
+    for estimator in ("bump", "likelihood_ratio"):
+        result = greeks(
+            option,
+            model,
+            market,
+            method="mc",
+            cfg=MCConfig(
+                n_paths=GREEKS_PATHS, seed=MC_SEED, greeks_estimator=estimator
+            ),
+        )
+        for name in ("delta", "gamma", "vega", "theta", "rho"):
+            value = getattr(result, name)
+            stderr = result.meta["stderr"][name]
+            truth = getattr(exact, name)
+            z = (value - truth) / stderr if stderr > 0.0 else 0.0
+            print(
+                f"mc_greeks {estimator} {name} estimate={value:+.8f} "
+                f"stderr={stderr:.3e} analytic={truth:+.8f} z={z:+.2f}"
+            )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -260,15 +311,8 @@ def main() -> None:
         _monte_carlo(option, model, market, exact)
 
     if args.case == "all":
-        # Monte Carlo has no Greeks here, and says so rather than returning a
-        # number: the payoff's derivative is a Dirac mass.
-        from qpl.exceptions import NotSupportedError
-        from qpl.pricing import greeks
+        _monte_carlo_greeks(option, model, market)
 
-        try:
-            greeks(option, model, market, method="mc", cfg=MCConfig(n_paths=1_000, seed=MC_SEED))
-        except NotSupportedError:
-            print("mc_greeks=not_supported")
 
 
 if __name__ == "__main__":

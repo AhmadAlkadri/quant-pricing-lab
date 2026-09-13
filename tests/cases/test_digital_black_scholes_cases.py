@@ -26,6 +26,8 @@ from qpl.cases import (
     ALL_CASES,
     ALL_DIGITAL_CASES,
     DIGITAL_CROSS_ENGINE_CASES,
+    DIGITAL_GREEKS_MC_PATHS,
+    DIGITAL_GREEKS_MC_STDERR_MULTIPLE,
     DIGITAL_IDENTITY_CASES,
     DIGITAL_KNOWN_VALUE_CASES,
     DIGITAL_MC_PATHS,
@@ -310,24 +312,45 @@ def test_cross_engine_agreement(case: DigitalBSCase) -> None:
     assert abs(tree - exact) * 100.0 < abs(pde - exact) + 1e-12
 
 
-def test_monte_carlo_greeks_are_refused_for_every_cross_engine_point() -> None:
-    """The fourth engine prices and does not differentiate.
+def test_monte_carlo_greeks_are_by_likelihood_ratio_and_pathwise_is_refused() -> None:
+    """The fourth engine differentiates now, by exactly one estimator.
 
-    Evidence class: NEGATIVE_FINDING. `qpl.engines.mc.digital` explains why a
-    pathwise estimator does not exist and why a bump is not a substitute; the
-    cases layer records that the refusal is part of the contract, not an
-    oversight, and that the message names the Phase 3 replacement.
+    Evidence class: NEGATIVE_FINDING on the pathwise half, STATISTICAL on the
+    likelihood-ratio half. Slice 6 recorded that Monte Carlo digital Greeks
+    were refused and named the Phase 3 replacement; Slice 10 delivers it, and
+    what survives as a refusal is narrower and sharper: the **pathwise**
+    estimator, whose almost-everywhere payoff derivative is identically zero,
+    so it would return `0.0` rather than fail. The likelihood-ratio estimator
+    covers the closed form at every cross-engine point (measured over 40 seeds
+    at the reference point in `tests/test_digital_mc.py`), and the bump is
+    available and measured to be the wrong tool there.
     """
     for case in DIGITAL_CROSS_ENGINE_CASES:
         spec = case.spec
-        with pytest.raises(NotSupportedError, match="likelihood-ratio"):
+        triple = (spec.option(), spec.model(), spec.market())
+        with pytest.raises(NotSupportedError, match="biased to exactly 0.0"):
             greeks(
-                spec.option(),
-                spec.model(),
-                spec.market(),
+                *triple,
                 method="mc",
-                cfg=MCConfig(n_paths=1_000, seed=DIGITAL_MC_SEED),
+                cfg=MCConfig(
+                    n_paths=1_000, seed=DIGITAL_MC_SEED, greeks_estimator="pathwise"
+                ),
             )
+        exact = greeks(*triple, method="analytic")
+        result = greeks(
+            *triple,
+            method="mc",
+            cfg=MCConfig(
+                n_paths=DIGITAL_GREEKS_MC_PATHS,
+                seed=DIGITAL_MC_SEED,
+                greeks_estimator="likelihood_ratio",
+            ),
+        )
+        assert result.meta is not None
+        for name in ("delta", "gamma", "vega", "theta", "rho"):
+            stderr = result.meta["stderr"][name]
+            z = abs(getattr(result, name) - getattr(exact, name)) / stderr
+            assert z <= DIGITAL_GREEKS_MC_STDERR_MULTIPLE, (case.row.id, name, z)
 
 
 # --------------------------------------------------------------------------

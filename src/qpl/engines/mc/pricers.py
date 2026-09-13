@@ -7,7 +7,6 @@ from typing import Literal
 from ...exceptions import InvalidInputError
 from ...instruments.options import EuropeanOption
 from ...instruments.payoffs import call_payoff, put_payoff
-from ...market.curves import FlatDividendCurve, FlatRateCurve
 from ...market.market import Market
 from ...models.black_scholes import BlackScholesModel
 from ..base import GreeksResult, PriceResult
@@ -19,22 +18,18 @@ from .greeks import (
     LIKELIHOOD_RATIO,
     MIXED_PATHWISE_LR,
     PATHWISE,
-    GreekEstimate,
-    bump_estimates,
+    bump_greeks_terminal,
     control_samples,
     draw_path_sample,
     estimate_greek,
     greeks_result,
     likelihood_ratio_terminal_greeks,
     normalise_greeks_estimator,
-    one_sided_estimate,
     pathwise_terminal_greeks,
-    scenario,
 )
 from .processes import price_european_from_terminal, simulate_gbm_exact
 from .variance_reduction import (
     CONTROL_VARIATE,
-    STRATIFIED,
     normalise_variance_reduction,
     price_with_variance_reduction,
     validate_sampler,
@@ -235,156 +230,6 @@ def _resolved_market(market: Market, t: float) -> tuple[float, float, float]:
     return market.rate(t), market.dividend_yield(t), market.df_r(t)
 
 
-def _bump_greeks_european(
-    option: EuropeanOption,
-    model: BlackScholesModel,
-    market: Market,
-    *,
-    cfg: MCConfig,
-    bumps: dict[str, float] | None,
-    meta: dict,
-) -> GreeksResult:
-    """Central-difference common-random-numbers Greeks, with paired stderrs.
-
-    The bump sizes, the ordering of the checks and the arithmetic that produces
-    each *value* are the pre-slice ones: every scenario is priced as
-    `price_european` prices it (same normals in the same order, same reduction,
-    same `mean`), and each Greek is the same difference of scenario values. What
-    is new is that the per-path sample behind each price is kept, so the paired
-    difference can report a standard error. A difference of two independently
-    reported standard errors would be wrong by orders of magnitude here, since
-    common random numbers make the two legs almost perfectly correlated.
-
-    Theta is a **backward** difference `(V(T - dt) - V(T)) / dt`, not a central
-    one: that is what this engine did before this slice and the pinned values
-    are reproduced rather than improved. It is first order in `dt` where the
-    other four are second order, and `meta["fd"]["time"]` says so.
-    """
-    s0 = market.spot
-    t = option.expiry
-    sigma = model.sigma
-    methods = meta["variance_reduction_methods"]
-    payoff = _vanilla_payoff(option)
-
-    def _bump(name: str, default: float) -> float:
-        if bumps is None or name not in bumps:
-            return default
-        value = float(bumps[name])
-        if value <= 0.0:
-            raise InvalidInputError(f"{name} bump must be > 0")
-        return value
-
-    dS = _bump("spot", max(abs(s0) * 1e-4, 1e-6))
-    if s0 <= dS:
-        dS = 0.5 * s0
-    dsigma = _bump("sigma", 1e-4)
-    if sigma > 0.0 and sigma <= dsigma:
-        dsigma = 0.5 * sigma
-    dr = _bump("r", 1e-5)
-    dt = _bump("time", min(1e-4, t / 2.0))
-    if t <= dt:
-        dt = t * 0.5
-
-    meta["fd"] = "central"
-    meta["fd_by_greek"] = {
-        "delta": "central",
-        "gamma": "central",
-        "vega": "central",
-        "rho": "central",
-        "theta": "backward",
-    }
-    meta["bumps"] = {"spot": dS, "sigma": dsigma, "r": dr, "time": dt}
-
-    r, q, df_r = _resolved_market(market, t)
-    # The stratified sampler lays equal-size strata out in contiguous blocks
-    # (`qpl.engines.mc.variance_reduction._stratified_normals`), so the labels
-    # are reconstructible without carrying them back out of every scenario --
-    # and a paired difference of two stratified samples is still stratified.
-    stratum_kwargs: dict = {}
-    if STRATIFIED in methods:
-        import numpy as np
-
-        stratum_kwargs = {
-            "stratum": np.repeat(
-                np.arange(cfg.n_strata), cfg.n_paths // cfg.n_strata
-            ),
-            "n_strata": cfg.n_strata,
-        }
-    if CONTROL_VARIATE in methods:
-        # One degree of freedom for the mean, one for the fitted slope.
-        stratum_kwargs["ddof"] = 2
-
-    def _at(
-        *, spot: float, vol: float, mu: float, expiry: float, discount: float
-    ):
-        return scenario(
-            payoff=payoff,
-            s0=spot,
-            mu=mu,
-            sigma=vol,
-            t=expiry,
-            discount_factor=discount,
-            n_paths=cfg.n_paths,
-            n_steps=cfg.n_steps,
-            seed=cfg.seed,
-            methods=methods,
-            n_strata=cfg.n_strata,
-        )
-
-    base = _at(spot=s0, vol=sigma, mu=r - q, expiry=t, discount=df_r)
-    up = _at(spot=s0 + dS, vol=sigma, mu=r - q, expiry=t, discount=df_r)
-    down = _at(spot=s0 - dS, vol=sigma, mu=r - q, expiry=t, discount=df_r)
-
-    estimates = {
-        "delta": bump_estimates(
-            base=base, up=up, down=down, step=dS, order=1, **stratum_kwargs
-        ),
-        "gamma": bump_estimates(
-            base=base, up=up, down=down, step=dS, order=2, **stratum_kwargs
-        ),
-    }
-
-    if sigma == 0.0:
-        estimates["vega"] = GreekEstimate(value=0.0, stderr=0.0, estimator=BUMP)
-    else:
-        estimates["vega"] = bump_estimates(
-            base=base,
-            up=_at(spot=s0, vol=sigma + dsigma, mu=r - q, expiry=t, discount=df_r),
-            down=_at(spot=s0, vol=sigma - dsigma, mu=r - q, expiry=t, discount=df_r),
-            step=dsigma,
-            order=1,
-            **stratum_kwargs,
-        )
-
-    def _rate_shifted(rate: float):
-        mkt = Market(
-            spot=s0,
-            rate_curve=FlatRateCurve(rate, allow_negative=True),
-            dividend_curve=FlatDividendCurve(q, allow_negative=True),
-        )
-        r_s, q_s, df_s = _resolved_market(mkt, t)
-        return _at(spot=s0, vol=sigma, mu=r_s - q_s, expiry=t, discount=df_s)
-
-    estimates["rho"] = bump_estimates(
-        base=base,
-        up=_rate_shifted(r + dr),
-        down=_rate_shifted(r - dr),
-        step=dr,
-        order=1,
-        **stratum_kwargs,
-    )
-
-    r_b, q_b, df_b = _resolved_market(market, t - dt)
-    estimates["theta"] = one_sided_estimate(
-        base=base,
-        shifted=_at(spot=s0, vol=sigma, mu=r_b - q_b, expiry=t - dt, discount=df_b),
-        step=dt,
-        **stratum_kwargs,
-    )
-
-    return greeks_result(estimates, meta)
-
-
 def _terminal_law_greeks_european(
     option: EuropeanOption,
     model: BlackScholesModel,
@@ -553,8 +398,15 @@ def greeks_european(
             return GreeksResult(
                 delta=0.0, gamma=0.0, vega=0.0, theta=0.0, rho=0.0, meta=meta
             )
-        result = _bump_greeks_european(
-            option, model, market, cfg=cfg, bumps=bumps, meta=meta
+        result = bump_greeks_terminal(
+            payoff=_vanilla_payoff(option),
+            market=market,
+            sigma=sigma,
+            expiry=t,
+            cfg=cfg,
+            bumps=bumps,
+            methods=methods,
+            meta=meta,
         )
     else:
         if bumps is not None:

@@ -42,6 +42,8 @@ from ..validation import BenchmarkRow, EvidenceClass
 __all__ = [
     "ALL_DIGITAL_CASES",
     "DIGITAL_CROSS_ENGINE_CASES",
+    "DIGITAL_GREEKS_MC_PATHS",
+    "DIGITAL_GREEKS_MC_STDERR_MULTIPLE",
     "DIGITAL_IDENTITY_CASES",
     "DIGITAL_KNOWN_VALUE_CASES",
     "DIGITAL_MC_PATHS",
@@ -527,6 +529,21 @@ DIGITAL_MC_STDERR_MULTIPLE = 4.0
 error, not an absolute accuracy claim. Four standard errors is a two-sided
 false-failure rate of about 6e-05 for a fixed seed; this seed lands at |z| of
 1.218 (atm), 1.644 (otm) and 0.495 (itm)."""
+
+DIGITAL_GREEKS_MC_PATHS = 200_000
+DIGITAL_GREEKS_MC_STDERR_MULTIPLE = 4.0
+"""Budget for the Monte Carlo **Greeks** leg of the cross-engine rows, in
+multiples of each Greek's own reported standard error.
+
+Only `greeks_estimator="likelihood_ratio"` is checked this way, and that is the
+finding rather than a convenience: it is the one estimator here whose reported
+standard error is an error bar. Measured |z| over the three points and five
+Greeks at 200 000 paths, seed 123: worst 1.289 (itm_1y_div rho), median 0.59.
+The `"pathwise"` estimator is refused (its almost-everywhere payoff derivative
+is identically zero) and `"bump"` is available but is *not* held to this budget
+-- its theta lands 531 standard errors out at the ATM point, because the paths
+that cross the strike when the maturity moves by 1e-04 are too rare to appear
+in a 200 000-path sample. See `tests/test_digital_mc.py`."""
 
 _CROSS_ENGINE_SOURCE = (
     "derived in-repo: qpl.engines.analytic.digital, qpl.engines.tree.digital "

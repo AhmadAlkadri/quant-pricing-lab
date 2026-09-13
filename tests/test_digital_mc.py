@@ -22,8 +22,11 @@ T = 1`, call, seed 123, terminal sampling:
 Fitted standard-error order in `N`: **0.49990**, log-space residual
 **1.59e-04**.
 
-Greeks are refused, and `tests` below pin the refusal and its message; the
-reasoning is in `qpl.engines.mc.digital`.
+Greeks (Slice 10). The likelihood-ratio estimator is unbiased here and covers
+the closed form 37-38 times in 40 seeds; the bump is available and is measured
+below to be the wrong tool, with a theta that covers **0** times in 40; the
+pathwise estimator is refused and the refusal is checked by computing the
+exactly-zero sample it would return. Derivations: `qpl.engines.mc.greeks`.
 """
 
 from __future__ import annotations
@@ -34,7 +37,12 @@ from itertools import pairwise
 import numpy as np
 import pytest
 
-from qpl.engines.analytic.digital import digital_price
+from qpl.engines.analytic.digital import (
+    digital_price,
+    greeks_digital as _analytic_greeks,
+)
+from qpl.engines.mc.digital import digital_payoff_derivative
+from qpl.engines.mc.greeks import draw_path_sample
 from qpl.engines.mc.pricers import MCConfig
 from qpl.engines.mc.processes import price_european_from_terminal
 from qpl.exceptions import InvalidInputError, NotSupportedError
@@ -178,74 +186,231 @@ def test_call_plus_put_is_exact_path_by_path() -> None:
     assert call + put == pytest.approx(cash * math.exp(-_RATE * _EXPIRY), abs=1e-14)
 
 
-def test_greeks_are_refused_and_say_what_to_use_instead() -> None:
-    """Evidence class: NEGATIVE_FINDING, encoded as an error rather than a number.
+GREEK_NAMES = ("delta", "gamma", "vega", "theta", "rho")
+GREEKS_SEEDS = tuple(range(1000, 1040))
+GREEKS_PATHS = 20_000
+GREEKS_MIN_COVERAGE = 34
+"""Binomial(40, 0.95) tail bound; see `tests/test_mc_greeks.py`."""
 
-    The pathwise derivative of `cash * 1{S_T > K}` is a Dirac mass, so there is
-    no pathwise estimator. A common-random-numbers bump is not a repair: the
-    bumped and unbumped payoffs differ only on the `O(h)` fraction of paths
-    that cross the strike, each by a full `cash`, so the difference quotient
-    has variance `O(cash**2 / (N h))` and its standard deviation **grows** like
-    `h**-1/2` as the bump shrinks.
+Z_95 = 1.959963984540054
 
-    Measured: the CRN central-difference delta at `N = 40_000`, over 20 seeds,
-    against a true delta of 0.018762 --
 
-    | h     | mean     | sd across seeds | sd / true delta |
-    |-------|----------|-----------------|-----------------|
-    | 1     | 0.018751 | 0.00041         | 2.2%            |
-    | 0.1   | 0.018781 | 0.00177         | 9.4%            |
-    | 0.01  | 0.017060 | 0.00474         | 25.3%           |
-    | 0.001 | 0.014859 | 0.01585         | 84.5%           |
+def _greek_coverage(estimator: str) -> dict[str, int]:
+    triple = _triple()
+    exact = _analytic_greeks(*triple)
+    hits = dict.fromkeys(GREEK_NAMES, 0)
+    for seed in GREEKS_SEEDS:
+        cfg = MCConfig(
+            n_paths=GREEKS_PATHS, n_steps=1, seed=seed, greeks_estimator=estimator
+        )
+        result = greeks(*triple, method="mc", cfg=cfg)
+        assert result.meta is not None
+        for name in GREEK_NAMES:
+            if abs(getattr(result, name) - getattr(exact, name)) <= (
+                Z_95 * result.meta["stderr"][name]
+            ):
+                hits[name] += 1
+    return hits
 
-    A factor of 1000 in `h` multiplies the noise by 38.6, against the 31.6 that
-    `h**-1/2` predicts. Note the trap in the first row: a *coarse* bump is
-    accurate here, because delta is smooth at this point and the `O(h**2)` bias
-    is tiny. That is an accident of the point, not a method -- the estimator
-    has no limit as `h -> 0`, which is what "estimating a derivative" means.
 
-    The engine therefore refuses, naming the likelihood-ratio estimator that
-    does work (Glasserman, *Monte Carlo Methods in Financial Engineering*,
-    ch. 7) and is scheduled for Phase 3.
+def test_the_pathwise_delta_of_a_digital_is_exactly_zero_and_is_refused() -> None:
+    """Evidence class: NEGATIVE_FINDING, and the finding is a *number*.
+
+    A cash-or-nothing payoff is locally constant everywhere except at the
+    strike, so the almost-everywhere derivative a program can evaluate is
+    **identically zero** -- not noisy, not inaccurate, `0.0` at every path
+    count and every seed. The pathwise interchange of derivative and
+    expectation is therefore invalid here in the strongest possible way: it
+    converges, and it converges to the wrong number.
+
+    This test computes the zero rather than taking the refusal on trust: it
+    builds the estimator by hand from the public pieces -- the same sampler the
+    engine uses, the digital payoff's a.e. derivative, and the pathwise delta
+    weight `e^{-rT} f'(S_T) S_T / S_0` -- and asserts the whole sample is zero
+    while the true delta is not. Then it asserts the engine refuses, so that
+    the zero can never be returned as a Greek.
+    """
+    option, model, market = _triple()
+    t = option.expiry
+    r, q = market.rate(t), market.dividend_yield(t)
+    sample = draw_path_sample(
+        s0=market.spot,
+        mu=r - q,
+        sigma=model.sigma,
+        t=t,
+        n_paths=20_000,
+        n_steps=1,
+        seed=_SEED,
+        methods=(),
+        n_strata=64,
+    )
+    derivative = digital_payoff_derivative(
+        sample.spots, strike=option.strike, cash=option.cash, kind=option.kind
+    )
+    assert np.count_nonzero(derivative) == 0
+    pathwise_delta = float(
+        np.mean(market.df_r(t) * derivative * sample.spots / market.spot)
+    )
+    assert pathwise_delta == 0.0
+
+    true_delta = _analytic_greeks(option, model, market).delta
+    assert true_delta > 0.01, true_delta
+
+    with pytest.raises(NotSupportedError, match="biased to exactly 0.0"):
+        greeks(
+            option,
+            model,
+            market,
+            method="mc",
+            cfg=MCConfig(n_paths=10_000, seed=_SEED, greeks_estimator="pathwise"),
+        )
+
+
+def test_likelihood_ratio_greeks_cover_the_closed_form_over_40_seeds() -> None:
+    """Evidence class: STATISTICAL against a CLOSED_FORM reference.
+
+    The estimator the Slice 6 refusal message pointed at, delivered. It
+    differentiates the lognormal density instead of the payoff, so the jump is
+    irrelevant: all five Greeks come from one sample and all five are unbiased.
+
+    Measured hit counts out of 40 at 20 000 paths, ATM call:
+    delta 38, gamma 37, vega 37, theta 38, rho 38 -- against a
+    Binomial(40, 0.95) mean of 38.
+    """
+    hits = _greek_coverage("likelihood_ratio")
+    for name in GREEK_NAMES:
+        assert hits[name] >= GREEKS_MIN_COVERAGE, (name, hits)
+
+
+def test_the_bump_is_available_and_measurably_the_wrong_tool() -> None:
+    """Evidence class: NEGATIVE_FINDING, measured against the LR column.
+
+    Slice 10 makes `greeks_estimator="bump"` work on a digital -- it is the
+    package-wide default and refusing it per instrument would be a surprise --
+    and this test records what it is worth. Same 40 seeds, same 20 000 paths,
+    same point as the likelihood-ratio test above:
+
+        Greek   bump coverage   LR coverage   bump sd / |analytic Greek|
+        delta       36/40          38/40           0.34
+        gamma       39/40          37/40        4665.55
+        vega        36/40          37/40           0.67
+        rho         26/40          38/40           1.35
+        theta        0/40          38/40           0.03
+
+    Three separate failures are visible in that table and they are different
+    failures.
+
+    - **theta at 0/40** is the sharpest. The estimator is not biased --
+      `E[(Y(T - dt) - Y(T))/dt]` is the exact difference quotient -- but with
+      `dt = 1e-4` the probability that a given path crosses the strike when the
+      maturity moves is about `2e-06`, so in a 20 000-path run *no* path
+      crosses, the sample is the discount factor's smooth `r V` part alone, and
+      both the estimate and its standard error describe that part. The missing
+      term is the whole density contribution. The estimator's true standard
+      deviation is dominated by an event that does not occur in 40 runs, and its
+      reported standard error is not an error bar for it. `rho` at 26/40 is the
+      same mechanism one step less extreme (`dr = 1e-5`).
+    - **gamma at 39/40** is the opposite failure and passes for the wrong
+      reason: the second difference has standard deviation 4665 times the
+      Greek, so the nominal interval is so wide that covering is trivial. A
+      coverage test alone cannot see this; the ratio column is what sees it.
+    - **delta at 36/40** is the honest case. With `h = 0.01` enough paths cross
+      that the estimator behaves, and it is merely 34% noise.
+
+    The engine records all of this in `meta["estimator_caveat"]`, so it is
+    discoverable from a result rather than only from this file.
+    """
+    bump = _greek_coverage("bump")
+    lr = _greek_coverage("likelihood_ratio")
+    assert bump["theta"] <= 5, bump
+    assert lr["theta"] >= GREEKS_MIN_COVERAGE, lr
+    assert bump["rho"] < lr["rho"], (bump, lr)
+
+    exact = _analytic_greeks(*_triple())
+    spreads = {}
+    for name in GREEK_NAMES:
+        values = [
+            getattr(
+                greeks(
+                    *_triple(),
+                    method="mc",
+                    cfg=MCConfig(
+                        n_paths=GREEKS_PATHS,
+                        n_steps=1,
+                        seed=seed,
+                        greeks_estimator="bump",
+                    ),
+                ),
+                name,
+            )
+            for seed in GREEKS_SEEDS
+        ]
+        spreads[name] = float(np.std(values, ddof=1)) / abs(getattr(exact, name))
+    # The bumped gamma's spread is three decimal orders larger than the Greek.
+    assert spreads["gamma"] > 1_000.0, spreads
+    # And delta, the one that behaves, is inside 50% relative noise.
+    assert spreads["delta"] < 0.5, spreads
+
+    meta = greeks(
+        *_triple(),
+        method="mc",
+        cfg=MCConfig(n_paths=1_000, seed=_SEED, greeks_estimator="bump"),
+    ).meta
+    assert meta is not None
+    assert "h**-1/2" in meta["estimator_caveat"]
+
+
+def test_lr_beats_the_bump_on_delta_at_equal_cost() -> None:
+    """Evidence class: STATISTICAL. The comparison the refusal message implied.
+
+    At equal normal draws (20 000 paths, one normal each, both estimators) the
+    standard deviation of the delta estimate over 40 seeds is 2.098e-04 for the
+    likelihood ratio and 6.383e-03 for the bump -- a factor of **30.4** in
+    standard deviation and **925** in variance, in favour of the estimator that
+    does not touch the payoff. On a vanilla call the ordering is the other way
+    round (`tests/test_mc_greeks_variance.py`), which is Glasserman's rule in
+    both directions: pathwise/bump when the payoff is smooth, likelihood ratio
+    when it is not.
     """
     triple = _triple()
-    with pytest.raises(NotSupportedError, match="likelihood-ratio"):
-        greeks(*triple, method="mc", cfg=MCConfig(n_paths=10_000, seed=_SEED))
 
-    option, model, _ = triple
-
-    def bumped_delta(h: float, seed: int) -> float:
-        def at(spot: float) -> float:
-            market = Market(
-                spot=spot,
-                rate_curve=FlatRateCurve(_RATE),
-                dividend_curve=FlatDividendCurve(_DIV),
-            )
-            return price(
-                option,
-                model,
-                market,
+    def _spread(estimator: str) -> float:
+        values = [
+            greeks(
+                *triple,
                 method="mc",
-                cfg=MCConfig(n_paths=40_000, n_steps=1, seed=seed),
-            ).value
+                cfg=MCConfig(
+                    n_paths=GREEKS_PATHS,
+                    n_steps=1,
+                    seed=seed,
+                    greeks_estimator=estimator,
+                ),
+            ).delta
+            for seed in GREEKS_SEEDS
+        ]
+        return float(np.std(values, ddof=1))
 
-        return (at(_SPOT + h) - at(_SPOT - h)) / (2.0 * h)
+    lr_sd = _spread("likelihood_ratio")
+    bump_sd = _spread("bump")
+    assert bump_sd > 10.0 * lr_sd, (lr_sd, bump_sd)
 
-    seeds = range(1, 13)
-    coarse = np.array([bumped_delta(0.1, s) for s in seeds])
-    fine = np.array([bumped_delta(0.001, s) for s in seeds])
 
-    coarse_sd = float(np.std(coarse, ddof=1))
-    fine_sd = float(np.std(fine, ddof=1))
-
-    # Shrinking the bump by 100x makes the estimator noisier, not sharper.
-    assert fine_sd > 4.0 * coarse_sd, (coarse_sd, fine_sd)
-    # And by then the noise is comparable to the quantity being estimated.
-    from qpl.engines.analytic.digital import greeks_digital as _analytic
-
-    true_delta = _analytic(*triple).delta
-    assert fine_sd > 0.4 * true_delta, (fine_sd, true_delta)
-    assert coarse_sd < 0.2 * true_delta, (coarse_sd, true_delta)
+def test_digital_greeks_refuse_the_two_degenerate_limits() -> None:
+    """Evidence class: NEGATIVE_FINDING. Both limits make the price a step."""
+    for expiry, sigma in ((0.0, _SIGMA), (_EXPIRY, 0.0)):
+        option = DigitalOption(kind="call", strike=_STRIKE, expiry=expiry)
+        with pytest.raises(InvalidInputError, match="need T > 0 and sigma > 0"):
+            greeks(
+                option,
+                BlackScholesModel(sigma=sigma),
+                Market(
+                    spot=_SPOT,
+                    rate_curve=FlatRateCurve(_RATE),
+                    dividend_curve=FlatDividendCurve(_DIV),
+                ),
+                method="mc",
+                cfg=MCConfig(n_paths=1_000, seed=_SEED),
+            )
 
 
 def test_price_is_deterministic_for_a_fixed_seed_and_moves_with_it() -> None:

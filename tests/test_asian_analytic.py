@@ -46,6 +46,7 @@ import pytest
 
 from qpl.engines.analytic.asian import (
     arithmetic_average_moments,
+    discrete_geometric_greeks,
     discrete_geometric_price,
     expected_arithmetic_average,
     expected_geometric_average,
@@ -727,27 +728,170 @@ def test_analytic_refuses_an_arithmetic_asian_and_says_what_to_use():
     assert "control_variate" in message
 
 
-@pytest.mark.parametrize("averaging", ["arithmetic", "geometric"])
-def test_asian_greeks_are_refused_with_a_reason(averaging):
-    """NotSupportedError for both averagings, deliberately including geometric.
+GREEKS_SPEC = {
+    "S": 100.0,
+    "K": 100.0,
+    "T": 1.0,
+    "r": 0.05,
+    "q": 0.03,
+    "sigma": 0.25,
+}
+"""A dividend yield and a non-default volatility, so a Greek that confused `r`
+with `mu = r - q` or dropped a `sigma` shows up."""
 
-    The geometric Greeks are a chain rule away from Black (1976). Shipping them
-    alone would make `greeks(..., method="analytic")` succeed or fail depending
-    on a *field* of the instrument rather than on its type, which is the failure
-    mode the registry exists to avoid.
+GREEKS_NAMES = ("delta", "gamma", "vega", "theta", "rho")
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+def test_a_one_fixing_geometric_asian_has_the_black_scholes_greeks(kind):
+    """Evidence class: EXACT_IDENTITY, and it is what fixes the theta convention.
+
+    With a single fixing at expiry the geometric average IS `S_T`, so the
+    contract is a European vanilla and all five Greeks must agree with
+    `qpl.engines.analytic.black_scholes` to round-off. Measured worst absolute
+    gap over both kinds: 7.1e-15 (on vega, whose scale is 37.9), and delta,
+    gamma and rho agree to 1.1e-16 or exactly.
+
+    The load-bearing one is **theta**. The settlement date enters the geometric
+    Asian price only through `e^{-rT}`, so `-dV/dT` would be `-r V` -- a true
+    derivative, and not time decay. This engine instead reports the derivative
+    along the *roll*, where settlement and every fixing shift back together,
+    and that is the definition that reproduces the Black-Scholes theta here.
+    Nothing else does.
     """
-    triple = _triple(
-        S=100.0,
-        K=100.0,
-        T=1.0,
-        r=0.05,
-        q=0.0,
-        sigma=0.2,
-        times=uniform_fixing_times(1.0, 12),
-        averaging=averaging,
+    times = (GREEKS_SPEC["T"],)
+    asian = _triple(**GREEKS_SPEC, times=times, kind=kind)
+    vanilla = (
+        EuropeanOption(kind=kind, strike=GREEKS_SPEC["K"], expiry=GREEKS_SPEC["T"]),
+        asian[1],
+        asian[2],
     )
-    with pytest.raises(NotSupportedError, match="Greeks are not available for Asian"):
+    asian_greeks = greeks(*asian)
+    vanilla_greeks = greeks(*vanilla)
+    for name in GREEKS_NAMES:
+        assert getattr(asian_greeks, name) == pytest.approx(
+            getattr(vanilla_greeks, name), rel=1e-12, abs=1e-13
+        ), name
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+def test_geometric_asian_greeks_match_central_differences_of_the_closed_form(kind):
+    """Evidence class: CLOSED_FORM against finite differences of the same formula.
+
+    Not a cross-engine check -- it differentiates the price this module already
+    ships -- but it is what catches an algebra slip in the chain rule, which is
+    the only way these expressions can be wrong. Twelve fixings; central
+    differences with `h = 1e-4` in the spot, `1e-5` in volatility and rate, and
+    `1e-5` along the roll (settlement and every fixing shifted together, which
+    is the derivative theta claims to be).
+
+    Measured worst gaps, call and put: delta 1.2e-10, vega 2.4e-09, theta
+    2.4e-09, rho 3.4e-09, gamma 4.1e-06. Gamma is three decimal orders looser
+    than the rest and that is the second difference's own round-off floor
+    (`O(eps / h**2)` with `h = 1e-4` is `O(1e-8)` on a price of order 6, i.e.
+    exactly this size), not a disagreement.
+    """
+    times = uniform_fixing_times(GREEKS_SPEC["T"], 12)
+    exact = discrete_geometric_greeks(**GREEKS_SPEC, fixing_times=times, kind=kind)
+
+    def _price(**overrides) -> float:
+        spec = {**GREEKS_SPEC, "fixing_times": times, "kind": kind}
+        spec.update(overrides)
+        return discrete_geometric_price(**spec)
+
+    assert exact["value"] == pytest.approx(_price(), rel=1e-14)
+
+    h_s, h = 1e-4, 1e-5
+    s0 = GREEKS_SPEC["S"]
+    fd = {
+        "delta": (_price(S=s0 + h_s) - _price(S=s0 - h_s)) / (2 * h_s),
+        "gamma": (_price(S=s0 + h_s) - 2 * _price() + _price(S=s0 - h_s)) / h_s**2,
+        "vega": (
+            _price(sigma=GREEKS_SPEC["sigma"] + h)
+            - _price(sigma=GREEKS_SPEC["sigma"] - h)
+        )
+        / (2 * h),
+        "rho": (_price(r=GREEKS_SPEC["r"] + h) - _price(r=GREEKS_SPEC["r"] - h))
+        / (2 * h),
+        "theta": (
+            _price(
+                T=GREEKS_SPEC["T"] - h, fixing_times=tuple(t - h for t in times)
+            )
+            - _price(
+                T=GREEKS_SPEC["T"] + h, fixing_times=tuple(t + h for t in times)
+            )
+        )
+        / (2 * h),
+    }
+    tolerances = {
+        "delta": 1e-8,
+        "gamma": 1e-4,
+        "vega": 1e-6,
+        "theta": 1e-6,
+        "rho": 1e-6,
+    }
+    for name, value in fd.items():
+        assert exact[name] == pytest.approx(value, abs=tolerances[name]), name
+
+
+def test_geometric_asian_greeks_reach_the_registry_and_the_arithmetic_one_refuses():
+    """Evidence class: NEGATIVE_FINDING on the arithmetic half.
+
+    Slice 8 refused *both* averagings so that `greeks(..., method="analytic")`
+    would not succeed or fail depending on a field of the instrument. Slice 10
+    reverses that: the geometric Greeks are exact and are shipped, and the
+    arithmetic ones raise with a reason that is about the mathematics rather
+    than about scope. The reason is not "not implemented" -- the moment-matched
+    approximations *are* differentiable -- it is that a derivative of an
+    approximation whose error has no rigorous control has no rigorous control
+    either, and `method="analytic"` must not hand one back.
+
+    Which is the right shape after all: the field decides whether a *closed
+    form exists*, and that is a fact about the contract, not an accident of the
+    dispatcher.
+    """
+    times = uniform_fixing_times(GREEKS_SPEC["T"], 12)
+    geometric = greeks(*_triple(**GREEKS_SPEC, times=times, averaging="geometric"))
+    assert geometric.meta is not None
+    assert geometric.meta["averaging"] == "geometric"
+    assert geometric.meta["theta_convention"].startswith("roll")
+    assert geometric.delta > 0.0
+
+    triple = _triple(**GREEKS_SPEC, times=times, averaging="arithmetic")
+    with pytest.raises(NotSupportedError) as excinfo:
         greeks(*triple)
+    message = str(excinfo.value)
+    assert "no rigorous control" in message
+    assert "greeks_estimator='pathwise'" in message
+
+
+def test_geometric_asian_greeks_refuse_the_degenerate_limits():
+    """Both limits make the average deterministic, so gamma is a point mass.
+
+    `T = 0` cannot even be built as an `AsianOption` -- a fixing schedule inside
+    `(0, expiry]` would be empty -- so it is checked at the function level,
+    while `sigma = 0` is reachable through the dispatcher. The vanilla engine
+    refuses the same two limits one derivative lower, and
+    `discrete_geometric_price` still returns the correct price at both.
+    """
+    times = (0.5, 1.0)
+    base = {
+        "S": GREEKS_SPEC["S"],
+        "K": GREEKS_SPEC["K"],
+        "r": GREEKS_SPEC["r"],
+        "q": GREEKS_SPEC["q"],
+        "fixing_times": times,
+    }
+    with pytest.raises(InvalidInputError, match="T must be > 0 for Greeks"):
+        discrete_geometric_greeks(**base, T=0.0, sigma=0.25)
+    with pytest.raises(InvalidInputError, match="sigma must be > 0 for Greeks"):
+        discrete_geometric_greeks(**base, T=1.0, sigma=0.0)
+
+    triple = _triple(**{**GREEKS_SPEC, "sigma": 0.0}, times=times)
+    with pytest.raises(InvalidInputError, match="sigma must be > 0 for Greeks"):
+        greeks(*triple)
+    # The price is still exact in that limit.
+    assert price(*triple).value > 0.0
 
 
 @pytest.mark.parametrize("method", ["tree", "pde"])

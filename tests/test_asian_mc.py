@@ -288,18 +288,272 @@ def test_antithetic_still_needs_an_even_path_count():
         price(_asian("arithmetic", FIXINGS_10), MODEL, MARKET, method="mc", cfg=cfg)
 
 
-def test_asian_mc_greeks_are_refused_and_say_it_is_scope_not_impossibility():
-    """Unlike a digital, the Asian pathwise estimator exists; this is scope.
+GREEK_NAMES = ("delta", "gamma", "vega", "theta", "rho")
+GREEKS_SEEDS = tuple(range(1000, 1040))
+GREEKS_PATHS = 10_000
+GREEKS_SPREAD_SEEDS = GREEKS_SEEDS[:20]
+GREEKS_AGREEMENT_PATHS = 60_000
+GREEKS_MIN_COVERAGE = 34
+"""Binomial(40, 0.95) tail bound; see `tests/test_mc_greeks.py`."""
 
-    The message has to say so, because "Monte Carlo Greeks are not available"
-    means two completely different things for the two instruments -- for a
-    digital the pathwise derivative is a Dirac mass and no bump converges; for
-    an Asian the payoff is Lipschitz in the average and a common-random-numbers
-    bump works fine.
+Z_95 = 1.959963984540054
+
+GREEKS_FIXINGS = uniform_fixing_times(EXPIRY, 6)
+GREEKS_MODEL = BlackScholesModel(sigma=0.25)
+GREEKS_MARKET = Market(
+    spot=SPOT,
+    rate_curve=FlatRateCurve(0.05),
+    dividend_curve=FlatDividendCurve(0.03),
+)
+"""A dividend yield, so a Greek that confused `r` with `mu` would show."""
+
+GEOMETRIC = AsianOption(
+    kind="call",
+    strike=STRIKE,
+    expiry=EXPIRY,
+    fixing_times=GREEKS_FIXINGS,
+    averaging="geometric",
+)
+ARITHMETIC = AsianOption(
+    kind="call",
+    strike=STRIKE,
+    expiry=EXPIRY,
+    fixing_times=GREEKS_FIXINGS,
+    averaging="arithmetic",
+)
+
+
+def _greek_coverage(estimator: str) -> dict[str, int]:
+    exact = greeks(GEOMETRIC, GREEKS_MODEL, GREEKS_MARKET, method="analytic")
+    hits = dict.fromkeys(GREEK_NAMES, 0)
+    for seed in GREEKS_SEEDS:
+        cfg = MCConfig(
+            n_paths=GREEKS_PATHS, n_steps=1, seed=seed, greeks_estimator=estimator
+        )
+        result = greeks(GEOMETRIC, GREEKS_MODEL, GREEKS_MARKET, method="mc", cfg=cfg)
+        assert result.meta is not None
+        for name in GREEK_NAMES:
+            if abs(getattr(result, name) - getattr(exact, name)) <= (
+                Z_95 * result.meta["stderr"][name]
+            ):
+                hits[name] += 1
+    return hits
+
+
+@pytest.mark.parametrize("estimator", ["bump", "pathwise", "likelihood_ratio"])
+def test_asian_mc_greeks_cover_the_geometric_closed_form(estimator: str) -> None:
+    """Evidence class: STATISTICAL against a CLOSED_FORM reference.
+
+    The geometric average is the only Asian with exact Greeks, so it is the
+    only place a Monte Carlo Asian Greek can be checked against a number rather
+    than against another estimator. All three estimators are run against it at
+    the same 40 seeds, six fixings, `sigma = 25%`, `q = 3%`, 10 000 paths:
+
+        Greek    bump   pathwise   likelihood_ratio
+        delta      38       38            40
+        gamma      35       35            35
+        vega       38       38            38
+        theta      40       40            40
+        rho        38       38            38
+
+    Three of the five columns are *identical* across estimators and that is not
+    a copy-and-paste error: `pathwise` supplies only delta and vega and
+    `likelihood_ratio` only delta, so gamma, rho and theta are the bumped
+    estimates in all three runs, seed for seed. The columns that do differ are
+    the ones the slice is about.
+
+    Theta is the roll derivative (settlement and every fixing shift together);
+    it agrees with the closed form because
+    `qpl.engines.analytic.asian.greeks_asian` uses the same convention. A
+    `-dV/dT` theta would be `-r V = -0.325` here against the roll theta's
+    `-8.028`, a factor of 25 out and with the wrong shape entirely.
     """
-    cfg = MCConfig(n_paths=1000, seed=1)
-    with pytest.raises(NotSupportedError, match="scope boundary"):
-        greeks(_asian("arithmetic", FIXINGS_10), MODEL, MARKET, method="mc", cfg=cfg)
+    hits = _greek_coverage(estimator)
+    for name in GREEK_NAMES:
+        assert hits[name] >= GREEKS_MIN_COVERAGE, (estimator, name, hits)
+
+
+def test_pathwise_delta_agrees_with_the_bump_and_the_closed_form() -> None:
+    """Requirement (f): three routes to one number, and a variance ordering.
+
+    Evidence class: STATISTICAL for the two Monte Carlo legs, CLOSED_FORM for
+    the reference. At 60 000 paths and one seed the pathwise and bumped deltas
+    agree with the closed form and with each other inside their own standard
+    errors; over 20 seeds at 10 000 paths and six fixings the standard
+    deviations of the delta estimate are
+
+        pathwise          6.538e-03
+        bump              6.542e-03      ratio to pathwise 1.0006
+        likelihood ratio  1.287e-02      ratio to pathwise 1.968
+
+    The first two are the same estimator to `O(h**2)` -- a common-random-numbers
+    bump of a Lipschitz payoff *is* the pathwise derivative, and here they agree
+    to six parts in ten thousand -- while the likelihood-ratio delta is about
+    twice as noisy, because `S_0` enters the joint density of the fixings
+    through the **first transition only**: its score is `Z_1 / (S_0 sigma
+    sqrt(t_1))` and it throws away everything the later fixings know about the
+    payoff.
+
+    That penalty **grows with the density of the schedule**, which is the part
+    worth asserting rather than observing once. Over 12 seeds the measured
+    ratio is 1.567 at six fixings and 3.439 at twelve, because doubling the
+    fixings halves `t_1` and the score carries `1/sqrt(t_1)` while the pathwise
+    estimator gets *quieter* (6.538e-03 to 5.001e-03 at 20 seeds: more fixings
+    means a less variable average). A separate run at 26 fixings gives 5.228.
+    So the worse estimator gets worse exactly where an Asian is most likely to
+    be monitored.
+    """
+    exact = greeks(GEOMETRIC, GREEKS_MODEL, GREEKS_MARKET, method="analytic").delta
+
+    def _one(option, estimator: str, seed: int, n_paths: int):
+        cfg = MCConfig(
+            n_paths=n_paths, n_steps=1, seed=seed, greeks_estimator=estimator
+        )
+        result = greeks(option, GREEKS_MODEL, GREEKS_MARKET, method="mc", cfg=cfg)
+        assert result.meta is not None
+        return result.delta, result.meta["stderr"]["delta"]
+
+    pathwise, pathwise_se = _one(GEOMETRIC, "pathwise", 4, GREEKS_AGREEMENT_PATHS)
+    bumped, bumped_se = _one(GEOMETRIC, "bump", 4, GREEKS_AGREEMENT_PATHS)
+    assert abs(pathwise - exact) <= 3.0 * pathwise_se
+    assert abs(bumped - exact) <= 3.0 * bumped_se
+    assert abs(pathwise - bumped) <= 3.0 * (pathwise_se + bumped_se)
+
+    def _spread(option, estimator: str, seeds) -> float:
+        return float(
+            np.std(
+                [_one(option, estimator, seed, GREEKS_PATHS)[0] for seed in seeds],
+                ddof=1,
+            )
+        )
+
+    spreads = {
+        estimator: _spread(GEOMETRIC, estimator, GREEKS_SPREAD_SEEDS)
+        for estimator in ("pathwise", "bump", "likelihood_ratio")
+    }
+    assert spreads["likelihood_ratio"] > 1.5 * spreads["pathwise"], spreads
+    assert 0.8 < spreads["bump"] / spreads["pathwise"] < 1.25, spreads
+
+    dense = AsianOption(
+        kind="call",
+        strike=STRIKE,
+        expiry=EXPIRY,
+        fixing_times=uniform_fixing_times(EXPIRY, 2 * GEOMETRIC.n_fixings),
+        averaging="geometric",
+    )
+    seeds = GREEKS_SEEDS[:12]
+    sparse_ratio = _spread(GEOMETRIC, "likelihood_ratio", seeds) / _spread(
+        GEOMETRIC, "pathwise", seeds
+    )
+    dense_ratio = _spread(dense, "likelihood_ratio", seeds) / _spread(
+        dense, "pathwise", seeds
+    )
+    assert dense_ratio > 1.5 * sparse_ratio, (sparse_ratio, dense_ratio)
+
+
+def test_the_arithmetic_asian_has_pathwise_greeks_and_no_closed_form() -> None:
+    """Evidence class: INDEPENDENT_ENGINE, since there is nothing exact to use.
+
+    The arithmetic average has no closed-form Greeks and
+    `method="analytic"` says so, naming the Monte Carlo route. What is checkable
+    is that the pathwise estimator and the bump -- two different routines on the
+    same paths -- agree within their standard errors, and that the arithmetic
+    delta sits *above* the geometric one, which is an ordering rather than a
+    number: the arithmetic average dominates the geometric one pathwise (AM-GM),
+    so the arithmetic call is worth more and is more sensitive to the spot.
+    """
+    with pytest.raises(NotSupportedError, match="no rigorous control"):
+        greeks(ARITHMETIC, GREEKS_MODEL, GREEKS_MARKET, method="analytic")
+
+    cfg_pw = MCConfig(
+        n_paths=GREEKS_AGREEMENT_PATHS, n_steps=1, seed=4, greeks_estimator="pathwise"
+    )
+    cfg_bump = MCConfig(
+        n_paths=GREEKS_AGREEMENT_PATHS, n_steps=1, seed=4, greeks_estimator="bump"
+    )
+    pathwise = greeks(ARITHMETIC, GREEKS_MODEL, GREEKS_MARKET, method="mc", cfg=cfg_pw)
+    bumped = greeks(ARITHMETIC, GREEKS_MODEL, GREEKS_MARKET, method="mc", cfg=cfg_bump)
+    assert pathwise.meta is not None and bumped.meta is not None
+    for name in ("delta", "vega"):
+        gap = abs(getattr(pathwise, name) - getattr(bumped, name))
+        budget = 3.0 * (
+            pathwise.meta["stderr"][name] + bumped.meta["stderr"][name]
+        )
+        assert gap <= budget, (name, gap, budget)
+
+    geometric_delta = greeks(
+        GEOMETRIC, GREEKS_MODEL, GREEKS_MARKET, method="analytic"
+    ).delta
+    assert pathwise.delta > geometric_delta
+
+
+def test_the_estimator_is_recorded_per_greek_because_an_asian_mixes_them() -> None:
+    """Evidence class: EXACT_IDENTITY on the contract.
+
+    `pathwise` covers delta and vega here; `likelihood_ratio` covers delta. The
+    rest is a bump and the result says so per Greek instead of labelling the
+    whole thing with the family the caller asked for.
+    """
+    cfg = MCConfig(n_paths=5_000, n_steps=1, seed=1, greeks_estimator="pathwise")
+    meta = greeks(ARITHMETIC, GREEKS_MODEL, GREEKS_MARKET, method="mc", cfg=cfg).meta
+    assert meta is not None
+    assert meta["estimator"] == {
+        "delta": "pathwise",
+        "gamma": "bump",
+        "vega": "pathwise",
+        "theta": "bump",
+        "rho": "bump",
+    }
+    assert meta["theta_convention"].startswith("roll")
+
+    cfg = MCConfig(
+        n_paths=5_000, n_steps=1, seed=1, greeks_estimator="likelihood_ratio"
+    )
+    meta = greeks(ARITHMETIC, GREEKS_MODEL, GREEKS_MARKET, method="mc", cfg=cfg).meta
+    assert meta is not None
+    assert meta["estimator"]["delta"] == "likelihood_ratio"
+    assert meta["estimator"]["vega"] == "bump"
+
+
+@pytest.mark.parametrize(
+    "variance_reduction", ["antithetic", "control_variate"]
+)
+def test_asian_greeks_compose_with_the_variance_reduction_that_applies(
+    variance_reduction: str,
+) -> None:
+    """Evidence class: STATISTICAL. Antithetic and the Kemna-Vorst control both
+    reduce the Greek sample the way they reduce the price sample.
+
+    Stratification is refused here for the same reason it is refused for the
+    price: an average over `n` fixings has no single scalar to partition.
+    """
+    cfg = MCConfig(
+        n_paths=GREEKS_PATHS,
+        n_steps=1,
+        seed=9,
+        greeks_estimator="pathwise",
+        variance_reduction=variance_reduction,
+    )
+    plain = MCConfig(
+        n_paths=GREEKS_PATHS, n_steps=1, seed=9, greeks_estimator="pathwise"
+    )
+    exact = greeks(GEOMETRIC, GREEKS_MODEL, GREEKS_MARKET, method="analytic").delta
+    reduced = greeks(GEOMETRIC, GREEKS_MODEL, GREEKS_MARKET, method="mc", cfg=cfg)
+    base = greeks(GEOMETRIC, GREEKS_MODEL, GREEKS_MARKET, method="mc", cfg=plain)
+    assert reduced.meta is not None and base.meta is not None
+    assert abs(reduced.delta - exact) <= 4.0 * reduced.meta["stderr"]["delta"]
+    assert abs(base.delta - exact) <= 4.0 * base.meta["stderr"]["delta"]
+
+    with pytest.raises(NotSupportedError, match="Brownian bridge"):
+        greeks(
+            GEOMETRIC,
+            GREEKS_MODEL,
+            GREEKS_MARKET,
+            method="mc",
+            cfg=MCConfig(
+                n_paths=GREEKS_PATHS, n_steps=1, seed=9, variance_reduction="stratified"
+            ),
+        )
 
 
 def test_zero_volatility_returns_the_deterministic_average_without_sampling():

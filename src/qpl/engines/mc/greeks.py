@@ -188,6 +188,8 @@ __all__ = [
     "GreekEstimate",
     "PathSample",
     "bump_estimates",
+    "bump_greeks_terminal",
+    "bump_sizes",
     "control_samples",
     "draw_path_sample",
     "estimate_greek",
@@ -198,6 +200,7 @@ __all__ = [
     "pathwise_terminal_greeks",
     "reduce_to_units",
     "scenario",
+    "stratified_bookkeeping",
     "terminal_normal_from_spot",
 ]
 
@@ -655,6 +658,195 @@ def _sample_stderr(
     block = arr.reshape(n_strata, per_stratum)
     variance = float(block.var(axis=1, ddof=1).sum() / (n_strata * n_strata * per_stratum))
     return math.sqrt(max(variance, 0.0))
+
+
+
+def bump_sizes(
+    *, bumps: dict[str, float] | None, s0: float, sigma: float, t: float
+) -> dict[str, float]:
+    """The pre-Slice-10 default bump sizes and their guards, in one place.
+
+    `spot` is `max(|S| * 1e-4, 1e-6)` clipped to half the spot, `sigma` is
+    `1e-4` clipped to half the volatility, `r` is `1e-5` and `time` is
+    `min(1e-4, T/2)` clipped to half the maturity. None of these is optimal --
+    the optimal `h` for a central difference balances an `O(h**2)` bias against
+    an `O(1/(N h**2))` variance and depends on the payoff, which is exactly
+    what `tests/test_mc_greeks_variance.py` measures for a digital. They are
+    reproduced rather than retuned because requirement (e) of this slice is
+    that the bump numbers do not move.
+    """
+
+    def _bump(name: str, default: float) -> float:
+        if bumps is None or name not in bumps:
+            return default
+        value = float(bumps[name])
+        if value <= 0.0:
+            raise InvalidInputError(f"{name} bump must be > 0")
+        return value
+
+    d_s = _bump("spot", max(abs(s0) * 1e-4, 1e-6))
+    if s0 <= d_s:
+        d_s = 0.5 * s0
+    d_sigma = _bump("sigma", 1e-4)
+    if sigma > 0.0 and sigma <= d_sigma:
+        d_sigma = 0.5 * sigma
+    d_t = _bump("time", min(1e-4, t / 2.0))
+    if t <= d_t:
+        d_t = t * 0.5
+    return {"spot": d_s, "sigma": d_sigma, "r": _bump("r", 1e-5), "time": d_t}
+
+
+def stratified_bookkeeping(
+    *, methods: tuple[str, ...], n_paths: int, n_strata: int
+) -> dict:
+    """Extra keyword arguments the paired-difference standard error needs.
+
+    The stratified sampler lays equal-size strata out in contiguous blocks
+    (`qpl.engines.mc.variance_reduction._stratified_normals`), so the labels are
+    reconstructible without carrying them back out of every scenario -- and a
+    paired difference of two stratified samples is still stratified. Under the
+    control variate the scenario samples were regression-adjusted, so the
+    difference loses a second degree of freedom.
+    """
+    extra: dict = {}
+    if STRATIFIED in methods:
+        extra = {
+            "stratum": np.repeat(np.arange(n_strata), n_paths // n_strata),
+            "n_strata": n_strata,
+        }
+    if CONTROL_VARIATE in methods:
+        extra["ddof"] = 2
+    return extra
+
+
+def bump_greeks_terminal(
+    *,
+    payoff: Callable[[np.ndarray], np.ndarray],
+    market: Any,
+    sigma: float,
+    expiry: float,
+    cfg: Any,
+    bumps: dict[str, float] | None,
+    methods: tuple[str, ...],
+    meta: dict[str, Any],
+) -> GreeksResult:
+    """Central-difference common-random-numbers Greeks, with paired stderrs.
+
+    Serves every terminal-payoff instrument (vanillas and digitals): the payoff
+    is the only thing that differs, and the bump does not care what it is --
+    which is the estimator's whole selling point and, for a discontinuous
+    payoff, its whole problem.
+
+    The bump sizes, the ordering of the checks and the arithmetic that produces
+    each *value* are the pre-slice ones: every scenario is priced as
+    `price_european` prices it (same normals in the same order, same reduction,
+    same `mean`), and each Greek is the same difference of scenario values. What
+    is new is that the per-path sample behind each price is kept, so the paired
+    difference can report a standard error. A difference of two independently
+    reported standard errors would be wrong by orders of magnitude here, since
+    common random numbers make the two legs almost perfectly correlated.
+
+    Theta is a **backward** difference `(V(T - dt) - V(T)) / dt`, not a central
+    one: that is what this engine did before this slice and the pinned values
+    are reproduced rather than improved. It is first order in `dt` where the
+    other four are second order, and `meta["fd_by_greek"]` says so.
+    """
+    from ...market.curves import FlatDividendCurve, FlatRateCurve
+    from ...market.market import Market
+
+    s0 = market.spot
+    t = expiry
+    steps = bump_sizes(bumps=bumps, s0=s0, sigma=sigma, t=t)
+    d_s, d_sigma, d_r, d_t = (steps[k] for k in ("spot", "sigma", "r", "time"))
+
+    meta["fd"] = "central"
+    meta["fd_by_greek"] = {
+        "delta": "central",
+        "gamma": "central",
+        "vega": "central",
+        "rho": "central",
+        "theta": "backward",
+    }
+    meta["bumps"] = steps
+
+    r, q, df_r = market.rate(t), market.dividend_yield(t), market.df_r(t)
+    extra = stratified_bookkeeping(
+        methods=methods, n_paths=cfg.n_paths, n_strata=cfg.n_strata
+    )
+
+    def _at(*, spot: float, vol: float, mu: float, maturity: float, discount: float):
+        return scenario(
+            payoff=payoff,
+            s0=spot,
+            mu=mu,
+            sigma=vol,
+            t=maturity,
+            discount_factor=discount,
+            n_paths=cfg.n_paths,
+            n_steps=cfg.n_steps,
+            seed=cfg.seed,
+            methods=methods,
+            n_strata=cfg.n_strata,
+        )
+
+    base = _at(spot=s0, vol=sigma, mu=r - q, maturity=t, discount=df_r)
+    up = _at(spot=s0 + d_s, vol=sigma, mu=r - q, maturity=t, discount=df_r)
+    down = _at(spot=s0 - d_s, vol=sigma, mu=r - q, maturity=t, discount=df_r)
+
+    estimates = {
+        "delta": bump_estimates(base=base, up=up, down=down, step=d_s, order=1, **extra),
+        "gamma": bump_estimates(base=base, up=up, down=down, step=d_s, order=2, **extra),
+    }
+
+    if sigma == 0.0:
+        estimates["vega"] = GreekEstimate(value=0.0, stderr=0.0, estimator=BUMP)
+    else:
+        estimates["vega"] = bump_estimates(
+            base=base,
+            up=_at(spot=s0, vol=sigma + d_sigma, mu=r - q, maturity=t, discount=df_r),
+            down=_at(spot=s0, vol=sigma - d_sigma, mu=r - q, maturity=t, discount=df_r),
+            step=d_sigma,
+            order=1,
+            **extra,
+        )
+
+    def _rate_shifted(rate: float):
+        mkt = Market(
+            spot=s0,
+            rate_curve=FlatRateCurve(rate, allow_negative=True),
+            dividend_curve=FlatDividendCurve(q, allow_negative=True),
+        )
+        return _at(
+            spot=s0,
+            vol=sigma,
+            mu=mkt.rate(t) - mkt.dividend_yield(t),
+            maturity=t,
+            discount=mkt.df_r(t),
+        )
+
+    estimates["rho"] = bump_estimates(
+        base=base,
+        up=_rate_shifted(r + d_r),
+        down=_rate_shifted(r - d_r),
+        step=d_r,
+        order=1,
+        **extra,
+    )
+
+    r_b, q_b, df_b = (
+        market.rate(t - d_t),
+        market.dividend_yield(t - d_t),
+        market.df_r(t - d_t),
+    )
+    estimates["theta"] = one_sided_estimate(
+        base=base,
+        shifted=_at(
+            spot=s0, vol=sigma, mu=r_b - q_b, maturity=t - d_t, discount=df_b
+        ),
+        step=d_t,
+        **extra,
+    )
+    return greeks_result(estimates, meta)
 
 
 def greeks_result(

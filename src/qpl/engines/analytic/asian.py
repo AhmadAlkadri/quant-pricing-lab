@@ -103,6 +103,53 @@ control-variate Monte Carlo run is reported in
 `docs/notes/asian_options_control_variate.md`; it is recorded with its sign, not
 asserted to be zero.
 
+Greeks of the geometric Asian, and what "theta" means for an average
+--------------------------------------------------------------------
+With `F = E[G] = exp(m + v/2)` and total variance `v`, the price is Black (1976)
+and every Greek is a chain rule through `(F, v)` plus the discount factor. Two
+facts do the work. First, `F` is **linear in the spot**: `F = S * exp((mu -
+sigma^2/2) tbar + v/2)`, so `dF/dS = F/S` and `F/S` is a constant. Second, the
+Black identity `F phi(d1) = K phi(d2)` holds for these `d1`, `d2` exactly as it
+does for a vanilla, so in every derivative the two `phi` terms collapse into
+one multiple of `d(sqrt(v))`. Writing `D = e^{-rT}`, `sd = sqrt(v)`:
+
+    delta = D N(d1) F / S
+    gamma = D (F / S) phi(d1) / (S sd)
+    vega  = D [ N(d1) dF/dsigma + F phi(d1) d(sd)/dsigma ],
+            dF/dsigma = F (-sigma tbar + v / sigma),   d(sd)/dsigma = sd / sigma
+    rho   = D F tbar N(d1) - T V
+
+`rho` uses `dm/dr = tbar` (the drift enters `m` through `mu = r - q` and
+nothing else) and the discount factor's own `-T V`.
+
+**Theta needs a convention, and it is not `-dV/dT`.** The settlement date `T`
+enters this price *only* through `e^{-rT}`, because `m` and `v` depend on the
+fixing times alone. So `-dV/dT = -r V`, which is a true derivative and is not
+time decay: it is what the contract loses by being paid later while the average
+is unchanged. Time decay is the derivative along the **roll**, where calendar
+time advances by `s` and the settlement date and *every* fixing date come
+closer together: `T -> T - s` and `t_i -> t_i - s`. Along that path
+
+    dtbar/ds = -1,     dv/ds = -(sigma^2 / n^2) sum_i (2(n - i) + 1) = -sigma^2,
+
+the second because those weights sum to exactly `n^2` -- so `dF/ds = -mu F` and
+`d(sd)/ds = -sigma^2 / (2 sd)`, giving
+
+    theta = r V - D [ mu F N(d1) + F phi(d1) sigma^2 / (2 sd) ].
+
+That convention is not a choice made to be tidy: at `n = 1`, where the
+geometric Asian **is** a European vanilla, it reproduces the Black-Scholes
+theta term for term, and `tests/test_asian_analytic.py` asserts all five Greeks
+against `qpl.engines.analytic.black_scholes` at that point to 1e-12. A
+`-dV/dT` theta would not. It is also the convention a Monte Carlo bump can
+reproduce, by shifting the whole schedule, which is how the MC Asian engine
+estimates theta.
+
+Puts come from put-call parity, which is exact here: `V_put = V_call - D (F - K)`,
+so every Greek of the put is the call's minus the same derivative of the
+forward contract `D (F - K)`. That is one line per Greek and no second
+derivation to get wrong.
+
 Provenance
 ----------
 Every formula above was re-derived here from the lognormal transition density;
@@ -126,10 +173,11 @@ from ...instruments.options import AsianOption
 from ...market.market import Market
 from ...models.black_scholes import BlackScholesModel
 from ..base import GreeksResult, PriceResult
-from .black_scholes import _norm_cdf
+from .black_scholes import _norm_cdf, _norm_pdf
 
 __all__ = [
     "arithmetic_average_moments",
+    "discrete_geometric_greeks",
     "discrete_geometric_price",
     "expected_arithmetic_average",
     "expected_geometric_average",
@@ -293,6 +341,88 @@ def discrete_geometric_price(
     )
 
 
+def discrete_geometric_greeks(
+    *,
+    S: float,
+    K: float,
+    T: float,
+    r: float,
+    sigma: float,
+    fixing_times: Sequence[float],
+    q: float = 0.0,
+    kind: str = "call",
+) -> dict[str, float]:
+    """Exact Greeks of a fixed-strike **geometric**-average Asian option.
+
+    Returns a dict keyed by `delta`, `gamma`, `vega`, `theta`, `rho` (and
+    `value`, since every one of them is derived alongside it and a caller
+    checking `rho = D F tbar N(d1) - T V` needs `V`). The derivations, and the
+    roll convention `theta` uses, are in the module docstring.
+
+    Raises
+    ------
+    InvalidInputError
+        On `T <= 0` or `sigma <= 0`. Both make the average deterministic, so
+        gamma is a point mass; the vanilla engine refuses the same two limits
+        and `discrete_geometric_price` still returns the correct price there.
+    """
+    if K <= 0.0:
+        raise InvalidInputError("K must be > 0")
+    if T <= 0.0:
+        raise InvalidInputError("T must be > 0 for Greeks")
+    if sigma <= 0.0:
+        raise InvalidInputError("sigma must be > 0 for Greeks")
+    kind_l = kind.lower()
+    if kind_l not in {"call", "put"}:
+        raise InvalidInputError("kind must be 'call' or 'put'")
+    times = _clean_times(fixing_times)
+    if float(times[-1]) > T:
+        raise InvalidInputError("fixing_times must all be <= T")
+
+    mu = r - q
+    m, v = geometric_average_log_moments(S=S, mu=mu, sigma=sigma, fixing_times=times)
+    sd = math.sqrt(v)
+    forward = math.exp(m + 0.5 * v)
+    discount = math.exp(-r * T)
+    tbar = float(times.mean())
+
+    d1 = (math.log(forward / K) + 0.5 * v) / sd
+    d2 = d1 - sd
+    nd1 = _norm_cdf(d1)
+    pdf_d1 = _norm_pdf(d1)
+
+    value = discount * (forward * nd1 - K * _norm_cdf(d2))
+    df_dsigma = forward * (-sigma * tbar + v / sigma)
+
+    delta = discount * nd1 * forward / S
+    gamma = discount * (forward / S) * pdf_d1 / (S * sd)
+    vega = discount * (nd1 * df_dsigma + forward * pdf_d1 * sd / sigma)
+    rho = discount * forward * tbar * nd1 - T * value
+    theta = r * value - discount * (
+        mu * forward * nd1 + forward * pdf_d1 * sigma * sigma / (2.0 * sd)
+    )
+
+    if kind_l == "put":
+        # Put-call parity, exactly: V_put = V_call - D (F - K). Every Greek is
+        # the call's minus the same derivative of that forward contract.
+        forward_value = discount * (forward - K)
+        value = value - forward_value
+        delta = delta - discount * forward / S
+        rho = rho - (discount * forward * tbar - T * forward_value)
+        theta = theta - (r * forward_value - discount * mu * forward)
+        vega = vega - discount * df_dsigma
+        # gamma is unchanged: the forward contract is linear in the spot.
+
+    return {
+        "value": value,
+        "delta": delta,
+        "gamma": gamma,
+        "vega": vega,
+        "theta": theta,
+        "rho": rho,
+    }
+
+
 def turnbull_wakeman_price(
     *,
     S: float,
@@ -363,6 +493,21 @@ _ARITHMETIC_REFUSAL = (
 )
 
 
+_ARITHMETIC_GREEKS_REFUSAL = (
+    "Greeks are not available in closed form for a fixed-strike "
+    "arithmetic-average Asian option, for the same reason the price is not: "
+    "the sum of lognormals has no elementary density. The moment-matched "
+    "approximations (qpl.engines.analytic.asian.turnbull_wakeman_price) are "
+    "differentiable, but a derivative of an approximation whose error has no "
+    "rigorous control has no rigorous control either, and method='analytic' "
+    "must not return one. Use method='mc' with "
+    "MCConfig(greeks_estimator='pathwise') -- the arithmetic Asian payoff is "
+    "Lipschitz in the average and the average is smooth in the path, so the "
+    "pathwise estimator is unbiased there. The geometric average IS available "
+    "in closed form from this engine."
+)
+
+
 def price_asian(
     option: AsianOption,
     model: BlackScholesModel,
@@ -415,25 +560,55 @@ def greeks_asian(
     model: BlackScholesModel,
     market: Market,
 ) -> GreeksResult:
-    """Always raises: Asian Greeks are not in this slice.
+    """Exact Greeks of a **geometric**-average Asian option.
+
+    Derivations in the module docstring. `theta` is the derivative along the
+    roll (settlement and every fixing shifted together), which is the only
+    reading of "time decay" an average admits and is the one that reduces to
+    the Black-Scholes theta when the schedule has a single fixing at expiry.
 
     Raises
     ------
     NotSupportedError
-        Always. The geometric case does have a closed form (it is Black (1976)
-        in `F = E[G]` and `v`, and its Greeks follow by the chain rule through
-        `dF/dS = F/S` and `dv/dsigma = 2v/sigma`), and the arithmetic case
-        needs the pathwise or likelihood-ratio Monte Carlo estimators. Shipping
-        only the geometric half would make `greeks(..., method="analytic")`
-        succeed or fail depending on a field of the instrument, which is worse
-        than refusing both until the Phase 3 Greeks slice lands.
+        If `option.averaging == "arithmetic"`. The moment-matched
+        approximations are differentiable, but differentiating an approximation
+        whose error has no control produces a Greek whose error has no control
+        either, and the registry would be handing it back as `method="analytic"`.
+        Use `method="mc"` with `MCConfig(greeks_estimator="pathwise")`, which is
+        well defined for an arithmetic average and is measured against a bump
+        and against this closed form in `tests/test_asian_mc_greeks.py`.
+    InvalidInputError
+        At `T = 0` or `sigma = 0`.
     """
-    raise NotSupportedError(
-        "Greeks are not available for Asian options in this slice. The "
-        "geometric case is a chain rule away from the Black (1976) Greeks and "
-        "the arithmetic case needs the pathwise or likelihood-ratio Monte "
-        "Carlo estimators; both land with the Phase 3 Monte Carlo Greeks item "
-        "(docs/CURRICULUM.md). Until then, bump the price: "
-        "price(option, model, Market(spot=S+h, ...), method='mc', cfg=...) "
-        "with a fixed seed gives a common-random-numbers difference quotient."
+    if option.averaging != "geometric":
+        raise NotSupportedError(_ARITHMETIC_GREEKS_REFUSAL)
+
+    t = option.expiry
+    r = market.rate(t)
+    q = market.dividend_yield(t)
+    values = discrete_geometric_greeks(
+        S=market.spot,
+        K=option.strike,
+        T=t,
+        r=r,
+        sigma=model.sigma,
+        fixing_times=option.fixing_times,
+        q=q,
+        kind=option.kind,
+    )
+    return GreeksResult(
+        delta=values["delta"],
+        gamma=values["gamma"],
+        vega=values["vega"],
+        theta=values["theta"],
+        rho=values["rho"],
+        meta={
+            "method": "analytic",
+            "model": "BlackScholes",
+            "instrument": "asian",
+            "averaging": "geometric",
+            "n_fixings": option.n_fixings,
+            "value": values["value"],
+            "theta_convention": "roll: settlement and every fixing shift together",
+        },
     )
