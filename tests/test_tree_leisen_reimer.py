@@ -712,11 +712,10 @@ def test_lattice_greeks_are_first_order_not_second(
     error. Getting order 2 out of these Greeks would need a different
     estimator (an extended lattice below the root, say), not a better tree.
 
-    What Leisen-Reimer does buy for the Greeks is the *constant*: at the money
-    at `n = 401` the CRR delta error is 1.4e-03 against this scheme's 1.2e-04,
-    about twelve times larger, and CRR's oscillates with the parity of `n`
-    while this does not. That is measured in
-    `tests/test_tree_lr_convergence.py`.
+    What Leisen-Reimer buys for the Greeks is measured in
+    `test_lr_improves_theta_vega_and_rho_but_not_delta_or_gamma`, and it is
+    less than one would guess: theta, vega and rho improve by factors of 4 to
+    5000, delta and gamma do not improve at all.
     """
     option = EuropeanOption(kind=kind, strike=strike, expiry=expiry)  # type: ignore[arg-type]
     model, market = BlackScholesModel(sigma=sigma), _market(spot, rate, div)
@@ -788,3 +787,88 @@ def test_theta_needs_the_off_centre_correction_on_an_lr_lattice() -> None:
 
     assert abs(got.theta - exact.theta) < 2e-2
     assert abs(naive - exact.theta) > 1.0
+
+
+def test_lr_improves_theta_vega_and_rho_but_not_delta_or_gamma() -> None:
+    """Evidence class: CONVERGENCE_ORDER (the constants, not the rate).
+
+    **A second contradicted expectation, and a more interesting one.** Having
+    measured that the Leisen-Reimer Greeks are still first order, the natural
+    fallback is "at least the constant is better". For two of the five Greeks
+    it is not. Absolute errors against the closed form at the reference ATM
+    call, with the CRR lattice shown at the odd `n` and at the even `n + 1`
+    that brackets it:
+
+        n    scheme        delta      gamma      theta      vega       rho
+        401  leisen-reimer 1.169e-04  2.774e-05  5.535e-04  3.065e-03  1.035e-05
+        401  crr           1.499e-04  1.738e-05  2.472e-03  2.273e-02  1.936e-02
+        402  crr (even)    7.935e-05  3.954e-05  7.724e-03  2.646e-02  2.963e-03
+        801  leisen-reimer 5.854e-05  1.388e-05  2.773e-04  3.055e-03  1.954e-06
+        801  crr           7.500e-05  8.697e-06  1.238e-03  9.853e-03  9.690e-03
+        802  crr (even)    3.978e-05  1.979e-05  3.867e-03  1.479e-02  1.486e-03
+
+    Read the delta and gamma columns as a bracket: the Leisen-Reimer value
+    sits *between* CRR's odd and even errors, beating one and losing to the
+    other. That is what "the same error, from a different source" looks like.
+    Delta and gamma are dominated by reading a derivative one and two time
+    levels away from the root, an `O(dt)` substitution that has nothing to do
+    with the terminal grid, so changing the scheme moves the constant around
+    without reducing it.
+
+    Theta, vega and rho are a different story, and each for its own reason:
+
+    - **theta** (4x to 14x better) carries the same `O(dt)` substitution but
+      also the price error at the step-2 node, which is where the order-2
+      lattice helps;
+    - **vega** (3x to 32x) and **rho** (190x to 5000x) are bump-and-revalue,
+      so they inherit the *price* error divided by `2h`. On a CRR lattice the
+      oscillating price error does not cancel between the two bumped
+      evaluations and gets amplified by `1 / (2h)`; the Leisen-Reimer error is
+      smooth in both `sigma` and `r`, so most of it cancels.
+
+    One consequence worth recording: the Leisen-Reimer vega error is
+    essentially *constant* at 3.06e-03 across `n` in {101, 201, 401, 801}. It
+    has stopped being discretisation error at all -- what is left is the
+    `O(h**2)` bias of the central difference at `VEGA_BUMP = 1e-2`, which was
+    invisible underneath the CRR oscillation and is now the binding term. A
+    smaller bump would help this scheme and, per that constant's own
+    measurement note, hurt CRR.
+    """
+    option = EuropeanOption(kind="call", strike=100.0, expiry=1.0)
+    model, market = BlackScholesModel(sigma=0.2), _market(100.0, 0.05, 0.0)
+    exact = greeks(option, model, market, method="analytic")
+
+    def errors(n: int, scheme: str) -> dict[str, float]:
+        got = greeks(
+            option,
+            model,
+            market,
+            method="tree",
+            cfg=TreeConfig(n_steps=n, scheme=scheme),  # type: ignore[arg-type]
+        )
+        return {
+            name: abs(getattr(got, name) - getattr(exact, name))
+            for name in ("delta", "gamma", "theta", "vega", "rho")
+        }
+
+    for n in (401, 801):
+        lr = errors(n, LR)
+        crr_odd = errors(n, "crr")
+        crr_even = errors(n + 1, "crr")
+
+        # Delta and gamma: bracketed by the two CRR parities, not beaten.
+        for name in ("delta", "gamma"):
+            lo, hi = sorted((crr_odd[name], crr_even[name]))
+            assert lo <= lr[name] <= hi, (n, name, lr[name], lo, hi)
+
+        # Theta, vega, rho: better than BOTH parities, by a real margin.
+        assert lr["theta"] < crr_odd["theta"] / 4.0, (n, lr, crr_odd)
+        assert lr["vega"] < crr_odd["vega"] / 3.0, (n, lr, crr_odd)
+        assert lr["rho"] < crr_odd["rho"] / 100.0, (n, lr, crr_odd)
+        for name in ("theta", "vega", "rho"):
+            assert lr[name] < crr_even[name], (n, name, lr[name], crr_even[name])
+
+    # Vega has stopped converging: what is left is the bump's own O(h**2)
+    # bias, not the lattice. Flat to better than 1% from n=101 to n=801.
+    vegas = [errors(n, LR)["vega"] for n in (101, 201, 401, 801)]
+    assert max(vegas) / min(vegas) < 1.1, vegas
