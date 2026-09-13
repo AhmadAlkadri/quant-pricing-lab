@@ -30,6 +30,15 @@ from .engines.analytic.digital import (
     price_digital as price_digital_analytic,
 )
 from .engines.base import GreeksResult, PriceResult
+from .engines.fourier.digital import (
+    greeks_digital as greeks_digital_fourier,
+    price_digital as price_digital_fourier,
+)
+from .engines.fourier.pricers import (
+    FOURIER_METHOD_SPEC,
+    greeks_european as greeks_european_fourier,
+    price_european as price_european_fourier,
+)
 from .engines.mc.american import (
     greeks_american as greeks_american_mc,
     price_american as price_american_mc,
@@ -100,7 +109,7 @@ from .instruments.options import (
 )
 from .models.black_scholes import BlackScholesModel
 
-Method = Literal["analytic", "mc", "pde", "tree"]
+Method = Literal["analytic", "fourier", "mc", "pde", "tree"]
 
 
 def _register_builtin_engines() -> None:
@@ -134,6 +143,20 @@ def _register_builtin_engines() -> None:
         spec=TREE_METHOD_SPEC,
         price=price_european_tree,
         greeks=greeks_european_tree,
+    )
+    # Slice 14: the transform engines. The first method here that discretises
+    # the terminal *law* rather than the dynamics, and the first whose model
+    # axis is not `BlackScholesModel` by nature -- it is registered for that
+    # type because that is the only model this package has, but the engine
+    # itself reads the model only through
+    # `qpl.engines.fourier.charfn.CharacteristicFunctionModel`. Adding Heston
+    # is a model that implements two methods plus two `register(...)` lines,
+    # and no change to any pricer.
+    register(
+        **common,
+        spec=FOURIER_METHOD_SPEC,
+        price=price_european_fourier,
+        greeks=greeks_european_fourier,
     )
     # Exercise style is an instrument property (see `qpl.instruments.options`),
     # so an American entry is another key on the same method, not another
@@ -202,6 +225,17 @@ def _register_builtin_engines() -> None:
         spec=MC_METHOD_SPEC,
         price=price_digital_mc,
         greeks=greeks_digital_mc,
+    )
+    # The digital is the transform methods' *easiest* instrument and the
+    # grid's hardest: a jump in the payoff costs a finite-difference scheme a
+    # full order of convergence (Slice 6) and costs the cosine expansion
+    # nothing, because the expansion is of the density and the payoff enters
+    # through an exact integral. Registered for price and Greeks.
+    register(
+        **digital,
+        spec=FOURIER_METHOD_SPEC,
+        price=price_digital_fourier,
+        greeks=greeks_digital_fourier,
     )
     # Slice 8: the fixed-strike Asian, a *path-dependent* payoff. Only the two
     # engines that can see a path register: the analytic one for the geometric
@@ -302,10 +336,12 @@ def price(
     market
         Market instance. Currently `Market` is supported.
     method
-        Pricing engine selector: `"analytic"`, `"mc"`, `"pde"`, or `"tree"`.
+        Pricing engine selector: `"analytic"`, `"fourier"`, `"mc"`, `"pde"`,
+        or `"tree"`.
     **kwargs
         Method-specific keyword arguments:
         - analytic: no extra kwargs
+        - fourier: `cfg=FourierConfig`
         - mc: `cfg=MCConfig`
         - pde: `cfg=PDEConfig`
         - tree: `cfg=TreeConfig`
@@ -348,10 +384,12 @@ def greeks(
     market
         Market instance. Currently `Market` is supported.
     method
-        Greeks engine selector: `"analytic"`, `"mc"`, `"pde"`, or `"tree"`.
+        Greeks engine selector: `"analytic"`, `"fourier"`, `"mc"`, `"pde"`, or
+        `"tree"`.
     **kwargs
         Method-specific keyword arguments:
         - analytic: no extra kwargs
+        - fourier: `cfg=FourierConfig`
         - mc: `cfg=MCConfig` and optional `bumps=dict[str, float]`
         - pde: `cfg=PDEConfig`
         - tree: `cfg=TreeConfig`
