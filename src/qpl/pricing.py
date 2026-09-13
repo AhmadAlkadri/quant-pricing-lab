@@ -26,6 +26,10 @@ from .engines.analytic.digital import (
     price_digital as price_digital_analytic,
 )
 from .engines.base import GreeksResult, PriceResult
+from .engines.mc.american import (
+    greeks_american as greeks_american_mc,
+    price_american as price_american_mc,
+)
 from .engines.mc.asian import (
     greeks_asian as greeks_asian_mc,
     price_asian as price_asian_mc,
@@ -116,11 +120,11 @@ def _register_builtin_engines() -> None:
     )
     # Exercise style is an instrument property (see `qpl.instruments.options`),
     # so an American entry is another key on the same method, not another
-    # method. The tree engine (Slice 2) and the PDE engine's PSOR path
-    # (Slice 5) each register one. Nothing registers the analytic or MC engines
-    # for `AmericanOption`: asking them for one raises `NotSupportedError`
-    # through the ordinary lookup, which is the point of keying on the
-    # instrument type.
+    # method. The tree engine (Slice 2), the PDE engine's PSOR path (Slice 5)
+    # and the least-squares Monte Carlo engine (Slice 11) each register one.
+    # Nothing registers the analytic engine for `AmericanOption`: asking it for
+    # one raises `NotSupportedError` through the ordinary lookup, which is the
+    # point of keying on the instrument type.
     american = {"instrument_type": AmericanOption, "model_type": BlackScholesModel}
     register(
         **american,
@@ -133,6 +137,19 @@ def _register_builtin_engines() -> None:
         spec=PDE_METHOD_SPEC,
         price=price_american_pde,
         greeks=greeks_american_pde,
+    )
+    # Slice 11: Longstaff-Schwartz. The third discretisation of early exercise
+    # -- a path sample rather than a lattice or a grid -- and the first engine
+    # whose American answer carries a standard error. Its `greeks` callable
+    # always raises, for the same reason the MC digital's did before Slice 10:
+    # not registering would report "Unsupported instrument/model/market
+    # combination", which is false here (the price engine right next to it
+    # prices exactly that combination) and says nothing about why.
+    register(
+        **american,
+        spec=MC_METHOD_SPEC,
+        price=price_american_mc,
+        greeks=greeks_american_mc,
     )
     # Slice 6: the cash-or-nothing digital, a *discontinuous* payoff rather
     # than a different exercise rule. Same pattern again -- a new instrument
@@ -213,7 +230,8 @@ def price(
     ----------
     instrument
         Instrument instance. `EuropeanOption` is supported by every method;
-        `AmericanOption` by `method="tree"` and `method="pde"`.
+        `AmericanOption` by `method="tree"`, `method="pde"` and (Slice 11,
+        least-squares Monte Carlo on a Bermudan exercise grid) `method="mc"`.
     model
         Model instance. Currently `BlackScholesModel` is supported.
     market
@@ -258,7 +276,8 @@ def greeks(
     ----------
     instrument
         Instrument instance. `EuropeanOption` is supported by every method;
-        `AmericanOption` by `method="tree"` and `method="pde"`.
+        `AmericanOption` by `method="tree"` and `method="pde"`;
+        `method="mc"` prices one but refuses its Greeks.
     model
         Model instance. Currently `BlackScholesModel` is supported.
     market

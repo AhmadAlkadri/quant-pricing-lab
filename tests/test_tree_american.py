@@ -758,31 +758,50 @@ def test_american_greeks_validation_and_degenerate_cases() -> None:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("method", "cfg"),
-    [("analytic", None), ("mc", MCConfig(n_paths=64, n_steps=1, seed=1))],
-)
-def test_non_early_exercise_methods_reject_american_exercise(method: str, cfg: object) -> None:
+def test_the_analytic_engine_rejects_american_exercise() -> None:
     """Evidence class: EXACT_IDENTITY (an API contract, not a number).
 
-    Neither the analytic nor the Monte Carlo engine implements an
-    early-exercise rule, and neither is registered for `AmericanOption`. The
-    refusal therefore comes out of the ordinary registry lookup with the
-    ordinary message -- no engine needs an `if instrument.american: raise`.
+    There is no closed form for an American option, so the analytic engine is
+    not registered for `AmericanOption` and the refusal comes out of the
+    ordinary registry lookup with the ordinary message -- no engine needs an
+    `if instrument.american: raise`.
 
-    `method="pde"` was on this list until Slice 5, when
-    `qpl.engines.pde.american` registered a PSOR engine for `AmericanOption`.
-    That it now prices instead of refusing is asserted in
-    `tests/test_pde_american.py`, so the removal cannot pass unnoticed.
+    Two methods have left this list. `method="pde"` went in Slice 5, when
+    `qpl.engines.pde.american` registered a PSOR engine; `method="mc"` went in
+    Slice 11, when `qpl.engines.mc.american` registered a least-squares Monte
+    Carlo engine. Both now price instead of refusing, asserted in
+    `tests/test_pde_american.py` and `tests/test_mc_american_lsm.py`, so
+    neither removal can pass unnoticed. The MC engine still refuses American
+    *Greeks*, but with a message about the exercise policy rather than about
+    an unsupported combination -- that distinction is the point of registering
+    a raising callable, and it is checked in the Slice 11 file.
     """
     option = AmericanOption(kind="put", strike=100.0, expiry=1.0)
     model, market = BlackScholesModel(sigma=0.2), _market(100.0, 0.05, 0.0)
-    kwargs = {} if cfg is None else {"cfg": cfg}
     message = "Unsupported instrument/model/market combination"
     with pytest.raises(NotSupportedError, match=message):
-        price(option, model, market, method=method, **kwargs)
+        price(option, model, market, method="analytic")
     with pytest.raises(NotSupportedError, match=message):
-        greeks(option, model, market, method=method, **kwargs)
+        greeks(option, model, market, method="analytic")
+
+
+def test_the_monte_carlo_engine_prices_american_exercise_as_a_bermudan() -> None:
+    """The Slice 11 counterpart: `method="mc"` no longer refuses a price.
+
+    What it returns is a Bermudan value on `MCConfig.exercise_dates` dates and
+    says so in its metadata; the measurements are in
+    `tests/test_lsm_american.py`. Asserted here so that the removal from the
+    refusal list above is visible from both sides.
+    """
+    option = AmericanOption(kind="put", strike=100.0, expiry=1.0)
+    model, market = BlackScholesModel(sigma=0.2), _market(100.0, 0.05, 0.0)
+    result = price(
+        option, model, market, method="mc",
+        cfg=MCConfig(n_paths=64, n_steps=1, seed=1, exercise_dates=4),
+    )
+    assert result.value > 0.0
+    assert result.meta is not None
+    assert result.meta["exercise_style"] == "bermudan(4 dates)"
 
 
 def test_american_is_not_a_european_subclass() -> None:

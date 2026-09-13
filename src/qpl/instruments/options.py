@@ -105,9 +105,15 @@ class EuropeanOption(VanillaOption):
 class AmericanOption(VanillaOption):
     """American vanilla option: exercisable at any time up to `expiry`.
 
-    Only the tree engine prices this; `method="analytic"`, `"mc"` and `"pde"`
-    raise `NotSupportedError`, since none of them implements an early-exercise
-    rule.
+    Priced by `method="tree"` (Bellman maximum at every lattice node),
+    `method="pde"` (the linear complementarity problem solved by projected
+    SOR) and `method="mc"` (least-squares Monte Carlo). `method="analytic"`
+    raises `NotSupportedError`; there is no closed form.
+
+    The Monte Carlo engine is the one exception to "the instrument says what is
+    priced": simulation cannot exercise continuously, so it prices a **Bermudan**
+    option on `MCConfig.exercise_dates` equally spaced dates and says so in
+    `meta["exercise_style"]`. See `qpl.engines.mc.american`.
     """
 
 

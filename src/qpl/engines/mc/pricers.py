@@ -67,6 +67,31 @@ class MCConfig:
         `"likelihood_ratio"`. Read by the Greeks entry points only; a price is
         unaffected. Derivations, and which estimator exists for which payoff:
         `qpl.engines.mc.greeks`.
+    exercise_dates
+        Number of equally spaced exercise dates `t_i = i T / m`, `i = 1 ... m`,
+        for an `AmericanOption` priced by least-squares Monte Carlo. Read by
+        `qpl.engines.mc.american` and by nothing else, so every other engine's
+        behaviour is unchanged whatever it is set to. The default `50` is the
+        exercise frequency Longstaff & Schwartz (2001) Table 1 uses for a
+        one-year option, which makes the default run directly comparable with
+        that table; it is **not** an approximation of continuous exercise, and
+        the value it converges to is a Bermudan value.
+    lsm_basis, lsm_degree
+        The regression basis for that engine: `"laguerre"` (weighted Laguerre
+        functions of the moneyness, the family Longstaff & Schwartz use) or
+        `"polynomial"`, with `lsm_degree + 1` coefficients in either case (a
+        constant plus `lsm_degree` functions). The defaults reproduce the
+        published basis: a constant plus the first three weighted Laguerre
+        functions.
+    lsm_in_sample
+        Whether the exercise policy is fitted and applied on the **same**
+        paths. `False` (the default) fits on one path set and values on an
+        independent one, which is Glasserman's (2003, section 8.7) low-biased
+        estimator and costs two samples; `True` is the estimator Longstaff &
+        Schwartz's own table reports, and is biased **high** because each
+        path's exercise decision is informed by its own realised future through
+        the fitted coefficients (Glasserman section 8.6). Measured gap and
+        sign: `docs/notes/lsm_american_monte_carlo.md`.
     """
     n_paths: int = 50_000
     n_steps: int = 1
@@ -74,6 +99,10 @@ class MCConfig:
     variance_reduction: str | tuple[str, ...] = "none"
     n_strata: int = 64
     greeks_estimator: Literal["bump", "pathwise", "likelihood_ratio"] = "bump"
+    exercise_dates: int = 50
+    lsm_basis: Literal["laguerre", "polynomial"] = "laguerre"
+    lsm_degree: int = 3
+    lsm_in_sample: bool = False
 
 
 def _validate_bumps(value: object) -> None:
