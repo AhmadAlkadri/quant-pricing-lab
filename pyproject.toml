@@ -12,11 +12,6 @@ dependencies = [
   "numpy>=1.26",
   "scipy>=1.11",
   "matplotlib>=3.8",
-  "pandas>=2.0",
-  "yfinance>=0.2.0",
-  "pyarrow>=14.0",
-
-
 ]
 
 [project.optional-dependencies]
@@ -28,6 +23,14 @@ dev = [
   "ipykernel>=6.0",
   "jupyter>=1.0",
   "nbstripout>=0.7",
+]
+data = [
+  "pandas>=2.0",
+  "yfinance>=0.2.0",
+  "pyarrow>=14.0",
+]
+oracle = [
+  "QuantLib>=1.30",
 ]
 
 [tool.pytest.ini_options]

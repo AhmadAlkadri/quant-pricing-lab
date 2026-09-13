@@ -8,8 +8,12 @@ import sys
 import tempfile
 from unittest.mock import MagicMock, patch
 
-import pandas as pd
 import pytest
+
+# This module exercises the optional `data` extra (pandas/yfinance/pyarrow).
+# Skip cleanly (rather than error) when it is not installed.
+pd = pytest.importorskip("pandas")
+pytest.importorskip("pyarrow")
 
 # Mock yfinance before importing qpl.market.data to avoid ModuleNotFoundError
 sys.modules["yfinance"] = MagicMock()

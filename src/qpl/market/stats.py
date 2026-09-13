@@ -1,5 +1,11 @@
 """
 Statistical utilities for market data analysis.
+
+Most of this module needs only numpy. `rolling_realized_volatility` uses
+pandas internally (for its rolling-window machinery) and imports it lazily,
+so importing this module never requires the optional `data` extra; a clear
+`NotSupportedError` is raised only if `rolling_realized_volatility` is called
+without pandas installed.
 """
 
 from dataclasses import dataclass
@@ -7,7 +13,7 @@ from typing import Sequence, Union
 
 import numpy as np
 
-from qpl.exceptions import InvalidInputError
+from qpl.exceptions import InvalidInputError, NotSupportedError
 
 
 def log_returns(prices: Union[Sequence[float], np.ndarray]) -> np.ndarray:
@@ -143,8 +149,14 @@ def rolling_realized_volatility(
         Array of annualized volatilities, aligned with `prices`.
         val[t] corresponds to volatility computed using returns up to time t.
     """
-    import pandas as pd
-    
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise NotSupportedError(
+            "rolling_realized_volatility requires the optional 'data' extra (pandas). "
+            'Install it with: pip install "qpl[data]"'
+        ) from exc
+
     # 1. Compute returns
     # prices: [p0, p1, p2, ...] (len N)
     # returns: [r1, r2, ...] where r1 = ln(p1/p0) (len N-1)

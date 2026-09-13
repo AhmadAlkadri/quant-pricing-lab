@@ -2,6 +2,12 @@
 Tests for market statistics utilities.
 """
 import pytest
+
+# rolling_realized_volatility uses pandas internally (rolling windows); skip
+# this module cleanly, with a clear reason, when the optional `data` extra
+# is not installed.
+pytest.importorskip("pandas")
+
 import numpy as np
 from qpl.market.stats import log_returns, realized_volatility, rolling_realized_volatility
 from qpl.exceptions import InvalidInputError

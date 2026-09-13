@@ -1,9 +1,20 @@
 """
 Demo of Market Data Retrieval and Caching (Slice 3a).
+
+Legacy example, not smoke-tested. Requires the optional 'data' extra.
 """
 import shutil
+import sys
 import time
-from qpl.market.data import get_prices
+
+try:
+    from qpl.market.data import get_prices
+except ImportError:
+    print(
+        "This demo needs the optional 'data' extra (pandas/yfinance/pyarrow). "
+        'Install it with: pip install "qpl[data]"'
+    )
+    sys.exit(1)
 
 def main():
     print("--- Market Data Demo ---")

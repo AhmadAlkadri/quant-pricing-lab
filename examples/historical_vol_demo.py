@@ -1,21 +1,19 @@
 """
 Demo: Historical Volatility Estimation from Market Data (Slice 3).
+
+Legacy example, not smoke-tested. Requires the optional 'data' extra.
 """
 import sys
-import numpy as np
-import pandas as pd
-
-# --- MOCKING SETUP ---
-# Since this demo might be run in an environment without internet or valid yfinance,
-# we need to robustly handle the missing dependency or just use the system one if available.
-# However, the user request asks for a "minimal demo that ties together: get_prices -> compute realized sigma".
-# To ensure this runs reliably for the user right now (given previous issues), I will
-# wrap the get_prices call.
 
 try:
+    import numpy as np
+    import pandas as pd
     from qpl.market.data import get_prices
 except ImportError:
-    print("Warning: qpl.market.data could not be imported. Check dependencies.")
+    print(
+        "This demo needs the optional 'data' extra (pandas/yfinance/pyarrow). "
+        'Install it with: pip install "qpl[data]"'
+    )
     sys.exit(1)
 
 from qpl.market.stats import log_returns, realized_volatility
