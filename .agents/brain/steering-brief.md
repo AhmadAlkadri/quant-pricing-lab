@@ -1,5 +1,96 @@
 # Steering Brief
 
+What changed in Slice 9 (files + bullets)
+
+Phase 3's Euler-vs-Milstein item, and the prerequisite for Heston Monte Carlo:
+a scalar-SDE layer with measured strong and weak orders, plus the CIR variance
+process with both an exact sampler and a discretisation whose boundary
+behaviour is measured rather than assumed. Still on `dev/curriculum`; not
+pushed.
+
+- `src/qpl/engines/mc/sde.py` (new): `SDEModel` (drift, diffusion, diffusion
+  derivative, optional Milstein *product*, optional exact transition, state
+  floor) and `simulate(model, x0, t_grid, n_paths, scheme=, truncation=,
+  seed=|rng=|normals=, db_dx=)` over `{'euler','milstein','exact'}`.
+  `coarsen_normals` builds coarse standard normals by summing fine blocks and
+  dividing by `sqrt(r)` -- without it the strong error is not measurable at
+  all. `gbm_sde(mu, sigma)` and `cir_sde(kappa, theta, xi)`;
+  `cir_transition_parameters`, `cir_moments`, `cir_expected_excess`.
+  `simulate_gbm_exact` untouched, pinned to 1e-13 relative.
+- `src/qpl/validation/stochastic.py` (new): `strong_error` / `weak_error`, each
+  returning the estimate **with its own standard error**. `weak_error` takes
+  either a coupled reference sample (common random numbers) or a known exact
+  mean; which one you can use decides whether the bias is measurable.
+- `src/qpl/cases/sde_discretization.py` (new): the sixth id space, 14 rows (10
+  `CONVERGENCE_ORDER`, 4 `NEGATIVE_FINDING`), plus the study specs, levels,
+  path counts and seeds that both test modules and the example now import.
+- `tests/test_mc_sde.py`, `tests/test_sde_convergence.py`,
+  `tests/cases/test_sde_discretization_cases.py`, `examples/sde_convergence.py`
+  (two curated smoke triples).
+
+**Measured orders on GBM** (S0 = 100, mu = 0.2, sigma = 0.2, T = 1, K = 100,
+100 000 paths, h = 1/8 ... 1/128, coupled increments):
+
+    claim                 Euler                        Milstein
+    strong                0.5154 (r0.0062, C 2.9624)   0.9932 (r0.0025, C 4.2643)
+    weak  f(x)=x          1.0041 (r0.0087, C 2.4142)   0.9944 (r0.0017, C 2.3916)
+    weak  f(x)=(x-K)^+    1.0088 (r0.0109, C 2.5642)   0.9946 (r0.0018, C 3.1096)
+
+The Milstein strong *constant* is larger: 1.90x better at h = 1/8, 7.12x at
+h = 1/128. The whole gain is the exponent.
+
+**The weak columns are an identity, not a coincidence.** Both schemes satisfy
+`E[X^h_T] = S0 (1 + mu h)^{T/h}` exactly, because the Euler diffusion term and
+the Milstein correction both have conditional mean zero. Closed-form constant
+`S0 e^{mu T} mu^2 T / 2 = 2.4428`.
+
+**European call bias** (read as r = 0.2, q = 0, analytic 19.6298871012): order
+1.0088, constant 2.0994 = e^{-rT} x 2.5642, bias -0.2560 at n = 8 (-1.30%) to
+-0.0155 at n = 128.
+
+**CIR** (v0 = theta = 0.04, T = 1): exact transition
+`v_{t+h} = c chi'^2(d, lambda)`, `c = xi^2(1-e^{-kappa h})/(4 kappa)`,
+`d = 4 kappa theta/xi^2`, `lambda = v_t e^{-kappa h}/c`; `d` IS the Feller
+number. Full-truncation Euler, 400 000 paths, h = 1/4 ... 1/32:
+
+    regime            E[v_T]                          E[(v_T-0.05)^+]
+    Feller satisfied  no measurable bias past h=1/4    0.9729 (r0.0705, C 3.8638e-03)
+    Feller violated   0.6834 (r0.1261)                 0.9389 (r0.0606, C 0.1329)
+
+Violating Feller costs a factor 34 in the constant and almost nothing in the
+exponent.
+
+**Three contradicted expectations, all encoded.**
+
+1. **Milstein on GBM is NOT exp-of-Euler-on-log.** Euler applied to `log S` is
+   the *exact* sampler (state-independent coefficients), and Milstein on the
+   log is bit-for-bit Euler on the log. What holds is
+   `Milstein factor = 1 + u + sigma^2 dW^2/2` against the exact `exp(u)` with
+   `u = (mu - sigma^2/2)h + sigma dW` -- the exponential cut after the
+   quadratic term in dW only. Pinned to 3.3e-16 relative.
+2. **Full truncation does NOT keep CIR positive.** It produces exactly the same
+   negative states as plain Euler (0.91174 of paths violated, 2.6e-04
+   satisfied) and must, since the schemes are pathwise identical until the
+   first negative state and plain Euler has no next state after it (0.90968
+   become NaN). It keeps the recursion DEFINED. At these step sizes 68-73% of
+   *terminal* variances are negative in the violated regime.
+3. **The coupled weak-error estimator's noise floor is the scheme's own STRONG
+   error.** Signal/noise goes as
+   `(C_weak/c_strong) sqrt(N) h^{p_weak - p_strong}`: flat for Milstein
+   (|z| 211 -> 207), falling for Euler (73 -> 20). Refining makes the Euler
+   measurement worse; only N helps. At mu = 0.05 the Euler weak error is
+   unmeasurable at 100 000 paths (|z| 5.8 -> 0.2, fitted 1.5742, residual
+   0.4231), so the 20% drift is load-bearing, and the 5% failure is pinned.
+
+**Trap for the next slice**: the Milstein correction `(1/2) b b'` for CIR is the
+constant `xi^2/4` while its factors are 0 and inf at v = 0 -- a state full
+truncation makes common. `cir_sde` supplies the product directly
+(`SDEModel.milstein_coefficient`); building it from the factors gives NaN paths.
+
+Suite: 1224 tests, 107.7 s. Full tables: `docs/notes/sde_discretization.md`.
+
+---
+
 What changed in Slice 8 (files + bullets)
 
 Phase 3's Asian/control-variate item: the first path-dependent instrument, and

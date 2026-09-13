@@ -227,7 +227,15 @@ same reason: Phase 3 had a case waiting and Phase 2's last item did not.
   pilot at `rho = 0.9996` -- three orders of magnitude, against the 7.6 the
   discounted terminal spot buys on a vanilla in Slice 7. This is the control
   variate the Slice 7 entry said was waiting for the arithmetic Asian.
-- Euler vs Milstein strong/weak order measured against exact GBM.
+- ~~Euler vs Milstein strong/weak order measured against exact GBM.~~
+  **Delivered in Slice 9** (see below): `qpl.engines.mc.sde.simulate(...)` over
+  `{'euler', 'milstein', 'exact'}` for a scalar Ito SDE, with GBM and CIR as
+  ready models and Andersen full truncation for the square-root diffusion.
+  Measured strong **0.5154** / **0.9932** and weak **1.0088** / **0.9946** on a
+  coupled Brownian path, plus the CIR boundary. This is the prerequisite for
+  Heston Monte Carlo in Phase 4: a variance process that is simulated rather
+  than sampled needs a scheme whose order and whose boundary behaviour have
+  both been measured.
 - Pathwise and likelihood-ratio Greeks checked against the analytic engine.
 - Longstaff-Schwartz American put validated against Longstaff & Schwartz
   (2001) Table 1 and against the Phase 1/2 engines — the first three-way
@@ -244,7 +252,16 @@ same reason: Phase 3 had a case waiting and Phase 2's last item did not.
   form.
 - Lewis and Carr-Madan pricing validated against published reference values
   and, optionally, QuantLib.
-- Heston Monte Carlo with the QE scheme and a bias study.
+- Heston Monte Carlo with the QE scheme and a bias study. **Its prerequisite
+  is delivered**: Slice 9 built the scalar-SDE layer, measured the Euler and
+  Milstein orders, and implemented the CIR variance process with both an exact
+  noncentral chi-square sampler and full-truncation Euler, measuring that
+  truncation's weak order in both Feller regimes. Two Slice 9 findings should
+  be read before that slice is written: full truncation does **not** stop the
+  scheme going negative (68-73% of terminal variances are negative in the
+  Feller-violated regime at h = 1/4 ... 1/32), and a coupled weak-error
+  estimator's noise floor is the scheme's own *strong* error, which is why the
+  bias study needs the exact sampler as a reference rather than a finer run.
 - Implied-vol surface utilities.
 - Synthetic-recovery calibration with identifiability diagnostics.
 - Fusai & Roncoroni Ch. 15 Laplace approach to arithmetic Asians, reusing
@@ -252,7 +269,10 @@ same reason: Phase 3 had a case waiting and Phase 2's last item did not.
 
 ### Phase 5+ — only when forced by a case
 - Multi-asset (correlated Brownian motion, baskets via existing copulas).
-- Rates (Vasicek/CIR/Hull-White).
+- Rates (Vasicek/CIR/Hull-White). Note that Slice 9 already ships the CIR
+  *process* with its exact transition law and moments (`qpl.engines.mc.sde`);
+  what a rates slice would add is the term structure built on it, not the
+  simulation.
 - Performance: profiling, vectorized kernels, and a benchmark harness with
   reproducibility metadata (instrument, model, engine, grid/paths, tolerance,
   hardware, seed, wall time, error vs reference) — only after reference paths
@@ -983,6 +1003,97 @@ same reason: Phase 3 had a case waiting and Phase 2's last item did not.
   files run in 7.5 s and the two new example smoke invocations in 3.4 s.
 - Full tables and the derivation:
   `docs/notes/asian_options_control_variate.md`.
+
+### Slice 9
+- **A user can simulate a scalar Ito SDE.**
+  `qpl.engines.mc.sde.simulate(model, x0, t_grid, n_paths, scheme=...,
+  truncation=..., seed=|rng=|normals=, db_dx=...)` over
+  `{"euler", "milstein", "exact"}`, with `SDEModel` carrying the drift, the
+  diffusion, the diffusion derivative, an optional exact transition and an
+  optional state floor. Two ready models: `gbm_sde(mu, sigma)` and
+  `cir_sde(kappa, theta, xi)`. `simulate_gbm_exact` is untouched and pinned to
+  1e-13 relative against the new exact scheme fed the same draws.
+- **Measured orders on GBM** (`S0 = 100, mu = 0.2, sigma = 0.2, T = 1,
+  K = 100`, 100 000 paths, `h = 1/8 ... 1/128`, coarse increments summed from
+  the fine ones -- Higham 2001):
+
+  | claim | Euler | Milstein |
+  |---|---|---|
+  | strong `E\|X^h_T - X_T\|` | **0.5154** (r 0.0062, C 2.9624) | **0.9932** (r 0.0025, C 4.2643) |
+  | weak, `f(x) = x` | **1.0041** (r 0.0087, C 2.4142) | **0.9944** (r 0.0017, C 2.3916) |
+  | weak, `f(x) = (x-K)^+` | **1.0088** (r 0.0109, C 2.5642) | **0.9946** (r 0.0018, C 3.1096) |
+
+- **Why Milstein buys a strong order and no weak one, as an identity rather
+  than a rate**: both the Euler diffusion term and the Milstein correction have
+  conditional mean zero, so `E[X^h_T] = S0 (1 + mu h)^{T/h}` for **both**
+  schemes and the weak error in `f(x) = x` is the deterministic
+  `-S0 e^{mu T} mu^2 T h / 2 + O(h^2)`, constant **2.4428** against measured
+  2.4142 and 2.3916.
+- **European call bias from Euler paths**: order **1.0088**, constant
+  **2.0994** = `e^{-rT} * 2.5642`, bias -0.2560 at `n = 8` (**-1.30%** of the
+  19.6298871012 analytic price) to -0.0155 at `n = 128`, negative at every
+  level. Measurable only with the coupled exact payoff as a control variate
+  with its known mean: standard error 3.5e-03 -> 7.8e-04 against the plain
+  estimator's flat 5.7e-02.
+- **CIR exact transition, derived not quoted**: `v_{t+h} = c chi'^2(d, lambda)`
+  with `c = xi^2(1 - e^{-kappa h})/(4 kappa)`, `d = 4 kappa theta / xi^2`,
+  `lambda = v_t e^{-kappa h}/c`, checked against the CIR conditional moments
+  written out independently and then against 200 000 sampled paths at four
+  steps. `d` **is** the Feller number: `2 kappa theta >= xi^2` is exactly
+  `d >= 2`. `cir_expected_excess` gives `E[(v_T - K)^+]` deterministically by
+  integrating the ncx2 survival function, so the weak-error reference carries
+  no Monte Carlo error of its own.
+- **Full-truncation Euler weak orders** (400 000 paths, `h = 1/4 ... 1/32`,
+  `v0 = theta = 0.04`): `E[v_T]` shows **no measurable bias** past the coarsest
+  step with Feller satisfied (`kappa = 2, xi = 0.2`) and a **degraded 0.6834**
+  (r 0.1261) with it violated (`kappa = 0.5, xi = 1.0`); `E[(v_T - 0.05)^+]`
+  fits **0.9729** (r 0.0705, C 3.8638e-03) and **0.9389** (r 0.0606, C 0.1329).
+  Violating Feller costs a factor of **34 in the constant** and almost nothing
+  in the exponent.
+- **Three contradicted expectations, all encoded:**
+  1. **Milstein on GBM is not exp-of-Euler-on-log.** Euler applied to `log S`
+     *is* the exact sampler -- the log SDE has state-independent coefficients,
+     so the scheme is not an approximation at all (and Milstein on the log is
+     bit-for-bit Euler on the log, since `db/dx = 0`). What holds is a
+     truncation identity: the Milstein factor is `1 + u + sigma^2 dW^2 / 2`
+     against the exact `exp(u)`, i.e. `exp(u)` cut after the quadratic term in
+     `dW` only. Pinned to 3.3e-16 relative.
+  2. **Full truncation does not keep CIR positive.** It produces *exactly* the
+     same negative states as plain Euler -- 0.91174 of paths with Feller
+     violated, 2.6e-04 with it satisfied -- and it must, because the two
+     schemes are pathwise identical until the first negative state and after
+     that plain Euler has no next state at all (0.90968 of paths become NaN).
+     What it buys is that the recursion stays **defined**. At `h = 1/4 ... 1/32`
+     **68-73% of terminal variances are negative** in the violated regime.
+  3. **The coupled weak-error estimator's noise floor is the scheme's own
+     STRONG error**, so signal/noise goes as
+     `(C_weak/c_strong) sqrt(N) h^{p_weak - p_strong}`: flat for Milstein
+     (|z| 211 -> 207) and *falling* for Euler (73 -> 20). Refining the grid
+     makes the Euler measurement worse. At `mu = 0.05` -- an ordinary
+     Black-Scholes drift -- the Euler weak error is unmeasurable at 100 000
+     paths (|z| 5.8 down to 0.2, fitted order 1.5742 with residual 0.4231), so
+     the 20% drift used in the study is load-bearing and the failure at 5% is
+     pinned as a `NEGATIVE_FINDING`.
+- **Validation**: `qpl.validation` gains `strong_error` and `weak_error`, each
+  returning the estimate *with its own standard error*, because that number is
+  the floor a fitted order has to clear; `weak_error` takes either a coupled
+  reference sample (common random numbers) or a known exact mean, and the
+  choice between them is the difference between a measurable bias and noise.
+- **Cases**: `qpl.cases.sde_discretization` -- a **sixth** id space, asserted
+  disjoint from the other five, and the second keyed by a *method* rather than
+  an instrument. Fourteen rows: ten `CONVERGENCE_ORDER` and four
+  `NEGATIVE_FINDING`. Every band is derived in its row's `notes` from whichever
+  of two effects dominates -- the seed-to-seed spread of the fit or the
+  pre-asymptotic gap to the theoretical order. The CIR exact sampler's moments
+  are deliberately **not** rows: their expected values are computed from the
+  parameters at test time, so a row would carry a second copy of a formula.
+- `examples/sde_convergence.py` (1.1 s, curated smoke, also `--case cir` at
+  1.1 s): the full error table with z-scores, the fitted orders, the price bias
+  table, and -- for CIR -- the negativity table and the truncation weak orders
+  on both sides of the Feller condition.
+- Suite: **1224 tests, 107.7 s** (from 1174 / 99.1 s); the three new test files
+  run in 4.7 s and the two new example smoke invocations in 6.7 s.
+- Full tables and the derivation: `docs/notes/sde_discretization.md`.
 
 ## Reconciled old roadmap
 
