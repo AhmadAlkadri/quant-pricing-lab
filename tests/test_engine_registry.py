@@ -49,7 +49,6 @@ def test_builtin_methods_are_registered_for_price_and_greeks() -> None:
     option, model, market = _option(), BlackScholesModel(sigma=0.2), _market()
     for method in ("analytic", "mc", "pde", "tree"):
         assert callable(resolve_price(option, model, market, method))
-    for method in ("analytic", "mc", "pde"):
         assert callable(resolve_greeks(option, model, market, method))
 
 

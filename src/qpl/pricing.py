@@ -36,6 +36,7 @@ from .engines.registry import (
 )
 from .engines.tree.pricers import (
     TREE_METHOD_SPEC,
+    greeks_european as greeks_european_tree,
     price_european as price_european_tree,
 )
 from .instruments.options import EuropeanOption
@@ -74,6 +75,7 @@ def _register_builtin_engines() -> None:
         **common,
         spec=TREE_METHOD_SPEC,
         price=price_european_tree,
+        greeks=greeks_european_tree,
     )
 
 

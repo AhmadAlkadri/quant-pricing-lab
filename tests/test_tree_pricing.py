@@ -18,7 +18,8 @@ from qpl.instruments.options import EuropeanOption
 from qpl.market.curves import FlatDividendCurve, FlatRateCurve
 from qpl.market.market import Market
 from qpl.models.black_scholes import BlackScholesModel
-from qpl.pricing import price
+from qpl.pricing import greeks, price
+from qpl.validation import fit_convergence_order
 
 
 def _market(spot: float, r: float, q: float) -> Market:
@@ -208,3 +209,129 @@ def test_american_put_dp_is_unchanged_by_the_shared_lattice(
         cfg=BinomialDPConfig(n_steps=n_steps),
     ).value
     assert value == expected
+
+
+# --------------------------------------------------------------------------
+# Lattice Greeks
+# --------------------------------------------------------------------------
+
+# Tolerances below are taken from measurement, not from habit. Worst absolute
+# residual against the closed form over `n` in [1990, 2010] (the sweep covers
+# both parities, so it captures the oscillation rather than one lucky `n`), on
+# the three specification points used here:
+#
+#   greek   worst measured   tolerance   headroom
+#   delta   6.3e-05          2e-04       3.2x
+#   gamma   8.0e-06          3e-05       3.8x
+#   theta   1.6e-03          5e-03       3.1x
+#   vega    7.1e-02          2.5e-01     3.5x
+#   rho     3.9e-03          1.2e-02     3.1x
+#
+# Delta, gamma and theta are read straight off the lattice and converge at
+# measured order 1 in 1/n (ATM call, orders 1.004 / 1.002 / 1.001 on odd n and
+# 0.999 / 1.010 / 1.010 on even n). Vega and rho are bump-and-revalue and are
+# two to three orders of magnitude coarser relative to their own size, because
+# bumping sigma moves the whole lattice and the tree's oscillating price error
+# does not cancel between the two evaluations; see the bump constants in
+# `qpl.engines.tree.pricers`.
+
+_GREEK_TOLERANCES = {
+    "delta": 2e-4,
+    "gamma": 3e-5,
+    "theta": 5e-3,
+    "vega": 2.5e-1,
+    "rho": 1.2e-2,
+}
+
+_GREEK_POINTS = (
+    ("atm_1y", 100.0, 100.0, 1.0, 0.05, 0.00, 0.20),
+    ("otm_9m_div", 100.0, 110.0, 0.75, 0.03, 0.01, 0.25),
+    ("itm_6m_div", 120.0, 90.0, 0.5, 0.03, 0.05, 0.35),
+)
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+@pytest.mark.parametrize(
+    ("spot", "strike", "expiry", "rate", "div", "sigma"),
+    [row[1:] for row in _GREEK_POINTS],
+    ids=[row[0] for row in _GREEK_POINTS],
+)
+def test_tree_greeks_match_analytic(
+    kind: str,
+    spot: float,
+    strike: float,
+    expiry: float,
+    rate: float,
+    div: float,
+    sigma: float,
+) -> None:
+    """Evidence class: CLOSED_FORM, at `n_steps = 2000`.
+
+    See the table above this test for where each tolerance comes from.
+    """
+    option = EuropeanOption(kind=kind, strike=strike, expiry=expiry)  # type: ignore[arg-type]
+    model = BlackScholesModel(sigma=sigma)
+    market = _market(spot, rate, div)
+
+    exact = greeks(option, model, market, method="analytic")
+    tree = greeks(option, model, market, method="tree", cfg=TreeConfig(n_steps=2000))
+
+    for name, tol in _GREEK_TOLERANCES.items():
+        assert getattr(tree, name) == pytest.approx(getattr(exact, name), abs=tol), name
+
+
+def test_tree_greeks_converge_at_order_one() -> None:
+    """Evidence class: CONVERGENCE_ORDER.
+
+    Delta, gamma and theta come from nodes at steps 1 and 2, one and two `dt`
+    away from valuation time, so their error inherits the `O(1/n)` of the
+    price rather than improving on it. Odd and even `n` are fitted separately
+    for the same reason the price is (see `tests/test_tree_convergence.py`);
+    the band [0.8, 1.2] is the same one used for the price.
+    """
+    option = EuropeanOption(kind="call", strike=100.0, expiry=1.0)
+    model = BlackScholesModel(sigma=0.2)
+    market = _market(100.0, 0.05, 0.0)
+    exact = greeks(option, model, market, method="analytic")
+
+    for levels in ((25, 51, 101, 201, 401, 801), (26, 50, 100, 200, 400, 800)):
+        measured = [
+            greeks(option, model, market, method="tree", cfg=TreeConfig(n_steps=n))
+            for n in levels
+        ]
+        h = [1.0 / n for n in levels]
+        for name in ("delta", "gamma", "theta"):
+            errs = [abs(getattr(g, name) - getattr(exact, name)) for g in measured]
+            fit = fit_convergence_order(h, errs)
+            assert 0.8 <= fit.order <= 1.2, (name, levels, fit.order)
+            assert fit.residual < 0.05, (name, levels, fit.residual)
+
+
+def test_tree_greeks_metadata_and_validation() -> None:
+    option = EuropeanOption(kind="call", strike=100.0, expiry=1.0)
+    model = BlackScholesModel(sigma=0.2)
+    market = _market(100.0, 0.05, 0.0)
+
+    result = greeks(option, model, market, method="tree", cfg=TreeConfig(n_steps=64))
+    assert result.meta is not None
+    assert result.meta["method"] == "tree"
+    assert result.meta["bumps"] == {"sigma": 1e-2, "r": 1e-4}
+
+    # Gamma and theta read step-2 nodes, so a one-step tree cannot supply them.
+    with pytest.raises(InvalidInputError, match="n_steps must be >= 2"):
+        greeks(option, model, market, method="tree", cfg=TreeConfig(n_steps=1))
+
+    # sigma = 0 collapses the lattice to a single path: no gamma to read.
+    with pytest.raises(InvalidInputError, match="sigma must be > 0 for tree Greeks"):
+        greeks(
+            option,
+            BlackScholesModel(sigma=0.0),
+            market,
+            method="tree",
+            cfg=TreeConfig(n_steps=64),
+        )
+
+    # T = 0 is the flat case shared with the MC engine: every Greek is zero.
+    expired = EuropeanOption(kind="call", strike=100.0, expiry=0.0)
+    flat = greeks(expired, model, market, method="tree", cfg=TreeConfig(n_steps=64))
+    assert (flat.delta, flat.gamma, flat.vega, flat.theta, flat.rho) == (0.0,) * 5
