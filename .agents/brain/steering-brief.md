@@ -1,5 +1,122 @@
 # Steering Brief
 
+What changed in Slice 2 (files + bullets)
+
+The rest of Phase 1's American half: exercise style becomes an instrument
+property, and the CRR tree learns to price it. Still on `dev/curriculum`; not
+pushed.
+
+- `src/qpl/instruments/options.py`, `src/qpl/instruments/__init__.py`,
+  `src/qpl/pricing.py`, `tests/test_tree_american.py`:
+  - `VanillaOption(kind, strike, expiry)` carries the validation;
+    `EuropeanOption` and `AmericanOption` are **siblings** under it, not parent
+    and child. That is load-bearing: registry lookup walks the MRO, so an
+    `AmericanOption` subclassing `EuropeanOption` would resolve to the European
+    closed form and return a plausible wrong number instead of refusing.
+    Pinned by a test.
+  - The tree registers a second key, `(AmericanOption, BlackScholesModel,
+    "tree")`, for price and Greeks. Analytic/MC/PDE stay European-only and
+    refuse an `AmericanOption` through the ordinary lookup with the ordinary
+    message — no engine grows an `if instrument.american: raise`. Tested for
+    all three, for both `price` and `greeks`.
+  - No change to the ADR-0005 contract (this is an application of its key), so
+    **no ADR-0006**; brain.md sections 2/3/4 updated instead.
+- `src/qpl/engines/tree/american.py`, `src/qpl/engines/tree/pricers.py`,
+  `src/qpl/engines/dp/*`:
+  - `price_american` / `greeks_american`: calls and puts, continuous yield,
+    `meta["exercise_boundary"]` per level and `meta["early_exercise_node_count"]`,
+    and delta/gamma/theta through `lattice_delta_gamma_theta`, now shared with
+    the European path (same code, because the estimators do not care how the
+    node values were produced). Vega/rho by bump at the same `n`.
+  - Spot levels come from precomputed `u**i`/`d**i` tables: `O(n)` calls to
+    `pow` instead of `O(n**2)`, same floating-point nodes, which is what makes
+    an `n = 8001` reference cost 0.17 s.
+  - `engines.dp.price_american_put_binomial` is now a **thin wrapper** over the
+    dispatcher engine (kept rather than deleted because a private lab notebook
+    calls it with `return_lattice=True`, and `labs/` is not mine to edit). Five
+    Slice 1 values still pass with a **zero** tolerance.
+- `tests/test_tree_american.py` (60 tests), `tests/test_tree_american_convergence.py`
+  (14 tests, 1.3 s), `docs/notes/american_exercise_on_trees.md`:
+  - **Measured** (S=K=100, r=5%, q=0, sigma=20%, T=1, American put, reference
+    = this engine at n=8001): odd `n` order **1.0141** (residual 0.0174),
+    above the reference at every level; even `n` **0.9722** (0.0242), below at
+    every level. **The odd/even bracketing survives early exercise.** American
+    call with q=6%: **1.0232** / **0.9674**.
+  - The scaled constants do **not** settle like the European tree's 1.7529 /
+    1.9994 — they drift (odd 1.391→1.313, even 0.822→0.924). Partly the
+    reference's own 1.80e-04 error (quantified against a 64000/64001 average),
+    partly real: the boundary is resolved only to the node spacing, an error
+    with no parity structure. So the test pins the *sign structure*, not a
+    constant.
+  - **Richardson extrapolation does not restore order 2** for the American
+    put: **0.2960** (residual 0.2712) odd, **0.6447** (0.3562) even, with the
+    extrapolated error flattening at ~1.5e-04. It still cuts the error 10-220x
+    against the raw sequence; both halves are asserted. Verified against the
+    better reference that the floor is not just the reference's accuracy.
+  - Lattice Greeks at order ~1 (delta/gamma/theta 1.164/1.185/1.259 odd,
+    1.074/1.079/1.076 even), band [0.9, 1.4] with the reason stated.
+  - Exact identities with **zero** tolerance: American call = European call bit
+    for bit at q=0 (all five Greeks too), American put = European put at r=0.
+- `src/qpl/cases/american_black_scholes.py`,
+  `tests/cases/test_american_black_scholes_cases.py`:
+  - **Contradicted expectation, and the best result of the slice.** The slice
+    required the L&S (2001) Table 1 row-1 put at n=5000 within 2e-03 of
+    **4.478**. Measured: **4.486710**, 8.71e-03 away. QuantLib's FD and
+    binomial American engines land at ~4.4867 too, so the engine is not wrong
+    — the *instrument* is different. Those options are exercisable **50 times
+    per year**; restricting exercise to 50 dates on the same lattice gives
+    **4.477922** (n=5000) and 4.477826 (n=40000). Carried as two rows on one
+    spec: `PUBLISHED_BENCHMARK` at tolerance 5e-04 (the published figure's own
+    three-decimal precision) and `NEGATIVE_FINDING` asserting the continuous
+    gap *exceeds* 2e-03, pinned at 8.71e-03 ± 5e-05.
+  - Nine rows total; the in-repo reference 6.0905564143067235 at n=8001 says in
+    its own `source` that it is **not** a published table value.
+- Two further contradictions, encoded rather than smoothed over:
+  - At sigma=0 the American put is **not** always
+    `max(intrinsic now, discounted forward intrinsic)` — that needs `r >= q`.
+    For `q > r` the objective has an interior maximum at
+    `t* = log(rK/(qS0))/(r−q)`; measured 83.9506 vs 81.1993 at
+    S0=K=100, r=2%, q=50%, T=10.
+  - The extracted boundary is **not** monotone level by level; it is monotone
+    within each node-grid parity and zigzags by at most one grid offset
+    (worst drop 1.3845 vs offset 1.4043 at n=200). At expiry it is the
+    in-the-money node adjacent to K: `K/u²=97.2112` (put), `Ku²=102.8688`
+    (call).
+- `tests/oracle/test_american_vs_quantlib.py`:
+  - `FdBlackScholesVanillaEngine` (tGrid=xGrid=3200) agrees with the tree
+    (n=8001) to **3.71e-04** / 1.20e-04 / 3.10e-04 at three points, inside a
+    1e-03 tolerance **derived** from both refinements — they approach from
+    opposite sides, so the gap is the sum of their errors. QuantLib's FD order,
+    fitted on successive differences so no reference value is needed:
+    **1.0856** (residual 0.0211).
+  - Slice 1's negative finding survives early exercise: `n·(qpl − QuantLib
+    CRR)` constant to better than 0.5% over n∈{200,800,3200} at **−0.026413**
+    (ATM put), **−0.013260** (L&S row 1), **+0.007104** (call with q=6%).
+- `examples/american_put_binomial_dp.py`, `tests/test_examples_smoke.py`,
+  `docs/CURRICULUM.md`, `docs/curriculum_provenance.md`,
+  `docs-site/docs/reference/dp.md`, `README.md`, `.agents/brain/brain.md`:
+  - The example now goes through the dispatcher and prints the premium and
+    boundary samples; smoke keys extended. Curriculum "Delivered" gained Slice
+    2 and Phase 1's remaining items were re-scoped (Leisen-Reimer is now
+    better motivated: Richardson does not substitute for it on American
+    payoffs).
+
+Deferred (intentional, Slice 2)
+- Leisen-Reimer, PSOR and Longstaff-Schwartz are later slices, as instructed.
+- No Bermudan instrument: the 50-date restriction that reproduces the L&S
+  benchmark lives in the test, on the shared lattice. If a second case wants
+  it, that is when it earns a type.
+- `engines.dp.price_american_put_binomial` kept as a deprecated wrapper rather
+  than deleted, only because of the private lab notebook. It can go the moment
+  that notebook is updated.
+
+How to validate Slice 2 quickly
+- `PYTHONPATH=src python examples/american_put_binomial_dp.py`
+- `pytest -q tests/test_tree_american.py tests/test_tree_american_convergence.py tests/cases/test_american_black_scholes_cases.py`
+- `pytest -q tests/oracle` (needs the `oracle` extra; skips cleanly without it)
+
+---
+
 What changed in Slice 1 (files + bullets)
 
 Phase 1 of the curriculum: the CRR binomial tree, and the dispatcher refactor

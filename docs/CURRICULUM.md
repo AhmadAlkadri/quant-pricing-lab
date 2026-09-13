@@ -114,11 +114,19 @@ unknowns stay unknown.
   correct because its measured convergence order to the Black-Scholes closed
   form is order 1, with the odd/even node-count oscillation documented rather
   than hidden.~~ **Delivered in Slice 1** (see below).
-- American exercise becomes an instrument property; CRR American call/put
+- ~~American exercise becomes an instrument property; CRR American call/put
   with dividends is checked by early-exercise premium >= 0 and American >=
-  European.
-- Leisen-Reimer smoothing is checked by measured order 2.
-- Tree Greeks are read from the lattice.
+  European.~~ **Delivered in Slice 2** (see below).
+- ~~Tree Greeks are read from the lattice.~~ **Delivered in Slice 1** for
+  European payoffs and **Slice 2** for American ones.
+- Leisen-Reimer smoothing is checked by measured order 2. Still open, and now
+  better motivated: Slice 2 measured that Richardson extrapolation, the cheap
+  alternative, does *not* restore order 2 for an American put.
+- A Bermudan exercise schedule, if a case needs one. Slice 2 found that the
+  Longstaff-Schwartz Table 1 benchmark is a 50-exercise-date Bermudan value,
+  and reproduced it with a restriction applied in the test rather than by
+  adding an instrument; if a second case wants it, that is when the instrument
+  earns its place.
 - ~~Forces ADR-0005: an engine registry keyed by `(instrument, model, method)`
   replacing the `isinstance` ladder in `qpl.pricing`.~~ **Delivered in
   Slice 1**; ADR-0005 accepted.
@@ -143,7 +151,10 @@ unknowns stay unknown.
 - Pathwise and likelihood-ratio Greeks checked against the analytic engine.
 - Longstaff-Schwartz American put validated against Longstaff & Schwartz
   (2001) Table 1 and against the Phase 1/2 engines — the first three-way
-  cross-method case.
+  cross-method case. Note the Slice 2 finding before writing that test: the
+  Table 1 options are exercisable 50 times per year, so an LSM estimator that
+  uses 50 exercise dates should be compared to 4.478 and one that approximates
+  continuous exercise should not.
 - Barrier monitoring bias checked against the Reiner-Rubinstein closed form.
 - QMC only if a case motivates it.
 
@@ -244,6 +255,85 @@ unknowns stay unknown.
   four ways: analytic, PDE, Monte Carlo, tree.
 - `examples/tree_convergence.py`: deterministic table plus the fitted orders;
   `--plot` for the log-log error picture.
+
+### Slice 2
+- **American exercise is an instrument property.** `qpl.instruments` gains
+  `VanillaOption` (validation only) with `EuropeanOption` and `AmericanOption`
+  as *siblings* under it -- deliberately not parent and child, because registry
+  lookup walks the MRO and a subclass would resolve to the European closed form
+  and return a plausible wrong number. The tree engine registers a second key,
+  `(AmericanOption, BlackScholesModel, "tree")`, for price and Greeks; the
+  analytic, MC and PDE engines stay European-only and refuse an
+  `AmericanOption` through the ordinary registry lookup. No change to the
+  ADR-0005 contract, so no new ADR.
+- `qpl.engines.tree.price_american` / `greeks_american`: calls and puts,
+  continuous dividend yield, `meta["exercise_boundary"]` per time level and
+  `meta["early_exercise_node_count"]`, lattice delta/gamma/theta sharing one
+  estimator with the European path and vega/rho by bump. The Slice 1
+  keyword-based `engines.dp.price_american_put_binomial` is now a thin
+  deprecated wrapper over it; five pinned Slice 1 values still hold with a
+  **zero** tolerance.
+- **Measured** on `S = K = 100, r = 5%, q = 0, sigma = 20%, T = 1`, American
+  put, against this engine at `n = 8001`:
+  - Odd `n` in `{25, ..., 801}`: fitted order **1.0141** (residual 0.0174),
+    above the reference at every level. Even `n`: **0.9722** (0.0242), below at
+    every level. The odd/even **bracketing survives early exercise**. Same
+    picture for an American call with `q = 6%`: **1.0232** / **0.9674**.
+  - The scaled constants do **not** settle the way the European tree's 1.7529 /
+    1.9994 do; they drift (odd 1.391 -> 1.313, even 0.822 -> 0.924), partly
+    because the reference carries its own 1.80e-04 error and partly because the
+    exercise boundary is resolved only to the node spacing, an error with no
+    parity structure.
+  - **Richardson extrapolation does not restore order 2** for the American put:
+    fitted order **0.2960** (residual 0.2712) on odd pairs and **0.6447**
+    (0.3562) on even, with the extrapolated error flattening at ~1.5e-04
+    instead of continuing to fall. It still cuts the error by a factor of 10 to
+    220; both halves are asserted. Checked against a 64000/64001 reference so
+    the floor is not merely the reference's own accuracy.
+  - Lattice Greeks at order ~1: delta/gamma/theta **1.164/1.185/1.259** (odd)
+    and **1.074/1.079/1.076** (even).
+  - Full tables and the derivation: `docs/notes/american_exercise_on_trees.md`.
+- **Contradicted expectation, and the most useful result of the slice.** The
+  slice was specified to check that this engine's American put at the
+  Longstaff & Schwartz (2001) Table 1 row-1 specification lands within 2e-03 of
+  the published **4.478**. It does not: the measured value is **4.486710** at
+  `n = 5000`, 8.71e-03 away, and QuantLib's finite-difference and binomial
+  American engines land at ~4.4867 too. The reason is the instrument -- those
+  options are exercisable **50 times per year**. Restricting exercise to 50
+  dates on the same CRR lattice gives **4.477922** at `n = 5000` and 4.477826
+  at `n = 40000`. Both numbers are right; they price different things. Carried
+  as two rows, `PUBLISHED_BENCHMARK` (tolerance 5e-04, the published figure's
+  own quoting precision) and `NEGATIVE_FINDING` (asserting the gap *exceeds*
+  2e-03, pinned at 8.71e-03).
+- Two further contradictions, both encoded rather than smoothed over:
+  - At `sigma = 0` an American put is **not** always
+    `max(intrinsic now, discounted forward intrinsic)`. That holds for
+    `r >= q`; for `q > r` the objective has an interior maximum at
+    `t* = log(rK/(qS0))/(r-q)`. Measured at `S0 = K = 100, r = 2%, q = 50%,
+    T = 10`: 83.9506 against 81.1993 for an endpoints-only rule.
+  - The extracted exercise boundary is **not** monotone level by level: it is
+    monotone within each node-grid parity and zigzags between the two
+    interleaved grids by at most one grid offset (measured worst drop 1.3845
+    against an offset of 1.4043 at `n = 200`). At expiry it is the in-the-money
+    node adjacent to `K` -- `K/u^2 = 97.2112` for the put, `K u^2 = 102.8688`
+    for the call.
+- Exact identities pinned with **zero** tolerance: an American call on a
+  non-dividend-paying stock equals the European call bit for bit at every `n`
+  (all five Greeks too), and at `r = 0` the American put equals the European
+  put.
+- Oracle: QuantLib's `FdBlackScholesVanillaEngine` on a fine grid agrees with
+  the tree to **3.71e-04** (ATM put), 1.20e-04 (L&S row 1) and 3.10e-04 (call
+  with `q = 6%`), inside a 1e-03 tolerance derived from both engines' measured
+  refinements -- they approach from opposite sides, so the gap is the sum of
+  their errors, not a cancellation. QuantLib's FD order, fitted on successive
+  differences so no reference value is needed: **1.0856**. The Slice 1 negative
+  finding survives early exercise: `n * (qpl - QuantLib CRR)` is constant to
+  better than 0.5% over `n` in `{200, 800, 3200}` at -0.0264 (ATM put),
+  -0.0133 (L&S row 1), +0.0071 (call with yield).
+- `qpl.cases.american_black_scholes`: nine rows across the published benchmark
+  and its negative twin, two exact identities, three premium bounds/orderings,
+  and the in-repo reference value 6.0905564143067235 at `n = 8001` (whose
+  `source` says in as many words that it is **not** a published table value).
 
 ## Reconciled old roadmap
 

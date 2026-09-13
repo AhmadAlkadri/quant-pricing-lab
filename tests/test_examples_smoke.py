@@ -29,7 +29,15 @@ import pytest
         ),
         (
             "american_put_binomial_dp.py",
-            ["example=american_put_binomial_dp", "american_put=", "european_put=", "early_exercise_premium="],
+            [
+                "example=american_put_binomial_dp",
+                "american_put=",
+                "european_put=",
+                "early_exercise_premium=",
+                "early_exercise_nodes=",
+                "boundary_first_time=",
+                "boundary t=",
+            ],
         ),
         ("quadrature_demo.py", ["example=quadrature_demo", "exact=", "trap=", "simpson=", "gauss="]),
         ("laplace_inversion_demo.py", ["example=laplace_inversion_demo", "max_abs_error=", "mean_abs_error="]),

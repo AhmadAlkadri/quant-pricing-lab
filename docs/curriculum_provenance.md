@@ -43,9 +43,10 @@ no book prose, only provenance: lab notebook -> `src/qpl` changes -> test covera
   - `src/qpl/engines/dp/__init__.py`
 - Key functions/classes added:
   - `backward_induction_optimal_stopping`
-  - `BinomialDPConfig`
-  - `build_recombining_spot_tree`
-  - `price_american_put_binomial`
+  - `BinomialDPConfig` (Slice 2: deprecated alias for `TreeConfig`)
+  - `build_recombining_spot_tree` (Slice 1: moved to `qpl.engines.tree.lattice`)
+  - `price_american_put_binomial` (Slice 2: thin wrapper over
+    `qpl.engines.tree.price_american`)
 - New tests added:
   - `tests/test_dp_optimal_stopping.py`
 
@@ -98,6 +99,29 @@ no book prose, only provenance: lab notebook -> `src/qpl` changes -> test covera
 - New tests added:
   - `tests/test_engine_registry.py`, `tests/test_tree_pricing.py`,
     `tests/test_tree_convergence.py`, `tests/oracle/test_tree_vs_quantlib.py`
+
+### Phase 1 Slice 2 - American exercise as an instrument property
+
+- Driven by: the Phase 1 American-exercise slice, which required the Chapter 3
+  American-put dynamic program to become reachable from `qpl.pricing`.
+- New/modified `src/` modules:
+  - `src/qpl/instruments/options.py` (`VanillaOption`, `AmericanOption`)
+  - `src/qpl/engines/tree/american.py`, `src/qpl/engines/tree/pricers.py`
+  - `src/qpl/pricing.py` (second registry key on `method="tree"`)
+  - `src/qpl/engines/dp/american_put_binomial.py` (now a thin deprecated
+    wrapper over the dispatcher engine; values bit-identical)
+  - `src/qpl/cases/american_black_scholes.py`
+- Key functions/classes added:
+  - `VanillaOption`, `AmericanOption`
+  - `price_american`, `greeks_american`, `lattice_delta_gamma_theta`
+  - `AmericanBSSpec`, `AmericanBSCase`, `ALL_AMERICAN_CASES` and the four
+    American case lists
+- New tests added:
+  - `tests/test_tree_american.py`, `tests/test_tree_american_convergence.py`,
+    `tests/cases/test_american_black_scholes_cases.py`,
+    `tests/oracle/test_american_vs_quantlib.py`
+- Derivation note (own words, citations only):
+  - `docs/notes/american_exercise_on_trees.md`
 - Derivation note (own words, citations only):
   - `docs/notes/crr_tree_convergence.md` (Cox/Ross/Rubinstein 1979 for the
     lattice and the replication argument; Leisen & Reimer 1996 for the order-1

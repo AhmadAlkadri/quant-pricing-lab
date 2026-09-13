@@ -12,8 +12,8 @@ Planned: variance reduction, benchmarking.
 
 Quant Pricing Lab is a Python numerical-methods lab for option pricing under the Black–Scholes
 assumptions, with analytic pricing/Greeks plus Monte Carlo and PDE (theta-scheme) engines for
-vanilla calls and puts, and a dynamic-programming/binomial American put engine
-(`qpl.engines.dp`). It does not aim for instrument breadth or a production trading framework;
+vanilla calls and puts, and a CRR binomial tree covering both European and American
+exercise (`qpl.engines.tree`). It does not aim for instrument breadth or a production trading framework;
 scope grows only along the phase plan in `docs/CURRICULUM.md`, one evidence-backed case at a time.
 
 Golden Path:
