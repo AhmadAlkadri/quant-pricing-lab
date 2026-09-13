@@ -26,6 +26,8 @@ from qpl.cases import (
     ALL_CASES,
     ALL_DIGITAL_CASES,
     DIGITAL_CROSS_ENGINE_CASES,
+    DIGITAL_FOURIER_METHODS,
+    DIGITAL_FOURIER_TOLERANCE,
     DIGITAL_GREEKS_MC_PATHS,
     DIGITAL_GREEKS_MC_STDERR_MULTIPLE,
     DIGITAL_IDENTITY_CASES,
@@ -49,6 +51,7 @@ from qpl.cases import (
     DIGITAL_TREE_ORDER_CASES,
     DigitalBSCase,
 )
+from qpl.engines.fourier import FourierConfig
 from qpl.engines.mc.pricers import MCConfig
 from qpl.engines.pde.pricers import PDEConfig
 from qpl.engines.tree import TreeConfig
@@ -250,7 +253,7 @@ def test_pde_order_rows(case: DigitalBSCase) -> None:
     "case", DIGITAL_CROSS_ENGINE_CASES, ids=_ids(DIGITAL_CROSS_ENGINE_CASES)
 )
 def test_cross_engine_agreement(case: DigitalBSCase) -> None:
-    """Four independent routes to the same digital price.
+    """Six routes to the same digital price; four of them independent.
 
     Evidence class: INDEPENDENT_ENGINE for the tree and PDE legs (different
     numerical methods reaching the same value), STATISTICAL for the Monte
@@ -269,11 +272,23 @@ def test_cross_engine_agreement(case: DigitalBSCase) -> None:
     - Monte Carlo at 200_000 paths, seed 123: 4 standard errors. Measured |z|
       of 1.218, 1.644 and 0.495.
 
+    - Fourier, COS and Gil-Pelaez (Slice 14): `DIGITAL_FOURIER_TOLERANCE`
+      (1e-14). Measured errors 2.220e-16 / 2.776e-16 / 0.0 (COS) and 0.0 /
+      1.110e-16 / 0.0 (Gil-Pelaez). Like the vanilla case's transform leg these
+      are CLOSED_FORM rather than INDEPENDENT_ENGINE -- the same law, a
+      different pairing with the payoff.
+
     The gap between the two *deterministic* numerical engines is three decimal
     orders of magnitude, and that is the finding rather than an embarrassment:
     both are order 2, but the lattice's error constant is tiny here because the
     digital price is exactly the binomial tail the Leisen-Reimer construction
     is built to match, while the grid still has to represent a step function.
+
+    The transform legs widen that reading by another eleven orders. A jump in
+    the payoff is what costs the grid a full order of convergence (Slice 6) and
+    what makes the lattice's terminal-node placement matter; it costs a method
+    that expands the *density* nothing at all, because the discontinuity lives
+    entirely inside a payoff coefficient that is evaluated in closed form.
     """
     assert case.row.evidence is EvidenceClass.INDEPENDENT_ENGINE
 
@@ -292,6 +307,19 @@ def test_cross_engine_agreement(case: DigitalBSCase) -> None:
 
     pde = price(option, model, market, method="pde", cfg=_pde_cfg(DIGITAL_PDE_N)).value
     assert pde == pytest.approx(exact, abs=DIGITAL_PDE_TOLERANCE)
+
+    for method in DIGITAL_FOURIER_METHODS:
+        fourier = price(
+            option,
+            model,
+            market,
+            method="fourier",
+            cfg=FourierConfig(method=method),
+        ).value
+        assert fourier == pytest.approx(exact, abs=DIGITAL_FOURIER_TOLERANCE), method
+    # The jump costs the grid a full order and the transform methods nothing:
+    # assert the gap rather than leaving it to the two tolerances.
+    assert abs(fourier - exact) * 1e06 < abs(pde - exact)
 
     mc = price(
         option,

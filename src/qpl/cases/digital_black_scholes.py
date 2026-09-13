@@ -42,6 +42,8 @@ from ..validation import BenchmarkRow, EvidenceClass
 __all__ = [
     "ALL_DIGITAL_CASES",
     "DIGITAL_CROSS_ENGINE_CASES",
+    "DIGITAL_FOURIER_METHODS",
+    "DIGITAL_FOURIER_TOLERANCE",
     "DIGITAL_GREEKS_MC_PATHS",
     "DIGITAL_GREEKS_MC_STDERR_MULTIPLE",
     "DIGITAL_IDENTITY_CASES",
@@ -546,6 +548,25 @@ is identically zero) and `"bump"` is available but is *not* held to this budget
 that cross the strike when the maturity moves by 1e-04 are too rare to appear
 in a 200 000-path sample. See `tests/test_digital_mc.py`."""
 
+DIGITAL_FOURIER_METHODS: tuple[str, ...] = ("cos", "gil_pelaez")
+"""The two transform methods that price a cash-or-nothing payoff (Slice 14).
+
+`"cos"` has its own payoff coefficient for an indicator (`cash * psi_k`), and
+`"gil_pelaez"` gets the digital for free because `Pi_2` *is* the exercise
+probability. `"carr_madan"` and `"lewis"` transform the call price rather than
+the law and are refused."""
+
+DIGITAL_FOURIER_TOLERANCE = 1e-14
+"""Absolute tolerance for the transform legs of the digital cross-engine test.
+
+Measured errors over the three points: 2.220e-16, 2.776e-16 and 0.0 for COS;
+0.0, 1.110e-16 and 0.0 for Gil-Pelaez. This is the number worth reading next to
+`DIGITAL_PDE_TOLERANCE` (8e-05) and `DIGITAL_TREE_LR_TOLERANCE` (2e-08): the
+payoff's jump costs the finite-difference scheme a full order of convergence
+(Slice 6) and costs a transform method **nothing**, because what gets expanded
+is the density and the discontinuous part enters through an exact integral."""
+
+
 _CROSS_ENGINE_SOURCE = (
     "derived in-repo: qpl.engines.analytic.digital, qpl.engines.tree.digital "
     "(Leisen-Reimer), qpl.engines.pde.digital (midpoint-aligned, Rannacher) "
@@ -558,8 +579,9 @@ DIGITAL_CROSS_ENGINE_CASES: tuple[DigitalBSCase, ...] = tuple(
         row=BenchmarkRow(
             id=f"digital_cross_engine_{name}",
             description=(
-                "analytic, Leisen-Reimer tree, remedied PDE grid and Monte "
-                f"Carlo agree on the digital price at {name}"
+                "analytic, Leisen-Reimer tree, remedied PDE grid, Monte "
+                f"Carlo and the two transform methods agree on the digital "
+                f"price at {name}"
             ),
             expected=0.0,
             tolerance=DIGITAL_PDE_TOLERANCE,
@@ -573,9 +595,12 @@ DIGITAL_CROSS_ENGINE_CASES: tuple[DigitalBSCase, ...] = tuple(
                 f"{DIGITAL_PDE_TOLERANCE:g} (worst measured 2.331e-05); Monte "
                 f"Carlo at {DIGITAL_MC_PATHS} paths, "
                 f"{DIGITAL_MC_STDERR_MULTIPLE:g} standard errors, which is "
-                "STATISTICAL rather than an accuracy claim. The row's own "
-                "tolerance is the loosest deterministic leg's, since that "
-                "bounds the gap between any two of them."
+                "STATISTICAL rather than an accuracy claim; the two transform "
+                f"legs at {DIGITAL_FOURIER_TOLERANCE:g} (worst measured "
+                "2.776e-16), which is the floating-point floor and not a "
+                "discretisation error at all. The row's own tolerance is the "
+                "loosest deterministic leg's, since that bounds the gap "
+                "between any two of them."
             ),
         ),
         specs=(spec,),

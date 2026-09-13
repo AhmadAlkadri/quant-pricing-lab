@@ -26,6 +26,10 @@ from ..validation import BenchmarkRow, EvidenceClass
 
 __all__ = [
     "ALL_CASES",
+    "FOURIER_KNOWN_VALUE_METHOD",
+    "FOURIER_KNOWN_VALUE_N_TERMS",
+    "FOURIER_KNOWN_VALUE_TOLERANCE",
+    "FOURIER_KNOWN_VALUE_TRUNCATION_L",
     "KNOWN_VALUE_CASES",
     "LIMIT_CASES",
     "MC_GREEKS_ESTIMATORS",
@@ -290,6 +294,50 @@ KNOWN_VALUE_CASES: tuple[EuropeanBSCase, ...] = (
         specs=(REFERENCE_ATM_PUT,),
     ),
 )
+
+
+# --------------------------------------------------------------------------
+# (iv) The transform methods (Slice 14).
+#
+# A fifth route to the same two numbers, and the one that is *least* like the
+# other four: it never discretises the dynamics at all. The lattice, the grid
+# and the simulation each approximate how the spot moves; a transform method
+# takes the terminal law as given by the model's characteristic function and
+# approximates only the pairing of that law with the payoff.
+#
+# Which makes the evidence class worth being careful about. The Fourier leg of
+# the cross-engine test is CLOSED_FORM, not INDEPENDENT_ENGINE: the
+# characteristic function it reads is the Gaussian transform of the same
+# lognormal law the closed form integrates in the first place, so agreement
+# says the payoff transform and the closed-form integral agree -- which is
+# worth pinning, and is not a second opinion about the model.
+# --------------------------------------------------------------------------
+
+FOURIER_KNOWN_VALUE_METHOD = "cos"
+"""Which transform method prices the known-value rows in the cross-engine test.
+
+The Fourier-cosine expansion, because it is the only one of the four that
+computes a *put* from its own payoff coefficients rather than from the call by
+parity, so it is the only one whose agreement on both rows carries information
+about both."""
+
+FOURIER_KNOWN_VALUE_N_TERMS = 256
+FOURIER_KNOWN_VALUE_TRUNCATION_L = 10.0
+"""Package defaults. Both rows are at the floating-point floor well before this
+(the error stops improving at `n_terms = 48`), so the settings are the defaults
+rather than anything tuned for these two points."""
+
+FOURIER_KNOWN_VALUE_TOLERANCE = 1e-13
+"""Absolute tolerance for the transform leg of the cross-engine test.
+
+Measured errors at the two reference rows: -2.665e-14 (call) and -2.665e-15
+(put) for COS; +1.954e-14 / +1.421e-14 for Carr-Madan by direct quadrature;
+-1.421e-14 / -1.421e-14 for Lewis; exactly zero for Gil-Pelaez. The tolerance
+keeps a factor of about four over the worst of those. It is **four orders of
+magnitude tighter than the order-2 Leisen-Reimer leg** at 2001 lattice steps
+and nine tighter than the CRR leg at 2000, which is the comparison the leg
+exists to make: a method that does not discretise the dynamics has no
+discretisation error to converge away."""
 
 
 # --------------------------------------------------------------------------

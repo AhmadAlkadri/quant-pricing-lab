@@ -14,6 +14,10 @@ from itertools import pairwise
 import pytest
 
 from qpl.cases import (
+    FOURIER_KNOWN_VALUE_METHOD,
+    FOURIER_KNOWN_VALUE_N_TERMS,
+    FOURIER_KNOWN_VALUE_TOLERANCE,
+    FOURIER_KNOWN_VALUE_TRUNCATION_L,
     KNOWN_VALUE_CASES,
     LIMIT_CASES,
     MC_CROSS_ENGINE_DRAWS,
@@ -43,6 +47,7 @@ from qpl.cases import (
     EuropeanBSCase,
     parity_residual,
 )
+from qpl.engines.fourier import FourierConfig
 from qpl.engines.mc.pricers import MCConfig
 from qpl.engines.pde.pricers import PDEConfig
 from qpl.engines.tree import TreeConfig
@@ -107,7 +112,7 @@ def test_monotonicity_rows(case: EuropeanBSCase) -> None:
 
 @pytest.mark.parametrize("case", KNOWN_VALUE_CASES, ids=_ids(KNOWN_VALUE_CASES))
 def test_cross_engine_agreement_on_known_values(case: EuropeanBSCase) -> None:
-    """Five independent routes to the same number.
+    """Six routes to the same number, and only four of them are independent.
 
     Evidence class: INDEPENDENT_ENGINE for the PDE leg (a different numerical
     method reaching the same value), STATISTICAL for the Monte Carlo leg (the
@@ -153,6 +158,18 @@ def test_cross_engine_agreement_on_known_values(case: EuropeanBSCase) -> None:
       a docstring: at essentially the same work (2001 steps against 2000) the
       order-2 scheme is 11_000 times closer, and the test below checks the
       ratio, not just the two tolerances.
+    - Fourier, `method="cos"` at the package defaults (Slice 14):
+      `FOURIER_KNOWN_VALUE_TOLERANCE` (1e-13). Measured errors -2.665e-14 and
+      -2.665e-15. This leg is **CLOSED_FORM, not INDEPENDENT_ENGINE**, and the
+      distinction is the point of adding it: the cosine expansion reads the
+      Gaussian characteristic function of the same lognormal law the closed
+      form integrates, so its agreement is evidence that the payoff transform
+      and the closed-form integral agree, and no evidence at all about the
+      model. What it *does* say, and no other leg here can, is that a method
+      which never discretises the dynamics has no discretisation error to
+      converge away: it is four orders of magnitude tighter than the order-2
+      lattice at 2001 steps and nine tighter than the order-1 one at 2000, at a
+      cost of 256 evaluations of a closed-form transform.
     """
     spec = case.spec
     option, model, market = spec.option(), spec.model(), spec.market()
@@ -211,6 +228,22 @@ def test_cross_engine_agreement_on_known_values(case: EuropeanBSCase) -> None:
     # Leisen-Reimer error is measured at 8.85e-08 and the CRR error at
     # 9.998e-04, a factor of 11_000. The floor keeps a factor of about ten.
     assert abs(lr_tree - expected) * 1_000.0 < abs(tree - expected)
+
+    fourier = price(
+        option,
+        model,
+        market,
+        method="fourier",
+        cfg=FourierConfig(
+            method=FOURIER_KNOWN_VALUE_METHOD,
+            n_terms=FOURIER_KNOWN_VALUE_N_TERMS,
+            truncation_l=FOURIER_KNOWN_VALUE_TRUNCATION_L,
+        ),
+    ).value
+    assert fourier == pytest.approx(expected, abs=FOURIER_KNOWN_VALUE_TOLERANCE)
+    # The gap between "no discretisation error" and "order 2 at 2001 steps",
+    # as an assertion rather than two tolerances side by side.
+    assert abs(fourier - expected) * 1_000.0 < abs(lr_tree - expected)
 
 
 def test_every_row_states_its_evidence_and_source() -> None:
