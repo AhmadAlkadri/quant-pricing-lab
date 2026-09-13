@@ -10,9 +10,12 @@ from qpl.exceptions import InvalidInputError
 from qpl.validation import (
     BenchmarkRow,
     ConvergenceFit,
+    ErrorEstimate,
     EvidenceClass,
     fit_convergence_order,
     refinement_errors,
+    strong_error,
+    weak_error,
 )
 
 
@@ -128,3 +131,72 @@ def test_evidence_class_members_are_stable() -> None:
         "STATISTICAL",
         "NEGATIVE_FINDING",
     }
+
+
+# ---------------------------------------------------------------------------
+# strong_error / weak_error
+# ---------------------------------------------------------------------------
+
+
+def test_strong_error_is_the_mean_absolute_gap_with_its_own_stderr() -> None:
+    """EXACT_IDENTITY: the estimator is mean|d| and stderr is std(|d|)/sqrt(N)."""
+    rng = np.random.default_rng(1)
+    reference = rng.normal(size=5_000)
+    approx = reference + rng.normal(size=5_000) * 0.1
+    est = strong_error(approx, reference)
+    gaps = np.abs(approx - reference)
+    assert isinstance(est, ErrorEstimate)
+    assert math.isclose(est.value, float(np.mean(gaps)), rel_tol=1e-12)
+    assert math.isclose(
+        est.stderr, float(np.std(gaps, ddof=1) / math.sqrt(gaps.size)), rel_tol=1e-12
+    )
+    assert est.n_samples == 5_000
+    assert est.z > 0.0
+
+
+def test_weak_error_is_signed_and_coupling_shrinks_its_noise_floor() -> None:
+    """STATISTICAL: the whole reason the coupled form exists.
+
+    The same bias measured two ways on the same sample: differencing against a
+    coupled reference and differencing two means. Both are unbiased; the
+    coupled one has a standard error smaller by the ratio of the spread of the
+    difference to the spread of the sample, which here is about 25x.
+    """
+    rng = np.random.default_rng(2)
+    reference = rng.normal(size=20_000) * 10.0
+    bias = -0.05
+    approx = reference + bias + rng.normal(size=20_000) * 0.4
+
+    coupled = weak_error(approx, reference_values=reference)
+    uncoupled = weak_error(approx, reference_mean=0.0)
+    assert coupled.value < 0.0  # signed, and the sign is the finding
+    assert abs(coupled.value - bias) <= 4.0 * coupled.stderr
+    assert uncoupled.stderr / coupled.stderr > 20.0
+
+
+def test_error_estimate_z_handles_a_zero_stderr() -> None:
+    assert strong_error(np.zeros(4), np.zeros(4)).z == 0.0
+    assert math.isinf(weak_error(np.ones(4), reference_mean=0.0).z)
+
+
+def test_stochastic_error_validation() -> None:
+    with pytest.raises(InvalidInputError):
+        strong_error(np.zeros(4), np.zeros(5))
+    with pytest.raises(InvalidInputError):
+        strong_error(np.zeros(1), np.zeros(1))
+    with pytest.raises(InvalidInputError):
+        strong_error(np.zeros((2, 2)), np.zeros((2, 2)))
+    with pytest.raises(InvalidInputError):
+        strong_error(np.array([1.0, np.nan]), np.zeros(2))
+    with pytest.raises(InvalidInputError):
+        weak_error(np.zeros(4))
+    with pytest.raises(InvalidInputError):
+        weak_error(np.zeros(4), reference_values=np.zeros(4), reference_mean=0.0)
+    with pytest.raises(InvalidInputError):
+        weak_error(np.zeros((2, 2)), reference_mean=0.0)
+    with pytest.raises(InvalidInputError):
+        weak_error(np.zeros(1), reference_mean=0.0)
+    with pytest.raises(InvalidInputError):
+        weak_error(np.array([1.0, np.nan]), reference_mean=0.0)
+    with pytest.raises(InvalidInputError):
+        weak_error(np.zeros(4), reference_mean=float("nan"))
