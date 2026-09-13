@@ -62,6 +62,7 @@ from scipy.integrate import quad
 
 from qpl.engines.analytic.digital import digital_price, greeks_digital as analytic_greeks
 from qpl.engines.pde.digital import digital_payoff_on_grid
+from qpl.engines.pde.grid import SpotGrid
 from qpl.engines.pde.pricers import PDEConfig
 from qpl.exceptions import InvalidInputError
 from qpl.instruments.options import DigitalOption, EuropeanOption
@@ -182,8 +183,9 @@ def test_cell_average_is_the_exact_average_of_the_indicator() -> None:
     put = DigitalOption(kind="put", strike=100.0, expiry=1.0, cash=3.0)
     ds = 400.0 / 37.0  # deliberately not a divisor of the strike
     s_grid = ds * np.arange(38, dtype=float)
+    grid = SpotGrid(s=s_grid, kind="uniform", uniform=True, ds=ds)
 
-    projected = digital_payoff_on_grid(call, s_grid, ds, "cell_average")
+    projected = digital_payoff_on_grid(call, grid, "cell_average")
 
     # Reference: adaptive quadrature of the indicator over each cell, told
     # where the discontinuity is. Shares no code with the closed-form fraction.
@@ -205,7 +207,7 @@ def test_cell_average_is_the_exact_average_of_the_indicator() -> None:
     strictly_inside = np.sum((projected > 1e-12) & (projected < 3.0 - 1e-12))
     assert strictly_inside == 1, projected
 
-    put_projected = digital_payoff_on_grid(put, s_grid, ds, "cell_average")
+    put_projected = digital_payoff_on_grid(put, grid, "cell_average")
     assert np.allclose(projected + put_projected, 3.0, rtol=0.0, atol=1e-15)
 
 

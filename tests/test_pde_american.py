@@ -213,10 +213,11 @@ def _one_step_system(n: int) -> tuple[np.ndarray, ...]:
     real one and not a hand-written stand-in.
     """
     cfg = _cfg(n)
-    s_grid, ds, s_max = _build_grid(100.0, 100.0, cfg)
+    grid = _build_grid(100.0, 100.0, cfg)
+    s_grid, s_max = grid.s, grid.s_max
     v = _payoff("put", 100.0, s_grid)
     dt = 1.0 / n
-    a, b, c = _operator(s_grid[1:-1], ds, 0.20, 0.05, 0.0)
+    a, b, c = _operator(grid, 0.20, 0.05, 0.0)
     lower = -0.5 * dt * a
     diag = 1.0 - 0.5 * dt * b
     upper = -0.5 * dt * c
@@ -288,7 +289,7 @@ def test_projected_psor_matches_a_natural_order_psor_written_out_here(n: int) ->
     """
     lower, diag, upper, rhs, x0, x = _one_step_system(n)
     cfg = _cfg(n)
-    s_grid, _, _ = _build_grid(100.0, 100.0, cfg)
+    s_grid = _build_grid(100.0, 100.0, cfg).s
     obstacle = _payoff("put", 100.0, s_grid)[1:-1]
 
     _psor_sweeps(

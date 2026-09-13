@@ -15,6 +15,13 @@ from ...market.market import Market
 from ...models.black_scholes import BlackScholesModel
 from ..base import GreeksResult, PriceResult
 from ..registry import MethodSpec
+from .grid import (
+    GRID_KINDS,
+    SpotGrid,
+    build_spot_grid,
+    delta_gamma_nodes,
+    operator_coefficients,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .american import PSORConfig
@@ -97,6 +104,36 @@ class PDEConfig:
           Journal of Computational Finance 6(4)). See
           `qpl.engines.pde.digital` for why it is the right discretisation and
           for the measured effect, including the case where it does nothing.
+    grid
+        Where the spot nodes go (Slice 13).
+
+        - `"uniform"` (default): equally spaced nodes, with `strike_alignment`
+          as the only placement control. Bit-for-bit the pre-Slice-13 grid.
+        - `"sinh"`: nodes uniform in `xi(S) = sum_j asinh((S - c_j) / alpha)`,
+          so they cluster within about `alpha` of each critical point `c_j` and
+          thin out beyond. See `qpl.engines.pde.grid` for the mesh, the
+          three-point stencil it needs, and why the scheme stays second order
+          on it even though the second-derivative stencil is only first order
+          pointwise.
+    concentration
+        Dimensionless mesh strength for `grid="sinh"`: the clustering length is
+        `alpha = concentration * (s_max - s_min)`. Large values flatten the
+        mesh toward uniform; small values pile nodes onto the critical points
+        and starve the tails. Read only when `grid="sinh"`.
+    grid_points
+        Explicit critical points for `grid="sinh"`. `None` (the default) lets
+        the engine choose: the strike for a vanilla or a digital, the strike
+        and the barrier for a barrier option. Read only when `grid="sinh"`.
+    barrier_alignment
+        Read **only** by `qpl.engines.pde.barrier`.
+
+        - `"node"` (default): the barrier is a node exactly -- the domain is
+          truncated at it under continuous monitoring, and it is an anchor of
+          the grid under discrete monitoring.
+        - `"none"`: the ordinary `[0, s_max]` grid, with the knock-out applied
+          at whichever nodes lie beyond the barrier. This is the *negative
+          finding* of Slice 13, kept reachable and measured: the effective
+          barrier is then displaced by `O(ds)` and the price is first order.
     psor
         Projected-SOR settings, read **only** by the American engine
         (`qpl.engines.pde.american`). It lives here rather than in a separate
@@ -116,6 +153,10 @@ class PDEConfig:
     time_stepping: Literal["theta", "rannacher"] = "theta"
     greeks_method: Literal["grid", "bump"] = "grid"
     payoff_projection: Literal["none", "cell_average"] = "none"
+    grid: Literal["uniform", "sinh"] = "uniform"
+    concentration: float = 0.05
+    grid_points: tuple[float, ...] | None = None
+    barrier_alignment: Literal["node", "none"] = "node"
     psor: PSORConfig = field(default_factory=_default_psor)
 
 
@@ -228,6 +269,23 @@ def _validate(cfg: PDEConfig) -> None:
         raise InvalidInputError("greeks_method must be 'grid' or 'bump'")
     if cfg.payoff_projection not in {"none", "cell_average"}:
         raise InvalidInputError("payoff_projection must be 'none' or 'cell_average'")
+    if cfg.grid not in GRID_KINDS:
+        raise InvalidInputError(
+            "grid must be one of " + ", ".join(repr(k) for k in GRID_KINDS)
+        )
+    if not math.isfinite(cfg.concentration) or cfg.concentration <= 0.0:
+        raise InvalidInputError("concentration must be finite and > 0")
+    if cfg.grid_points is not None:
+        points = tuple(cfg.grid_points)
+        if not points:
+            raise InvalidInputError(
+                "grid_points must be None or a non-empty tuple of levels"
+            )
+        for point in points:
+            if not math.isfinite(point) or point <= 0.0:
+                raise InvalidInputError("grid_points must be finite and > 0")
+    if cfg.barrier_alignment not in {"node", "none"}:
+        raise InvalidInputError("barrier_alignment must be 'node' or 'none'")
 
 
 def _time_levels(t: float, cfg: PDEConfig) -> list[tuple[float, float, float, float]]:
@@ -254,34 +312,21 @@ def _time_levels(t: float, cfg: PDEConfig) -> list[tuple[float, float, float, fl
     return steps
 
 
-def _build_grid(strike: float, spot: float, cfg: PDEConfig) -> tuple[np.ndarray, float, float]:
-    """Return `(s_grid, ds, s_max)` for this configuration.
+def _build_grid(strike: float, spot: float, cfg: PDEConfig) -> SpotGrid:
+    """The spot grid for a vanilla-shaped problem on `[0, s_max]`.
 
-    Extracted verbatim from `_solve_grid` so that the American engine in
-    `qpl.engines.pde.american` builds *the same* grid rather than a second copy
-    of the alignment arithmetic. The expressions and their evaluation order are
-    unchanged, which is what keeps European prices bit-for-bit.
+    A thin wrapper over `qpl.engines.pde.grid.build_spot_grid`, which is where
+    the mesh construction lives so that the vanilla, American, digital and
+    barrier engines share one copy of it. With the default `grid="uniform"`
+    this is the pre-Slice-13 arithmetic evaluated in the pre-Slice-13 order,
+    which is what keeps every existing PDE output bit-for-bit.
     """
-    s_max = cfg.s_max if cfg.s_max is not None else cfg.s_max_multiplier * spot
-    ds = s_max / cfg.n_s
-
-    if cfg.strike_alignment == "midpoint":
-        # Nearest half-integer node position for the strike; see `price_european`.
-        j = max(round(strike / ds - 0.5), 0)
-        ds = strike / (j + 0.5)
-        s_max = ds * cfg.n_s
-
-    if not (0.0 < strike < s_max):
-        raise InvalidInputError(
-            f"strike {strike} must lie strictly inside the spot grid (0, {s_max})"
-        )
-
-    if cfg.strike_alignment == "midpoint":
-        # Build from ds directly so the half-integer node position is exact.
-        s_grid = ds * np.arange(cfg.n_s + 1, dtype=float)
-    else:
-        s_grid = np.linspace(0.0, s_max, cfg.n_s + 1)
-    return s_grid, ds, s_max
+    return build_spot_grid(
+        strike=strike,
+        spot=spot,
+        cfg=cfg,
+        concentration_points=(float(strike),),
+    )
 
 
 def _payoff(kind: str, strike: float, s: np.ndarray) -> np.ndarray:
@@ -308,28 +353,25 @@ def _dirichlet(
 
 
 def _operator(
-    s_inner: np.ndarray, ds: float, sigma: float, r: float, q: float
+    grid: SpotGrid, sigma: float, r: float, q: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Second-order central discretisation of the Black-Scholes operator.
+    """Three-point discretisation of the Black-Scholes operator on `grid`.
 
     Returns the sub/diagonal/super coefficients `(a, b, c)` of
 
         L V = 1/2 sigma^2 S^2 V_SS + (r - q) S V_S - r V
 
     at the interior nodes, so that `(L V)_i = a_i V_{i-1} + b_i V_i + c_i V_{i+1}`.
-    `b` is a scalar `-r` plus an array term; numpy broadcasts it to full length.
 
-    This is the single definition of the operator in this package. The European
-    theta scheme below and the American PSOR solve in
-    `qpl.engines.pde.american` both call it, so there is no second copy to
-    drift.
+    This is the single definition of the operator in this package: the European
+    theta scheme below, the American PSOR solve in `qpl.engines.pde.american`
+    and the barrier engine in `qpl.engines.pde.barrier` all call it, so there
+    is no second copy to drift. It branches once, on whether the grid is
+    uniform -- the uniform arm is the pre-Slice-13 expression in the
+    pre-Slice-13 order (bit-for-bit), the non-uniform arm is the general
+    three-point stencil derived in `qpl.engines.pde.grid`.
     """
-    diffusion = 0.5 * sigma * sigma * (s_inner**2) / (ds * ds)
-    drift = (r - q) * s_inner / (2.0 * ds)
-    a = diffusion - drift
-    b = -(sigma * sigma) * (s_inner**2) / (ds * ds) - r
-    c = diffusion + drift
-    return a, b, c
+    return operator_coefficients(grid, sigma, r, q)
 
 
 @dataclass(frozen=True)
@@ -343,13 +385,22 @@ class _GridSolution:
     a cross-check on the theta it reports.
     """
 
-    s_grid: np.ndarray
+    grid: SpotGrid
     v: np.ndarray
     v_prev: np.ndarray
     dt_last: float
-    ds: float
     price: float
     meta: dict[str, Any]
+
+    @property
+    def s_grid(self) -> np.ndarray:
+        """The node positions; kept as a name because every reader wants it."""
+        return self.grid.s
+
+    @property
+    def ds(self) -> float:
+        """Uniform spacing, or the mean spacing on a non-uniform grid."""
+        return self.grid.ds
 
 
 def _solve_grid(
@@ -358,7 +409,7 @@ def _solve_grid(
     market: Market,
     cfg: PDEConfig,
     *,
-    payoff: Callable[[np.ndarray, float], np.ndarray] | None = None,
+    payoff: Callable[[SpotGrid], np.ndarray] | None = None,
     dirichlet: Callable[[float, float], tuple[float, float]] | None = None,
 ) -> _GridSolution:
     """March the grid from the payoff at `tau = 0` to `tau = T`.
@@ -383,16 +434,17 @@ def _solve_grid(
 
     n_s = cfg.n_s
     n_t = cfg.n_t
-    s_grid, ds, s_max = _build_grid(k, s0, cfg)
+    grid = _build_grid(k, s0, cfg)
+    s_grid = grid.s
+    ds = grid.ds
+    s_max = grid.s_max
 
     steps = _time_levels(t, cfg)
 
     if payoff is None:
         v = _payoff(option.kind, k, s_grid)
     else:
-        v = payoff(s_grid, ds)
-
-    s_inner = s_grid[1:-1]
+        v = payoff(grid)
 
     n_steps = len(steps)
     v_prev = v.copy()
@@ -417,7 +469,7 @@ def _solve_grid(
         r = market.rate(tau_np1)
         q = market.dividend_yield(tau_np1)
 
-        a, b, c = _operator(s_inner, ds, sigma, r, q)
+        a, b, c = _operator(grid, sigma, r, q)
 
         lower = -theta_step * dt * a
         diag = 1.0 - theta_step * dt * b
@@ -466,12 +518,12 @@ def _solve_grid(
         ),
         "n_steps_taken": len(steps),
     }
+    meta.update(grid.meta)
     return _GridSolution(
-        s_grid=s_grid,
+        grid=grid,
         v=v,
         v_prev=v_prev,
         dt_last=dt_last,
-        ds=ds,
         price=price,
         meta=meta,
     )
@@ -684,14 +736,14 @@ def _greeks_from_grid(
     sol = solve(option, model, market, cfg)
     s0 = market.spot
     v = sol.v
-    ds = sol.ds
 
-    # Second-order central stencils at every interior node. Index `j` of these
-    # two arrays is grid node `j + 1`.
-    delta_nodes = (v[2:] - v[:-2]) / (2.0 * ds)
-    gamma_nodes = (v[2:] - 2.0 * v[1:-1] + v[:-2]) / (ds * ds)
+    # Three-point stencils at every interior node. Index `j` of these two
+    # arrays is grid node `j + 1`. On a uniform grid these are the
+    # pre-Slice-13 central differences, unchanged; on a non-uniform grid they
+    # are the general weights derived in `qpl.engines.pde.grid`.
+    delta_nodes, gamma_nodes = delta_gamma_nodes(sol.grid, v)
 
-    i, w = _interpolation_bracket(sol.s_grid, s0, cfg.n_s)
+    i, w = _interpolation_bracket(sol.s_grid, s0, sol.grid.n_s)
     spot_is_node = w == 0.0 or w == 1.0
 
     delta = _interp_nodal(delta_nodes, i - 1, w)

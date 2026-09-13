@@ -363,7 +363,10 @@ def _solve_grid_american(
     kind = option.kind
     psor = cfg.psor
 
-    s_grid, ds, s_max = _build_grid(k, s0, cfg)
+    grid = _build_grid(k, s0, cfg)
+    s_grid = grid.s
+    ds = grid.ds
+    s_max = grid.s_max
     payoff = _payoff(kind, k, s_grid)
     obstacle = payoff[1:-1]
     floor = _INTRINSIC_FLOOR_REL * k
@@ -387,7 +390,6 @@ def _solve_grid_american(
     min_slack = math.inf
     min_residual = math.inf
 
-    s_inner = s_grid[1:-1]
     v_prev = v.copy()
     dt_last = steps[-1][2]
 
@@ -410,7 +412,7 @@ def _solve_grid_american(
 
         r = market.rate(tau_np1)
         q = market.dividend_yield(tau_np1)
-        a, b, c = _operator(s_inner, ds, sigma, r, q)
+        a, b, c = _operator(grid, sigma, r, q)
 
         lower = -theta_step * dt * a
         diag = 1.0 - theta_step * dt * b
@@ -531,12 +533,12 @@ def _solve_grid_american(
         "early_exercise_node_count": early_exercise_nodes,
         "exercise_time_level_count": int(np.count_nonzero(~np.isnan(boundary_by_tau[1:]))),
     }
+    meta.update(grid.meta)
     return _GridSolution(
-        s_grid=s_grid,
+        grid=grid,
         v=v,
         v_prev=v_prev,
         dt_last=dt_last,
-        ds=ds,
         price=price,
         meta=meta,
     )
@@ -714,12 +716,12 @@ def greeks_american(
         # bias and three differently aligned grids), plus NaN vega/theta/rho.
         return _greeks_by_bump(option, model, market, cfg, price_fn=price_american)
 
-    s_grid, _, _ = _build_grid(option.strike, market.spot, cfg)
+    grid = _build_grid(option.strike, market.spot, cfg)
     return _greeks_from_grid(
         option,
         model,
         market,
         cfg,
         solve=_solve_grid_american,
-        obstacle=_payoff(option.kind, option.strike, s_grid),
+        obstacle=_payoff(option.kind, option.strike, grid.s),
     )

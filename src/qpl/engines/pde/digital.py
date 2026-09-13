@@ -78,6 +78,7 @@ from ...instruments.payoffs import digital_payoff
 from ...market.market import Market
 from ...models.black_scholes import BlackScholesModel
 from ..base import GreeksResult, PriceResult
+from .grid import SpotGrid
 from .pricers import (
     PDEConfig,
     _greeks_by_bump,
@@ -91,14 +92,15 @@ __all__ = ["greeks_digital", "price_digital"]
 
 
 def digital_payoff_on_grid(
-    option: DigitalOption, s_grid: np.ndarray, ds: float, projection: str
+    option: DigitalOption, grid: SpotGrid, projection: str
 ) -> np.ndarray:
-    """The digital's terminal condition on a uniform spot grid.
+    """The digital's terminal condition on a spot grid.
 
     With `projection="none"` this is `digital_payoff` evaluated at the nodes.
 
     With `projection="cell_average"` node `i` carries the mean of the payoff
-    over `[S_i - ds/2, S_i + ds/2]`. For a call that mean is
+    over its cell. On a **uniform** grid that cell is `[S_i - ds/2, S_i + ds/2]`
+    and the mean is, for a call,
 
         cash * clip((S_i + ds/2 - K) / ds, 0, 1),
 
@@ -108,15 +110,33 @@ def digital_payoff_on_grid(
     to `cash` at every node, so the projection preserves the static
     replication identity exactly.
 
+    On a **non-uniform** grid the cell is `[(S_{i-1} + S_i)/2, (S_i + S_{i+1})/2]`
+    and the same fraction is taken over that width; the end nodes' cells are
+    completed by reflecting their single face. Both expressions are written
+    out separately rather than unified, because the uniform one is the
+    pre-Slice-13 arithmetic and `S_i - ds/2` is not bit-for-bit
+    `(S_{i-1} + S_i)/2` even when the two are equal in exact arithmetic.
+
     The two end nodes are overwritten by the Dirichlet data at the first time
-    step, so their cells extending past `[0, s_max]` does not matter.
+    step, so their cells extending past the domain does not matter.
     """
+    s_grid = grid.s
     if projection == "cell_average":
-        half = 0.5 * ds
-        if option.kind == "call":
-            fraction = (s_grid + half - option.strike) / ds
+        if grid.uniform:
+            ds = grid.ds
+            half = 0.5 * ds
+            lo = s_grid - half
+            hi = s_grid + half
+            width = ds
         else:
-            fraction = (option.strike - (s_grid - half)) / ds
+            faces = grid.cell_faces
+            lo = np.concatenate([[2.0 * s_grid[0] - faces[0]], faces])
+            hi = np.concatenate([faces, [2.0 * s_grid[-1] - faces[-1]]])
+            width = hi - lo
+        if option.kind == "call":
+            fraction = (hi - option.strike) / width
+        else:
+            fraction = (option.strike - lo) / width
         # Clip the *fraction* rather than the overlap length: dividing first
         # and bounding second guarantees the result lies in [0, cash] exactly,
         # where `clip(overlap, 0, ds) / ds` can round to one ulp above 1.
@@ -156,8 +176,8 @@ def _solve_digital_grid(
         model,
         market,
         cfg,
-        payoff=lambda s_grid, ds: digital_payoff_on_grid(
-            option, s_grid, ds, cfg.payoff_projection
+        payoff=lambda grid: digital_payoff_on_grid(
+            option, grid, cfg.payoff_projection
         ),
         dirichlet=_dirichlet(option),
     )
