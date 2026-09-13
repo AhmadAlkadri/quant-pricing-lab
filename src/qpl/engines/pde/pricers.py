@@ -82,6 +82,21 @@ class PDEConfig:
           and `S(1-h)` with `h = 1%`, differenced through the cubic spline, and
           NaN for vega, theta and rho. Kept, named, and measured against
           `"grid"`; see `greeks_european` for where it is worse and why.
+    payoff_projection
+        How the terminal condition is placed on the grid. Read **only** by the
+        digital engine (`qpl.engines.pde.digital`); the vanilla and American
+        payoffs are sampled at the nodes as before, whatever this says.
+
+        - `"none"` (default): the payoff is evaluated at each node.
+        - `"cell_average"`: each node carries the *average* of the payoff over
+          its cell `[S_i - ds/2, S_i + ds/2]` instead of its point value. For a
+          step function that average is exact and cheap -- the fraction of the
+          cell lying in the money -- and it is the standard remedy for a
+          discontinuous terminal condition (Pooley, Forsyth and Vetzal (2003),
+          "Convergence remedies for non-smooth payoffs in option pricing",
+          Journal of Computational Finance 6(4)). See
+          `qpl.engines.pde.digital` for why it is the right discretisation and
+          for the measured effect, including the case where it does nothing.
     psor
         Projected-SOR settings, read **only** by the American engine
         (`qpl.engines.pde.american`). It lives here rather than in a separate
@@ -100,6 +115,7 @@ class PDEConfig:
     strike_alignment: Literal["none", "midpoint"] = "none"
     time_stepping: Literal["theta", "rannacher"] = "theta"
     greeks_method: Literal["grid", "bump"] = "grid"
+    payoff_projection: Literal["none", "cell_average"] = "none"
     psor: PSORConfig = field(default_factory=_default_psor)
 
 
@@ -210,6 +226,8 @@ def _validate(cfg: PDEConfig) -> None:
         )
     if cfg.greeks_method not in {"grid", "bump"}:
         raise InvalidInputError("greeks_method must be 'grid' or 'bump'")
+    if cfg.payoff_projection not in {"none", "cell_average"}:
+        raise InvalidInputError("payoff_projection must be 'none' or 'cell_average'")
 
 
 def _time_levels(t: float, cfg: PDEConfig) -> list[tuple[float, float, float, float]]:
@@ -339,6 +357,9 @@ def _solve_grid(
     model: BlackScholesModel,
     market: Market,
     cfg: PDEConfig,
+    *,
+    payoff: Callable[[np.ndarray, float], np.ndarray] | None = None,
+    dirichlet: Callable[[float, float], tuple[float, float]] | None = None,
 ) -> _GridSolution:
     """March the grid from the payoff at `tau = 0` to `tau = T`.
 
@@ -346,6 +367,14 @@ def _solve_grid(
     (`T = 0`, `sigma = 0`) applies; `price_european` handles both before
     calling here. The arithmetic is exactly what `price_european` used to do
     inline, so prices are unchanged.
+
+    `payoff` maps `(s_grid, ds)` to the terminal values and `dirichlet` maps a
+    pair of discount factors `(df_r, df_q)` at one `tau` to the values at
+    `S = 0` and `S = s_max`. Both default to the vanilla ones built from
+    `option`, and exist so that `qpl.engines.pde.digital` marches *this* grid
+    with *this* operator rather than a second copy of them: a discontinuous
+    payoff changes the terminal data and the boundary data, and nothing else
+    in the time march.
     """
     s0 = market.spot
     k = option.strike
@@ -358,7 +387,10 @@ def _solve_grid(
 
     steps = _time_levels(t, cfg)
 
-    v = _payoff(option.kind, k, s_grid)
+    if payoff is None:
+        v = _payoff(option.kind, k, s_grid)
+    else:
+        v = payoff(s_grid, ds)
 
     s_inner = s_grid[1:-1]
 
@@ -372,8 +404,12 @@ def _solve_grid(
         df_r_np1 = market.df_r(tau_np1)
         df_q_np1 = market.df_q(tau_np1)
 
-        v0_n, vmax_n = _dirichlet(option.kind, k, s_max, df_r_n, df_q_n)
-        v0_np1, vmax_np1 = _dirichlet(option.kind, k, s_max, df_r_np1, df_q_np1)
+        if dirichlet is None:
+            v0_n, vmax_n = _dirichlet(option.kind, k, s_max, df_r_n, df_q_n)
+            v0_np1, vmax_np1 = _dirichlet(option.kind, k, s_max, df_r_np1, df_q_np1)
+        else:
+            v0_n, vmax_n = dirichlet(df_r_n, df_q_n)
+            v0_np1, vmax_np1 = dirichlet(df_r_np1, df_q_np1)
 
         v[0] = v0_n
         v[-1] = vmax_n
@@ -424,6 +460,7 @@ def _solve_grid(
         "ds": ds,
         "strike_alignment": cfg.strike_alignment,
         "time_stepping": cfg.time_stepping,
+        "payoff_projection": cfg.payoff_projection,
         "implicit_startup_steps": (
             RANNACHER_STARTUP_STEPS if cfg.time_stepping == "rannacher" else 0
         ),
