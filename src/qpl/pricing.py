@@ -17,6 +17,10 @@ from .engines.analytic.black_scholes import (
     greeks_european as greeks_european_analytic,
     price_european as price_european_analytic,
 )
+from .engines.analytic.digital import (
+    greeks_digital as greeks_digital_analytic,
+    price_digital as price_digital_analytic,
+)
 from .engines.base import GreeksResult, PriceResult
 from .engines.mc.pricers import (
     MC_METHOD_SPEC,
@@ -47,7 +51,7 @@ from .engines.tree.pricers import (
     greeks_european as greeks_european_tree,
     price_european as price_european_tree,
 )
-from .instruments.options import AmericanOption, EuropeanOption
+from .instruments.options import AmericanOption, DigitalOption, EuropeanOption
 from .models.black_scholes import BlackScholesModel
 
 Method = Literal["analytic", "mc", "pde", "tree"]
@@ -104,6 +108,17 @@ def _register_builtin_engines() -> None:
         spec=PDE_METHOD_SPEC,
         price=price_american_pde,
         greeks=greeks_american_pde,
+    )
+    # Slice 6: the cash-or-nothing digital, a *discontinuous* payoff rather
+    # than a different exercise rule. Same pattern again -- a new instrument
+    # type is a new set of keys, not a new method string, and an engine that
+    # has nothing sensible to do with a jump simply does not register.
+    digital = {"instrument_type": DigitalOption, "model_type": BlackScholesModel}
+    register(
+        **digital,
+        spec=ANALYTIC_METHOD_SPEC,
+        price=price_digital_analytic,
+        greeks=greeks_digital_analytic,
     )
 
 
