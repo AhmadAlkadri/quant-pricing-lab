@@ -297,6 +297,10 @@ def solve_leg(
         upper=domain.upper,
         node_points=domain.node_points,
         concentration_points=(float(k), float(option.barrier)),
+        # A knock-out truncated at its barrier can have its strike outside the
+        # live region -- a down-and-out call with K < H pays `S - K` on all of
+        # `[H, s_max]` and has no kink there at all.
+        require_strike_inside=not domain.truncated,
     )
     s = grid.s
     n_s = grid.n_s

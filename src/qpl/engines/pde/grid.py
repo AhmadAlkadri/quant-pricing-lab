@@ -433,6 +433,7 @@ def build_spot_grid(
     upper: float | None = None,
     node_points: tuple[float, ...] = (),
     concentration_points: tuple[float, ...] = (),
+    require_strike_inside: bool = True,
 ) -> SpotGrid:
     """Build the spot grid this configuration and this contract ask for.
 
@@ -457,6 +458,15 @@ def build_spot_grid(
     concentration_points
         Where a `sinh` grid piles its nodes, when `cfg.grid_points` is `None`.
         Ignored entirely on a uniform grid.
+    require_strike_inside
+        Whether the strike must lie inside the domain. True for every
+        vanilla-shaped problem, where a strike outside the grid means the
+        payoff was discretised wrongly. **False for a knock-out whose domain is
+        truncated at its barrier**: a down-and-out call with `K < H` has no kink
+        on `[H, s_max]` at all -- its payoff there is `S - K` everywhere -- and
+        an up-and-out put with `K > H` is the mirror. Those are real contracts
+        (two of the three published Haug rows are one of them) and refusing them
+        would be refusing the easy case.
 
     Returns
     -------
@@ -583,18 +593,24 @@ def build_spot_grid(
             "spot grid is not strictly increasing: reduce n_s or raise "
             "PDEConfig.concentration"
         )
-    if not (s_grid[0] <= strike <= s_grid[-1]):
+    strike_inside = bool(s_grid[0] <= strike <= s_grid[-1])
+    if require_strike_inside and not strike_inside:
         raise InvalidInputError(
             f"strike {strike} must lie inside the spot grid "
             f"({s_grid[0]}, {s_grid[-1]})"
         )
 
     spacings = np.diff(s_grid)
-    cell = int(np.searchsorted(s_grid, strike, side="right")) - 1
-    cell = min(max(cell, 0), n_s - 1)
-    strike_offset = abs(
-        0.5 * (s_grid[cell] + s_grid[cell + 1]) - strike
-    ) / spacings[cell]
+    if strike_inside:
+        cell = int(np.searchsorted(s_grid, strike, side="right")) - 1
+        cell = min(max(cell, 0), n_s - 1)
+        strike_offset = abs(
+            0.5 * (s_grid[cell] + s_grid[cell + 1]) - strike
+        ) / spacings[cell]
+    else:
+        # No kink inside the domain, so there is nothing to align and nothing
+        # to report an offset for.
+        strike_offset = math.nan
 
     # A single-segment uniform grid is uniform by construction, and is treated
     # as such so that its operator and its Greek stencils are the legacy ones.
@@ -613,6 +629,7 @@ def build_spot_grid(
         "ds_max": float(spacings.max()),
         "strike_alignment": cfg.strike_alignment,
         "strike_cell_offset": float(strike_offset),
+        "strike_in_domain": strike_inside,
         "grid_node_points": tuple(float(p) for p in node_points),
         "grid_segments": tuple(counts),
     }
