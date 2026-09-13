@@ -22,17 +22,25 @@ import pytest
 from qpl.cases import (
     ALL_AMERICAN_CASES,
     AMERICAN_BRACKETED_LIMIT,
+    AMERICAN_CROSS_ENGINE_CASES,
+    AMERICAN_CROSS_ENGINE_TREE_N_STEPS,
     AMERICAN_IDENTITY_CASES,
     AMERICAN_LR_CASES,
     AMERICAN_LR_LEVELS,
+    AMERICAN_PDE_N,
+    AMERICAN_PDE_STRIKE_ALIGNMENT,
+    AMERICAN_PDE_TIME_STEPPING,
     AMERICAN_PREMIUM_CASES,
     AMERICAN_REFERENCE_CASES,
     AMERICAN_REFERENCE_N_STEPS,
+    AMERICAN_REFERENCE_SPEC,
     LS2001_BERMUDAN_EXERCISES_PER_YEAR,
+    LS2001_BRACKETED_LIMIT,
     LS2001_CASES,
     LS2001_N_STEPS,
     AmericanBSCase,
 )
+from qpl.engines.pde.pricers import PDEConfig
 from qpl.engines.tree import TreeConfig, crr_parameters
 from qpl.pricing import price
 from qpl.validation import EvidenceClass, fit_convergence_order
@@ -352,6 +360,106 @@ def test_american_lr_richardson_negative_finding_row() -> None:
     fit = fit_convergence_order(h, errs)
     assert abs(fit.order - case.row.expected) > case.row.tolerance, fit.order
     assert fit.residual > 0.2, fit.residual
+
+
+# --------------------------------------------------------------------------
+# Three engines, three discretisations
+# --------------------------------------------------------------------------
+
+
+def _pde(case_spec) -> float:
+    """The PSOR finite-difference leg, on the grid the cases layer fixes."""
+    return price(
+        case_spec.option(),
+        case_spec.model(),
+        case_spec.market(),
+        method="pde",
+        cfg=PDEConfig(
+            n_s=AMERICAN_PDE_N,
+            n_t=AMERICAN_PDE_N,
+            strike_alignment=AMERICAN_PDE_STRIKE_ALIGNMENT,  # type: ignore[arg-type]
+            time_stepping=AMERICAN_PDE_TIME_STEPPING,  # type: ignore[arg-type]
+        ),
+    ).value
+
+
+@pytest.mark.parametrize(
+    "case", AMERICAN_CROSS_ENGINE_CASES, ids=_ids(AMERICAN_CROSS_ENGINE_CASES)
+)
+def test_three_engine_agreement_rows(case: AmericanBSCase) -> None:
+    """Evidence class: INDEPENDENT_ENGINE, three ways.
+
+    A binomial lattice with the forward-matching probability, the same lattice
+    with the Peizer-Pratt inversion, and a finite-difference grid that enforces
+    the exercise condition as a linear complementarity problem solved by PSOR.
+    They share the model and nothing else -- not the state space (geometric
+    nodes against a grid uniform in spot), not the time discretisation, not the
+    way early exercise is imposed (a Bellman maximum against a projection
+    inside an iterative solve).
+
+    The row carries the worst permitted pairwise gap and the derivation of it;
+    nothing numeric is chosen here. The test also asserts that the three values
+    are not accidentally equal to a coarse-engine artefact, by checking each
+    against the point's bracketed limit.
+    """
+    spec = case.spec
+    assert case.row.evidence is EvidenceClass.INDEPENDENT_ENGINE
+
+    values = {
+        "pde": _pde(spec),
+        "crr": _american(spec, AMERICAN_CROSS_ENGINE_TREE_N_STEPS),
+        "lr": _american(spec, AMERICAN_CROSS_ENGINE_TREE_N_STEPS, "leisen-reimer"),
+    }
+    gaps = [
+        abs(a - b)
+        for a, b in ((values["pde"], values["crr"]),
+                     (values["pde"], values["lr"]),
+                     (values["crr"], values["lr"]))
+    ]
+    assert max(gaps) <= case.row.expected + case.row.tolerance, (values, gaps)
+
+    limit = (
+        AMERICAN_BRACKETED_LIMIT
+        if spec == AMERICAN_REFERENCE_SPEC
+        else LS2001_BRACKETED_LIMIT
+    )
+    for name, value in values.items():
+        assert abs(value - limit) <= case.row.tolerance, (name, value, limit)
+
+
+def test_the_pde_and_the_crr_lattice_bracket_the_reference_value() -> None:
+    """A free error bar, and the reason the ATM tolerance is what it is.
+
+    The PDE/PSOR sequence approaches `AMERICAN_BRACKETED_LIMIT` from **below**
+    (measured order 1.85, every error negative --
+    `tests/test_pde_american_convergence.py`) and the CRR lattice at odd `n`
+    from **above** (Slice 2). So at the settings the cross-engine row uses the
+    two straddle the value, and the distance between them is an upper bound on
+    either one's error rather than a cancellation.
+
+    Measured: PDE 6.08995244 (-4.240e-04) and CRR 6.09055641 (+1.800e-04),
+    Leisen-Reimer 6.09033758 (-3.888e-05) between them.
+    """
+    spec = AMERICAN_REFERENCE_SPEC
+    pde = _pde(spec)
+    crr = _american(spec, AMERICAN_CROSS_ENGINE_TREE_N_STEPS)
+    lr = _american(spec, AMERICAN_CROSS_ENGINE_TREE_N_STEPS, "leisen-reimer")
+
+    assert pde < AMERICAN_BRACKETED_LIMIT < crr
+    assert pde < lr < crr
+
+
+def test_the_longstaff_schwartz_bracketed_limit_is_the_continuous_value() -> None:
+    """`LS2001_BRACKETED_LIMIT` is 4.4867, and it is not the published 4.478.
+
+    The constant is derived in-repo from two lattices at `n = 64000` / `64001`
+    and is used above as the limit the three engines are measured against. It
+    is 8.7e-03 away from the published Table 1 figure, which is the Slice 2
+    negative finding restated as a number: that figure prices a 50-exercise-date
+    Bermudan.
+    """
+    assert LS2001_BRACKETED_LIMIT == pytest.approx(4.4867, abs=1e-4)
+    assert abs(LS2001_BRACKETED_LIMIT - 4.478) == pytest.approx(8.7e-3, abs=5e-5)
 
 
 def test_every_american_row_states_its_evidence_and_source() -> None:

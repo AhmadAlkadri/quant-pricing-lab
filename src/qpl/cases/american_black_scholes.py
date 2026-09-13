@@ -39,15 +39,21 @@ from ..validation import BenchmarkRow, EvidenceClass
 __all__ = [
     "ALL_AMERICAN_CASES",
     "AMERICAN_BRACKETED_LIMIT",
+    "AMERICAN_CROSS_ENGINE_CASES",
+    "AMERICAN_CROSS_ENGINE_TREE_N_STEPS",
     "AMERICAN_IDENTITY_CASES",
     "AMERICAN_LR_CASES",
     "AMERICAN_LR_LEVELS",
+    "AMERICAN_PDE_N",
+    "AMERICAN_PDE_STRIKE_ALIGNMENT",
+    "AMERICAN_PDE_TIME_STEPPING",
     "AMERICAN_PREMIUM_CASES",
     "AMERICAN_REFERENCE_CASES",
     "AMERICAN_REFERENCE_N_STEPS",
     "AMERICAN_REFERENCE_SPEC",
     "AMERICAN_REFERENCE_VALUE",
     "LS2001_BERMUDAN_EXERCISES_PER_YEAR",
+    "LS2001_BRACKETED_LIMIT",
     "LS2001_CASES",
     "LS2001_N_STEPS",
     "LS2001_ROW1",
@@ -595,10 +601,146 @@ AMERICAN_LR_CASES: tuple[AmericanBSCase, ...] = (
 )
 
 
+# --------------------------------------------------------------------------
+# (vi) Three engines, three discretisations, one number.
+#
+# Slice 5 added a second engine that can price early exercise: the
+# finite-difference PSOR solve in `qpl.engines.pde.american`. With the two
+# lattice schemes that makes three genuinely different discretisations of the
+# same free-boundary problem --
+#
+#   - CRR: a recombining binomial lattice, forward-matching probability,
+#     geometric node spacing, converging to the limit from ABOVE at odd `n`;
+#   - Leisen-Reimer: the same lattice shape with the Peizer-Pratt inversion,
+#     converging from BELOW;
+#   - PDE/PSOR: a grid uniform in spot with the strike at a half-integer node
+#     position, Crank-Nicolson with Rannacher start-up, the exercise condition
+#     enforced as a linear complementarity problem at every time step, also
+#     converging from BELOW (measured, `tests/test_pde_american_convergence.py`).
+#
+# Nothing is shared between them except the model. The rows below state that
+# the three agree, and their tolerances are derived from each engine's own
+# measured error rather than chosen.
+#
+# At the ATM reference point, signed errors against `AMERICAN_BRACKETED_LIMIT`
+# at the grids these rows use (PDE `n_s = n_t = 800`, both lattices
+# `n = 8001`):
+#
+#     PDE  -4.240e-04     CRR  +1.800e-04     Leisen-Reimer  -3.888e-05
+#
+# so the worst pairwise gap is PDE-to-CRR, and it is the *sum* of two
+# opposite-signed errors, 6.040e-04, not a cancellation. A tolerance of
+# 1.5e-03 keeps a factor of 2.5. Anything below about 7e-04 would be asserting
+# that the two errors partly cancel; anything above about 4e-03 would pass with
+# one engine an order of magnitude out.
+#
+# At the Longstaff-Schwartz row-1 point the same three grids give
+#
+#     PDE  -1.786e-04     CRR  -1.613e-05     Leisen-Reimer  -5.734e-05
+#
+# against `LS2001_BRACKETED_LIMIT`; worst pairwise gap 1.624e-04, tolerance
+# 5e-04, a factor of 3.1. Note that all three are on the same side here, which
+# is why this point's budget is smaller than the ATM one's despite the same
+# grids: a bracket is a feature of a point, not of an engine.
+# --------------------------------------------------------------------------
+
+AMERICAN_PDE_N = 800
+"""`n_s = n_t` for the PDE leg of the cross-engine rows.
+
+0.29 s per solve. Fine enough that the PDE's error (4.2e-04 at the ATM point)
+is comparable with the lattices' at `n = 8001`, so the comparison is between
+three engines of similar accuracy rather than between two good ones and a
+coarse one.
+"""
+
+AMERICAN_PDE_STRIKE_ALIGNMENT = "midpoint"
+AMERICAN_PDE_TIME_STEPPING = "rannacher"
+"""Grid settings for that leg. Unaligned, the American PDE sequence is not a
+power law at all (log-space residual 0.27 against 0.027); see
+`tests/test_pde_american_convergence.py`."""
+
+AMERICAN_CROSS_ENGINE_TREE_N_STEPS = 8001
+"""Lattice size for both tree legs. Odd, which Leisen-Reimer requires, and the
+same `n` the reference row already pins for CRR."""
+
+LS2001_BRACKETED_LIMIT = 4.4866721476
+"""The converged American put value at `LS2001_ROW1`.
+
+Derived in-repo, not published: the average of the CRR lattice at `n = 64000`
+and the Leisen-Reimer lattice at `n = 64001` (4.4866771455 and 4.4866671497),
+which differ by 1.0e-05. Distinct from the published 4.478, which is a
+50-exercise-date Bermudan value -- see `_LS_SOURCE` and the negative-finding
+row above.
+"""
+
+_CROSS_ENGINE_SOURCE = (
+    "derived in-repo: three discretisations of the same free-boundary problem "
+    "-- CRR and Leisen-Reimer lattices (qpl.engines.tree.american) and a "
+    "PSOR finite-difference solve (qpl.engines.pde.american). Tolerances "
+    "derived from each engine's measured error in "
+    "tests/test_pde_american_convergence.py and "
+    "tests/test_tree_american_convergence.py; no published value is involved."
+)
+
+AMERICAN_CROSS_ENGINE_CASES: tuple[AmericanBSCase, ...] = (
+    AmericanBSCase(
+        row=BenchmarkRow(
+            id="atm_1y_american_put_three_engine_agreement",
+            description=(
+                "CRR, Leisen-Reimer and PDE/PSOR agree on the ATM American "
+                "put; expected value is the worst pairwise gap"
+            ),
+            expected=0.0,
+            tolerance=1.5e-3,
+            evidence=EvidenceClass.INDEPENDENT_ENGINE,
+            source=_CROSS_ENGINE_SOURCE,
+            notes=(
+                "Measured values: PDE 6.08995244 at n_s=n_t=800, CRR "
+                "6.09055641 and Leisen-Reimer 6.09033758 at n=8001. Pairwise "
+                "gaps 6.040e-04 (PDE-CRR), 3.851e-04 (PDE-LR), 2.188e-04 "
+                "(CRR-LR). The worst is the sum of two opposite-signed errors "
+                "(-4.240e-04 and +1.800e-04 against "
+                "AMERICAN_BRACKETED_LIMIT), so the PDE and the CRR lattice "
+                "bracket the value at these settings -- asserted separately, "
+                "because a bracket is a cheap error bar and losing it would be "
+                "a real regression."
+            ),
+        ),
+        specs=(AMERICAN_REFERENCE_SPEC,),
+    ),
+    AmericanBSCase(
+        row=BenchmarkRow(
+            id="ls2001_row1_three_engine_agreement",
+            description=(
+                "the same three engines at the Longstaff-Schwartz row-1 "
+                "specification, priced as a continuously-exercisable American "
+                "put; expected value is the worst pairwise gap"
+            ),
+            expected=0.0,
+            tolerance=5e-4,
+            evidence=EvidenceClass.INDEPENDENT_ENGINE,
+            source=_CROSS_ENGINE_SOURCE,
+            notes=(
+                "Measured values: PDE 4.48649360, CRR 4.48665602, "
+                "Leisen-Reimer 4.48661481; worst pairwise gap 1.624e-04 "
+                "against a tolerance of 5e-04. All three sit BELOW "
+                "LS2001_BRACKETED_LIMIT = 4.4866721476 (-1.786e-04, "
+                "-1.613e-05, -5.734e-05), so there is no bracket here and the "
+                "budget is correspondingly tighter than the ATM row's. The "
+                "three-engine value is 4.4867, not the published 4.478, for "
+                "the reason the negative-finding row above records."
+            ),
+        ),
+        specs=(LS2001_ROW1,),
+    ),
+)
+
+
 ALL_AMERICAN_CASES: tuple[AmericanBSCase, ...] = (
     LS2001_CASES
     + AMERICAN_IDENTITY_CASES
     + AMERICAN_PREMIUM_CASES
     + AMERICAN_REFERENCE_CASES
     + AMERICAN_LR_CASES
+    + AMERICAN_CROSS_ENGINE_CASES
 )
