@@ -131,16 +131,25 @@ class PSORConfig:
         `0` to about `K`, so a relative test would be dominated by the deep
         out-of-the-money nodes where everything is zero.
 
-        Default `1e-8`. Measured effect on the price (ATM put,
-        `n_s = n_t = 400`, aligned, Rannacher): the difference between a
-        `tol = 1e-8` solve and a `tol = 1e-12` solve is `1.4e-08`, against a
-        discretisation error of `1.5e-03` at the same grid -- five orders of
-        magnitude of headroom. Tightening to `1e-10` costs about 27% more
-        sweeps, to `1e-12` about 55% more.
+        Default `1e-8`. Measured against a `tol = 1e-13` solve on the same
+        grid (ATM put, aligned, Rannacher, `n_s = n_t = n`), the price this
+        default gives up is
+
+            n        100       200       400       800      1600
+            |err|  2.3e-08   2.7e-08   6.0e-08   1.1e-07   1.5e-07
+
+        against discretisation errors of `2.1e-02` down to `1.2e-04` on the
+        same grids -- between five and three orders of magnitude of headroom,
+        narrowing as the grid is refined, which is the right way round to be
+        wrong. Tightening to `1e-10` costs about 27% more sweeps and to
+        `1e-12` about 55%. It cannot usefully be tightened below about
+        `1e-14 * K`: that is the round-off scale of the values themselves, and
+        the max-update criterion then never fires.
     max_iter
-        Sweep cap per time step. Default `10_000`, which is about thirty times
-        the worst count measured on any grid in this repository (317 mean
-        sweeps at `n_s = 3200, n_t = 40`).
+        Sweep cap per time step. Default `10_000`, about six times the worst
+        count measured on any grid in this repository -- 1642 mean sweeps at
+        `n_s = 3200, n_t = 40` with the default `omega`, where `dt / ds**2` is
+        four orders of magnitude larger than on the `n_s = n_t` path.
     on_max_iter
         What happens when a time step exhausts `max_iter` without meeting
         `tol`:
