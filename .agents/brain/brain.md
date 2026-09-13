@@ -51,7 +51,8 @@ Agent Contract
 - Dependencies: Must use repo environment; no cells should fail.
 
 2) Current API map (pre-1.0; subject to change)
-- Current dispatcher interfaces: `qpl.pricing.price` and `qpl.pricing.greeks`. (source: src/qpl/pricing.py)
+- Current dispatcher interfaces: `qpl.pricing.price` and `qpl.pricing.greeks`; both bind keyword arguments through a per-method `MethodSpec` and resolve the engine through the registry, rather than an `isinstance` ladder (ADR-0005). (source: src/qpl/pricing.py)
+- Current registry exports: `qpl.engines.registry` exports `MethodSpec`, `EngineKey`, `register`, `resolve_price`, `resolve_greeks`, `method_spec`, `known_methods`. (source: src/qpl/engines/registry.py)
 - Current instrument exports: `qpl.instruments` exports `EuropeanOption`, `call_payoff`, `put_payoff`. (source: src/qpl/instruments/__init__.py)
 - Current market exports: `qpl.market` exports `Market`, `FlatRateCurve`, `FlatDividendCurve`. (source: src/qpl/market/__init__.py)
 - Current model exports: `qpl.models` exports `BlackScholesModel`, `bs_price`. (source: src/qpl/models/__init__.py)
@@ -76,24 +77,28 @@ Instruments + Market + Model
 pricing.price / pricing.greeks (dispatcher)
         |
         v
+engines.registry: MethodSpec (kwargs contract)
+                  + (instrument type, model type, method) -> engine
+        |
+        v
 analytic engine | MC engine | PDE engine
         |
         v
 PriceResult / GreeksResult
 
 - Domain objects: `EuropeanOption`, `BlackScholesModel`, `Market` with flat curves. (source: src/qpl/instruments/options.py; src/qpl/models/black_scholes.py; src/qpl/market/market.py; src/qpl/market/curves.py)
-- Dispatcher: `qpl.pricing` validates types and routes by method to engine functions. (source: src/qpl/pricing.py)
+- Dispatcher: `qpl.pricing` binds kwargs via the method's `MethodSpec`, resolves the engine from `qpl.engines.registry`, and calls it; the wiring table is `qpl.pricing._register_builtin_engines`. `Market` is type-checked but is not part of the key (ADR-0005). (source: src/qpl/pricing.py; src/qpl/engines/registry.py; .agents/brain/adr/0005-engine-registry.md)
 - Engines: analytic uses closed-form BS, MC uses GBM sampling (terminal or multi-step), PDE uses theta-scheme FD grid. (source: src/qpl/engines/analytic/black_scholes.py; src/qpl/engines/mc/pricers.py; src/qpl/engines/pde/pricers.py)
 - Results: `PriceResult` and `GreeksResult` normalize outputs across engines. (source: src/qpl/engines/base.py)
-- Key entry points (paths): `src/qpl/pricing.py`, `src/qpl/__init__.py`, `src/qpl/engines/base.py`, `src/qpl/engines/analytic/black_scholes.py`, `src/qpl/engines/mc/pricers.py`, `src/qpl/engines/pde/pricers.py`, `src/qpl/instruments/options.py`, `src/qpl/market/market.py`, `src/qpl/market/curves.py`, `src/qpl/models/black_scholes.py`, `examples/bs_analytic.py`, `examples/bs_mc_vs_analytic.py`, `tests/test_pricing_analytic.py`, `tests/test_mc_pricing.py`, `tests/test_pde_pricing.py`, `.github/workflows/ci.yml`, `pyproject.toml`, `docs/CURRICULUM.md`.
-- The dispatcher's `isinstance` ladder in `qpl.pricing` is expected to be replaced by an engine registry keyed by `(instrument, model, method)` in Phase 1, once CRR trees add a second method per instrument/model pair; tracked as ADR-0005 (pending, not yet written). (source: src/qpl/pricing.py; docs/CURRICULUM.md)
+- Key entry points (paths): `src/qpl/pricing.py`, `src/qpl/engines/registry.py`, `src/qpl/__init__.py`, `src/qpl/engines/base.py`, `src/qpl/engines/analytic/black_scholes.py`, `src/qpl/engines/mc/pricers.py`, `src/qpl/engines/pde/pricers.py`, `src/qpl/instruments/options.py`, `src/qpl/market/market.py`, `src/qpl/market/curves.py`, `src/qpl/models/black_scholes.py`, `examples/bs_analytic.py`, `examples/bs_mc_vs_analytic.py`, `tests/test_pricing_analytic.py`, `tests/test_mc_pricing.py`, `tests/test_pde_pricing.py`, `.github/workflows/ci.yml`, `pyproject.toml`, `docs/CURRICULUM.md`.
+- The dispatcher's `isinstance` ladder was replaced by the engine registry keyed by `(instrument type, model type, method)` (ADR-0005, accepted). Adding an engine means a `MethodSpec` next to its config object plus one `register(...)` call. (source: src/qpl/pricing.py; src/qpl/engines/registry.py; .agents/brain/adr/0005-engine-registry.md)
 
 4) Key invariants and assumptions
 - `EuropeanOption` requires kind in {"call","put"}, strike > 0, expiry >= 0; enforced at init. (source: src/qpl/instruments/options.py)
 - `Market` requires spot > 0; enforced at init. (source: src/qpl/market/market.py)
 - `BlackScholesModel` requires sigma >= 0; enforced at init. (source: src/qpl/models/black_scholes.py)
 - Flat curves require non-negative rate/yield unless `allow_negative=True`. (source: src/qpl/market/curves.py)
-- Dispatcher only supports `EuropeanOption` + `BlackScholesModel` + `Market` for methods {analytic, mc, pde}; otherwise `NotSupportedError`. (source: src/qpl/pricing.py)
+- Dispatcher only supports `EuropeanOption` + `BlackScholesModel` + `Market` for methods {analytic, mc, pde}; otherwise `NotSupportedError`. Keyword validation runs before engine lookup, so a bad `cfg` yields `InvalidInputError`, not `NotSupportedError`. (source: src/qpl/pricing.py; src/qpl/engines/registry.py; tests/test_engine_registry.py)
 - MC config requires n_paths >= 2 and n_steps >= 1; stderr uses ddof=1; results deterministic for a fixed seed. (source: src/qpl/engines/mc/pricers.py; tests/test_mc_pricing.py)
 - PDE config requires n_s >= 3, n_t >= 1, theta in [0,1]; deterministic for fixed inputs. (source: src/qpl/engines/pde/pricers.py; tests/test_pde_pricing.py)
 - At T=0 or sigma=0, pricing returns intrinsic or discounted-forward intrinsic (analytic/MC/PDE). (source: src/qpl/models/black_scholes.py; src/qpl/engines/mc/pricers.py; src/qpl/engines/pde/pricers.py; tests/test_pricing_analytic.py; tests/test_mc_pricing.py)
@@ -132,7 +137,7 @@ Top 10 cheapest checks
 
 8) Decisions log (index)
 - ADRs live in `.agents/brain/adr/` (see `.agents/brain/adr/0000-template.md`).
-- Active ADRs: `.agents/brain/adr/0002-thin-vertical-slices.md`, `.agents/brain/adr/0003-pre-1-0-lab-authority-and-api-churn.md` (still active; compatible with ADR-0004), `.agents/brain/adr/0004-textbook-driven-development.md`.
+- Active ADRs: `.agents/brain/adr/0002-thin-vertical-slices.md`, `.agents/brain/adr/0003-pre-1-0-lab-authority-and-api-churn.md` (still active; compatible with ADR-0004), `.agents/brain/adr/0004-textbook-driven-development.md`, `.agents/brain/adr/0005-engine-registry.md`.
 - Historical/superseded ADRs: `.agents/brain/adr/0001-public-api-truth-source.md`.
 - ADR rules: one decision per ADR, keep under 1 page, include status and supersedes links. (source: .agents/brain/adr/0000-template.md)
 
