@@ -83,6 +83,30 @@ _SMOKE_CASES = [
         ],
     ),
     (
+        # Two engines on the same American put. The curated keys are the ones a
+        # run that had quietly lost the PSOR path would not print:
+        # `psor_mean_sweeps` and `lcp_max_complementarity` exist only on the
+        # finite-difference leg, `engine_gap=1.3` pins the cross-engine
+        # agreement to one figure, and `pde_boundary_first_time=0.0000` next to
+        # a non-zero `tree_boundary_first_time` is the grid-versus-lattice
+        # difference the example exists to show.
+        "american_put_cross_method.py",
+        [],
+        [
+            "example=american_put_cross_method",
+            "pde_american=6.0888",
+            "tree_american=6.0902",
+            "engine_gap=1.3",
+            "early_exercise_premium=",
+            "psor_mean_sweeps=",
+            "psor_converged=True",
+            "lcp_max_complementarity=",
+            "lcp_min_constraint_slack=0.000e+00",
+            "boundary t=",
+            "pde_boundary_first_time=0.0000",
+        ],
+    ),
+    (
         "american_put_binomial_dp.py",
         [],
         [
