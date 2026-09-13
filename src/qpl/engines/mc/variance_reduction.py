@@ -400,10 +400,10 @@ def validate_sampler(
         )
 
 
-def _stratified_value_and_variance(
+def _stratified_value_and_stderr(
     y: np.ndarray, n_strata: int, *, ddof: int
 ) -> tuple[float, float]:
-    """Strata-weighted mean and variance of the mean, equal-probability strata.
+    """Strata-weighted mean and standard error, equal-probability strata.
 
     The sampler lays the strata out in contiguous blocks of equal size (see
     `_stratified_normals`), so the reshape below *is* the grouping; the stratum
@@ -416,7 +416,7 @@ def _stratified_value_and_variance(
     variances = block.var(axis=1, ddof=ddof)
     value = float(means.mean())
     variance = float(variances.sum() / (n_strata * n_strata * per_stratum))
-    return value, variance
+    return value, math.sqrt(max(variance, 0.0))
 
 
 def estimate_from_sample(
@@ -466,12 +466,13 @@ def estimate_from_sample(
 
     if sample.stratum is None:
         value = float(np.mean(y))
-        variance = float(np.var(y, ddof=ddof) / y.size)
+        # Written as `std / sqrt(n)` rather than `sqrt(var / n)` so that the
+        # plain estimator's arithmetic is *identical* to
+        # `processes.price_european_from_terminal`, down to the last bit.
+        stderr = float(np.std(y, ddof=ddof) / math.sqrt(y.size))
     else:
-        value, variance = _stratified_value_and_variance(y, sample.n_strata, ddof=1)
-    return VarianceReductionEstimate(
-        value=value, stderr=math.sqrt(max(variance, 0.0)), meta=meta
-    )
+        value, stderr = _stratified_value_and_stderr(y, sample.n_strata, ddof=1)
+    return VarianceReductionEstimate(value=value, stderr=stderr, meta=meta)
 
 
 def price_with_variance_reduction(
