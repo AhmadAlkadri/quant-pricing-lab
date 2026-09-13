@@ -55,6 +55,10 @@ from .engines.pde.american import (
     greeks_american as greeks_american_pde,
     price_american as price_american_pde,
 )
+from .engines.pde.barrier import (
+    greeks_barrier as greeks_barrier_pde,
+    price_barrier as price_barrier_pde,
+)
 from .engines.pde.digital import (
     greeks_digital as greeks_digital_pde,
     price_digital as price_digital_pde,
@@ -258,6 +262,19 @@ def _register_builtin_engines() -> None:
         spec=TREE_METHOD_SPEC,
         price=price_barrier_tree,
         greeks=greeks_barrier_tree,
+    )
+    # Slice 13: the finite-difference barrier, and the first engine here that
+    # prices BOTH monitoring conventions -- continuous by truncating the domain
+    # at the barrier (so the barrier is a node exactly) and discrete by
+    # projecting onto the rebate at each monitoring date. It is also the first
+    # barrier engine with real Greeks, because a grid whose barrier is a
+    # boundary has neither the lattice's sawtooth nor the simulation's
+    # surface-measure pathwise derivative.
+    register(
+        **barrier,
+        spec=PDE_METHOD_SPEC,
+        price=price_barrier_pde,
+        greeks=greeks_barrier_pde,
     )
 
 
