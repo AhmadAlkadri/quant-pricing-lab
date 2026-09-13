@@ -25,4 +25,6 @@ For v0.2.0, the publication surface is centered on:
 - `notebooks/` for concise narrative workflows,
 - this docs site for conceptual orientation.
 
-The `labs/` folder remains internal and withheld from publication.
+The `labs/` folder is private by design (gitignored) and is never published. It drives package
+design as a textbook-driven workbook set; the public cargo is `src/`, `tests/`, the `cases` layer,
+and short derivation notes.

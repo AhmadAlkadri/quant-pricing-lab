@@ -2,6 +2,9 @@
 
 This folder contains both public v0.2.0 notebooks and older exploratory notebooks.
 
+Note: this is distinct from `labs/`, which holds private, textbook-driven workbooks
+(gitignored, never published) that drive package design.
+
 ## Public v0.2.0 notebooks
 
 These are deterministic, smoke-gated with `QPL_LAB_SMOKE`, and intended as the

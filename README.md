@@ -30,7 +30,9 @@ pytest
 It consolidates the lab-driven Chapters 1-8 buildout into new `qpl` modules for MC sampling/simulation,
 dynamic programming, numerical linear solvers, quadrature, Laplace inversion, and copulas.
 
-Labs are currently withheld from publication pending legal review; the code improvements are intended to ship.
+Labs are private, textbook-driven workbooks (Fusai & Roncoroni, Glasserman) that live under `labs/` and are
+gitignored; they drive design but are never published. The public cargo is the package (`src/`), the tests,
+the `cases` layer, and short derivation notes.
 
 Development phase: exploratory pre-1.0. API churn is expected, labs are authoritative,
 and backward compatibility is not guaranteed. See `AGENTS.md` and

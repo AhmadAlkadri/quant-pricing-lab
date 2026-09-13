@@ -4,8 +4,8 @@ All notable changes to `qpl` are documented in this file.
 
 ## v0.2.0 (Unreleased)
 
-> Labs 01-08 are currently withheld from publication pending legal review.  
-> The underlying package improvements are intended to ship in v0.2.0.
+> Labs 01-08 are private, textbook-driven workbooks under `labs/` (gitignored, never published).
+> The underlying package improvements they drove ship in v0.2.0.
 
 ### Highlights
 
@@ -93,7 +93,8 @@ All notable changes to `qpl` are documented in this file.
 ### Docs
 
 - Added this release-oriented feature summary for `v0.2.0`.
-- Added `docs/labs_to_library_map.md` to map each chapter lab to the library modules/tests it drove.
+- Added `docs/curriculum_provenance.md` (renamed from `docs/labs_to_library_map.md`) to map each private
+  chapter lab to the library modules/tests it drove.
 - Added a README pointer to the unreleased `v0.2.0` summary.
 
 ### Internal

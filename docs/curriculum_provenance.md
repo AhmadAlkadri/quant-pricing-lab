@@ -1,6 +1,8 @@
-# Labs To Library Delta Map (Chapters 1-8)
+# Curriculum Provenance (Chapters 1-8)
 
-This map summarizes how each lab notebook drove `src/qpl` changes and test coverage.
+Labs are private, textbook-driven workbooks under `labs/` (gitignored, never published); this
+document is the public record of which private lab chapter drove which public module. It contains
+no book prose, only provenance: lab notebook -> `src/qpl` changes -> test coverage.
 
 ## Chapter 1 - Static Monte Carlo
 

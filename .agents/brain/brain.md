@@ -45,6 +45,8 @@ Agent Contract
 - Notebooks live in `notebooks/` and follow a strict numbering scheme: `NN_description.ipynb`.
 - Numbers increase monotonically (`00`, `01`, `02`, ...).
 - Fusai teaching labs live in `labs/` and follow the same naming convention (`NN_description.ipynb`).
+- `labs/` is private by design and gitignored (see `.gitignore`); it is never published. It drives
+  package changes as a textbook workbook set, not as public cargo.
 - Output is stripped via `nbstripout` (enforced by `.gitattributes`).
 - Dependencies: Must use repo environment; no cells should fail.
 
