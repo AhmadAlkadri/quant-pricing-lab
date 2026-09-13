@@ -55,6 +55,34 @@ _SMOKE_CASES = [
         ],
     ),
     (
+        # The smooth case: both time steppings land on order two in all three
+        # grid Greeks, which is the baseline the start-up case departs from.
+        "pde_greeks_demo.py",
+        [],
+        [
+            "example=pde_greeks_demo",
+            "case=smooth",
+            "smooth_order theta_gamma=+2.",
+            "smooth_order rannacher_gamma=+2.",
+            "smooth_order rannacher_delta=+2.",
+        ],
+    ),
+    (
+        # The start-up case. `theta_gamma=-1.` is the curated part: a run that
+        # had lost the pathology would still print an order, but not a NEGATIVE
+        # one, and `rannacher_gamma=+1.8` pins the repair on the same grids.
+        "pde_greeks_demo.py",
+        ["--case", "startup"],
+        [
+            "example=pde_greeks_demo",
+            "case=startup",
+            "startup_order theta_gamma=-1.",
+            "startup_order theta_theta=-1.",
+            "startup_order rannacher_gamma=+1.8",
+            "startup_order rannacher_delta=+2.",
+        ],
+    ),
+    (
         "american_put_binomial_dp.py",
         [],
         [

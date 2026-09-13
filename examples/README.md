@@ -8,6 +8,7 @@ fast, and designed to run without external data sources.
 - `bs_analytic_greeks.py`
 - `mc_pricing_and_stderr.py`
 - `pde_theta_scheme.py`
+- `pde_greeks_demo.py` (also `--case startup`)
 - `tree_convergence.py`
 - `american_put_binomial_dp.py`
 - `quadrature_demo.py`
@@ -22,6 +23,5 @@ or network-dependent data workflows:
 - `bs_analytic.py`
 - `bs_mc_vs_analytic.py`
 - `implied_vol_demo.py`
-- `pde_greeks_demo.py`
 - `historical_vol_demo.py`
 - `market_data_demo.py`
