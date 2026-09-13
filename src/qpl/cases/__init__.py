@@ -24,6 +24,7 @@ from .american_black_scholes import (
     PREMIUM_STRIKE_LADDER,
     AmericanBSCase,
     AmericanBSSpec,
+    bermudan_value_on_lattice,
 )
 from .asian_black_scholes import (
     ALL_ASIAN_CASES,
@@ -296,6 +297,7 @@ __all__ = [
     "MCGreeksVarianceCase",
     "MCVarianceCase",
     "SDECase",
+    "bermudan_value_on_lattice",
     "parity_residual",
     "paths_for_draws",
 ]

@@ -30,6 +30,10 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Literal
 
+import numpy as np
+
+from ..engines.tree.lattice import crr_parameters
+from ..exceptions import InvalidInputError
 from ..instruments.options import AmericanOption, EuropeanOption
 from ..market.curves import FlatDividendCurve, FlatRateCurve
 from ..market.market import Market
@@ -60,6 +64,7 @@ __all__ = [
     "PREMIUM_STRIKE_LADDER",
     "AmericanBSCase",
     "AmericanBSSpec",
+    "bermudan_value_on_lattice",
 ]
 
 
@@ -112,6 +117,74 @@ class AmericanBSCase:
         if len(self.specs) != 1:
             raise ValueError(f"case {self.row.id} holds {len(self.specs)} specs, not 1")
         return self.specs[0]
+
+
+def bermudan_value_on_lattice(
+    spec: AmericanBSSpec, *, n_steps: int, n_exercise: int
+) -> float:
+    """Price `spec` as a Bermudan with `n_exercise` equally spaced dates.
+
+    Same CRR lattice and the same continuation step as
+    `qpl.engines.tree.price_american`; the only change is that the Bellman
+    maximum against the intrinsic value is taken at every
+    `n_steps / n_exercise`-th level instead of at every level. `n_steps` must
+    be divisible by `n_exercise`, so the exercise dates land exactly on lattice
+    levels and nothing is interpolated. The dates are
+    `t_i = i T / n_exercise`, `i = 1 ... n_exercise`, which is the grid
+    `qpl.engines.mc.american` simulates on: `t = 0` is not an exercise date in
+    either.
+
+    This lives here rather than in `qpl.engines` because `qpl` still has no
+    Bermudan *instrument*. Slice 2 wrote it inside
+    `tests/cases/test_american_black_scholes_cases.py` to check one citation,
+    with a note that a second case would be when it earned a home. Slice 11 is
+    that second case -- the least-squares Monte Carlo engine prices a Bermudan
+    by construction and needs a reference value at several exercise
+    frequencies -- so the function moved here, where both test modules can
+    read it and where its contract is documented once.
+
+    Raises
+    ------
+    InvalidInputError
+        If `n_exercise` does not divide `n_steps`, or either is non-positive.
+    """
+    if n_exercise < 1 or n_steps < 1:
+        raise InvalidInputError("n_steps and n_exercise must both be >= 1")
+    step, remainder = divmod(n_steps, n_exercise)
+    if remainder:
+        raise InvalidInputError(
+            f"n_exercise={n_exercise} must divide n_steps={n_steps} so the "
+            "exercise dates fall on lattice levels"
+        )
+
+    lattice = crr_parameters(
+        sigma=spec.sigma,
+        expiry=spec.expiry,
+        rate=spec.rate,
+        dividend_yield=spec.dividend,
+        n_steps=n_steps,
+    )
+    counts = np.arange(n_steps + 1, dtype=float)
+    up_powers = lattice.up**counts
+    down_powers = lattice.down**counts
+
+    def spots(level: int) -> np.ndarray:
+        return spec.spot * up_powers[: level + 1] * down_powers[level::-1]
+
+    def intrinsic(values: np.ndarray) -> np.ndarray:
+        if spec.kind == "call":
+            return np.maximum(values - spec.strike, 0.0)
+        return np.maximum(spec.strike - values, 0.0)
+
+    exercise_levels = {n_steps - i * step for i in range(n_exercise)}
+    values = intrinsic(spots(n_steps))
+    for level in range(n_steps - 1, -1, -1):
+        values = lattice.discount * (
+            lattice.p * values[1:] + (1.0 - lattice.p) * values[:-1]
+        )
+        if level in exercise_levels:
+            values = np.maximum(intrinsic(spots(level)), values)
+    return float(values[0])
 
 
 # --------------------------------------------------------------------------

@@ -16,7 +16,6 @@ from __future__ import annotations
 import math
 from itertools import pairwise
 
-import numpy as np
 import pytest
 
 from qpl.cases import (
@@ -39,9 +38,10 @@ from qpl.cases import (
     LS2001_CASES,
     LS2001_N_STEPS,
     AmericanBSCase,
+    bermudan_value_on_lattice,
 )
 from qpl.engines.pde.pricers import PDEConfig
-from qpl.engines.tree import TreeConfig, crr_parameters
+from qpl.engines.tree import TreeConfig
 from qpl.pricing import price
 from qpl.validation import EvidenceClass, fit_convergence_order
 
@@ -87,51 +87,15 @@ def _european(case_spec, n_steps: int) -> float:
 
 # --------------------------------------------------------------------------
 # The Bermudan restriction, applied to the shared CRR lattice.
+#
+# `bermudan_value_on_lattice` used to be a private helper in this file. Slice 11
+# gave it a second caller -- the least-squares Monte Carlo engine prices a
+# Bermudan by construction and `tests/test_lsm_american.py` needs a lattice
+# reference at several exercise frequencies -- so it moved to
+# `qpl.cases.american_black_scholes`, which is where its contract is now
+# documented. The sanity check below is unchanged and still runs before the
+# helper is used as evidence.
 # --------------------------------------------------------------------------
-
-
-def _bermudan_put(spec, *, n_steps: int, n_exercise: int) -> float:
-    """Price a Bermudan put with `n_exercise` equally spaced exercise dates.
-
-    Same lattice and same continuation step as `qpl.engines.tree.price_american`
-    -- the only change is that the Bellman maximum against the intrinsic value
-    is taken at every `n_steps / n_exercise`-th level instead of at every
-    level. `n_steps` must be divisible by `n_exercise`, so the exercise dates
-    land exactly on lattice levels and nothing has to be interpolated.
-
-    This lives in the test rather than in `qpl` on purpose: the package has no
-    Bermudan instrument, and adding one to check a citation would be building
-    an instrument ahead of the case that justifies it. What it is here for is
-    stated in `qpl.cases.american_black_scholes`: the Longstaff-Schwartz
-    Table 1 options are exercisable 50 times per year, and this is what that
-    sentence means numerically.
-    """
-    step, remainder = divmod(n_steps, n_exercise)
-    assert remainder == 0, (n_steps, n_exercise)
-
-    lattice = crr_parameters(
-        sigma=spec.sigma,
-        expiry=spec.expiry,
-        rate=spec.rate,
-        dividend_yield=spec.dividend,
-        n_steps=n_steps,
-    )
-    counts = np.arange(n_steps + 1, dtype=float)
-    up_powers = lattice.up**counts
-    down_powers = lattice.down**counts
-
-    def spots(level: int) -> np.ndarray:
-        return spec.spot * up_powers[: level + 1] * down_powers[level::-1]
-
-    exercise_levels = {n_steps - i * step for i in range(n_exercise)}
-    values = np.maximum(spec.strike - spots(n_steps), 0.0)
-    for level in range(n_steps - 1, -1, -1):
-        values = lattice.discount * (
-            lattice.p * values[1:] + (1.0 - lattice.p) * values[:-1]
-        )
-        if level in exercise_levels:
-            values = np.maximum(np.maximum(spec.strike - spots(level), 0.0), values)
-    return float(values[0])
 
 
 def test_bermudan_restriction_brackets_the_two_exercise_styles() -> None:
@@ -151,7 +115,8 @@ def test_bermudan_restriction_brackets_the_two_exercise_styles() -> None:
     american = _american(spec, n_steps)
 
     values = [
-        _bermudan_put(spec, n_steps=n_steps, n_exercise=m) for m in (1, 2, 5, 10, 50, 100, 500)
+        bermudan_value_on_lattice(spec, n_steps=n_steps, n_exercise=m)
+        for m in (1, 2, 5, 10, 50, 100, 500)
     ]
     assert values[0] == pytest.approx(european, abs=1e-12)
     assert all(b >= a - 1e-12 for a, b in pairwise(values)), values
@@ -180,7 +145,7 @@ def test_longstaff_schwartz_table1_row1(case: AmericanBSCase) -> None:
     assert "Longstaff" in case.row.source
 
     if case.row.evidence is EvidenceClass.PUBLISHED_BENCHMARK:
-        value = _bermudan_put(
+        value = bermudan_value_on_lattice(
             spec,
             n_steps=LS2001_N_STEPS,
             n_exercise=LS2001_BERMUDAN_EXERCISES_PER_YEAR,
