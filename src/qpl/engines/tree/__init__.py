@@ -1,6 +1,6 @@
 """Binomial lattice engines."""
 
-from .american import price_american
+from .american import greeks_american, price_american
 from .lattice import (
     CRRLattice,
     build_recombining_spot_tree,
@@ -16,6 +16,7 @@ __all__ = [
     "build_recombining_spot_tree",
     "crr_parameters",
     "crr_spot_level",
+    "greeks_american",
     "greeks_european",
     "price_american",
     "price_european",

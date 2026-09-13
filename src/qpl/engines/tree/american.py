@@ -36,14 +36,24 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from ...exceptions import InvalidInputError
 from ...instruments.options import AmericanOption
+from ...market.curves import FlatDividendCurve, FlatRateCurve
 from ...market.market import Market
 from ...models.black_scholes import BlackScholesModel
-from ..base import PriceResult
-from .lattice import CRRLattice, crr_parameters
-from .pricers import TreeConfig, _meta, _payoff, _validate
+from ..base import GreeksResult, PriceResult
+from .lattice import CRRLattice, crr_parameters, crr_spot_level
+from .pricers import (
+    RHO_BUMP,
+    VEGA_BUMP,
+    TreeConfig,
+    _meta,
+    _payoff,
+    _validate,
+    lattice_delta_gamma_theta,
+)
 
-__all__ = ["price_american"]
+__all__ = ["greeks_american", "price_american"]
 
 _INTRINSIC_FLOOR_REL = 1e-12
 """Relative floor below which a node is not counted as in the money.
@@ -329,3 +339,121 @@ def price_american(
         }
     )
     return PriceResult(value=rolled.value, meta=meta)
+
+
+def greeks_american(
+    option: AmericanOption,
+    model: BlackScholesModel,
+    market: Market,
+    *,
+    cfg: TreeConfig,
+) -> GreeksResult:
+    """Greeks for an American option from the CRR lattice.
+
+    The estimators are exactly the European ones -- `lattice_delta_gamma_theta`
+    for delta, gamma and theta off the step-1 and step-2 nodes, and central
+    bump-and-revalue at a fixed `n_steps` for vega and rho -- because they
+    depend only on the node values and node spots, not on how the values were
+    produced. Early exercise changes the values; it does not change how a slope
+    is read off two of them. The derivations are in
+    `qpl.engines.tree.pricers.greeks_european`.
+
+    Two things are worth stating about accuracy, since there is no closed form
+    to compare an American Greek against:
+
+    - Delta, gamma and theta inherit the price's `O(1 / n_steps)` error, as in
+      the European case, plus the error in the location of the exercise
+      boundary. `tests/test_tree_american_convergence.py` measures the order
+      against a fine-`n` reference from this same engine.
+    - Gamma is the worst-behaved of the three. The American value function has
+      a genuine kink in `S` at the exercise boundary (value matching holds,
+      smooth pasting only in the continuum limit), and a second difference
+      taken across nodes near that kink is a second difference of a function
+      whose second derivative is a delta function in the limit. Away from the
+      boundary -- which is where the step-2 nodes sit for a
+      not-deep-in-the-money option -- it is well behaved.
+
+    Parameters
+    ----------
+    option, model, market
+        As for `price_american`.
+    cfg
+        Lattice settings. `n_steps >= 2` is required, since gamma and theta
+        read step-2 nodes.
+
+    Returns
+    -------
+    GreeksResult
+        Delta, gamma, vega, theta, rho, plus metadata reporting the bump sizes
+        and the lattice parameters.
+
+    Raises
+    ------
+    InvalidInputError
+        If `cfg` is out of range, or if `sigma = 0` (a collapsed lattice has no
+        second spot node to difference).
+    """
+    _validate(cfg, min_steps=2)
+
+    t = option.expiry
+    if t == 0.0:
+        meta = _meta(None, cfg, degenerate="expiry")
+        meta["exercise"] = "american"
+        meta["bumps"] = {"sigma": VEGA_BUMP, "r": RHO_BUMP}
+        return GreeksResult(delta=0.0, gamma=0.0, vega=0.0, theta=0.0, rho=0.0, meta=meta)
+
+    if model.sigma == 0.0:
+        raise InvalidInputError("sigma must be > 0 for tree Greeks")
+
+    r = market.rate(t)
+    q = market.dividend_yield(t)
+    lattice = crr_parameters(
+        sigma=model.sigma, expiry=t, rate=r, dividend_yield=q, n_steps=cfg.n_steps
+    )
+    rolled = _rollback(option, market, lattice, capture=(0, 1, 2))
+
+    s0 = market.spot
+    s1 = crr_spot_level(spot=s0, up=lattice.up, down=lattice.down, level=1)
+    s2 = crr_spot_level(spot=s0, up=lattice.up, down=lattice.down, level=2)
+    delta, gamma, theta = lattice_delta_gamma_theta(
+        v0=float(rolled.levels[0][0]),
+        v1=rolled.levels[1],
+        v2=rolled.levels[2],
+        s1=s1,
+        s2=s2,
+        dt=lattice.dt,
+    )
+
+    def _price(mdl: BlackScholesModel, mkt: Market) -> float:
+        return price_american(option, mdl, mkt, cfg=cfg).value
+
+    sigma_dn = max(model.sigma - VEGA_BUMP, 0.0)
+    vega = (
+        _price(BlackScholesModel(sigma=model.sigma + VEGA_BUMP), market)
+        - _price(BlackScholesModel(sigma=sigma_dn), market)
+    ) / ((model.sigma + VEGA_BUMP) - sigma_dn)
+
+    def _rate_market(rate: float) -> Market:
+        return Market(
+            spot=s0,
+            rate_curve=FlatRateCurve(rate, allow_negative=True),
+            dividend_curve=FlatDividendCurve(q, allow_negative=True),
+        )
+
+    rho = (_price(model, _rate_market(r + RHO_BUMP)) - _price(model, _rate_market(r - RHO_BUMP))) / (
+        2.0 * RHO_BUMP
+    )
+
+    meta = _meta(lattice, cfg, degenerate=None)
+    meta["exercise"] = "american"
+    meta["fd"] = "central"
+    meta["bumps"] = {"sigma": VEGA_BUMP, "r": RHO_BUMP}
+    meta["early_exercise_node_count"] = rolled.early_exercise_node_count
+    return GreeksResult(
+        delta=delta,
+        gamma=gamma,
+        vega=float(vega),
+        theta=theta,
+        rho=float(rho),
+        meta=meta,
+    )

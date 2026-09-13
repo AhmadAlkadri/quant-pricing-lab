@@ -34,7 +34,10 @@ from .engines.registry import (
     resolve_greeks,
     resolve_price,
 )
-from .engines.tree.american import price_american as price_american_tree
+from .engines.tree.american import (
+    greeks_american as greeks_american_tree,
+    price_american as price_american_tree,
+)
 from .engines.tree.pricers import (
     TREE_METHOD_SPEC,
     greeks_european as greeks_european_tree,
@@ -88,6 +91,7 @@ def _register_builtin_engines() -> None:
         model_type=BlackScholesModel,
         spec=TREE_METHOD_SPEC,
         price=price_american_tree,
+        greeks=greeks_american_tree,
     )
 
 
@@ -152,7 +156,8 @@ def greeks(
     Parameters
     ----------
     instrument
-        Instrument instance. Currently `EuropeanOption` is supported.
+        Instrument instance. `EuropeanOption` is supported by every method;
+        `AmericanOption` only by `method="tree"`.
     model
         Model instance. Currently `BlackScholesModel` is supported.
     market

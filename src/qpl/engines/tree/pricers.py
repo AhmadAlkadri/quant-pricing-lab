@@ -43,6 +43,7 @@ __all__ = [
     "TREE_METHOD_SPEC",
     "TreeConfig",
     "greeks_european",
+    "lattice_delta_gamma_theta",
     "price_european",
 ]
 
@@ -195,6 +196,30 @@ def _backward_induction(
     return kept
 
 
+def lattice_delta_gamma_theta(
+    *,
+    v0: float,
+    v1: np.ndarray,
+    v2: np.ndarray,
+    s1: np.ndarray,
+    s2: np.ndarray,
+    dt: float,
+) -> tuple[float, float, float]:
+    """Delta, gamma and theta read off the first two levels of a lattice.
+
+    Shared by the European and American tree engines: the estimators depend
+    only on the node values and the node spots, not on how those values were
+    produced, so early exercise changes the inputs and nothing else. The
+    derivation of each formula is in `greeks_european`'s docstring.
+    """
+    delta = (v1[1] - v1[0]) / (s1[1] - s1[0])
+    delta_up = (v2[2] - v2[1]) / (s2[2] - s2[1])
+    delta_dn = (v2[1] - v2[0]) / (s2[1] - s2[0])
+    gamma = (delta_up - delta_dn) / (0.5 * (s2[2] - s2[0]))
+    theta = (v2[1] - v0) / (2.0 * dt)
+    return float(delta), float(gamma), float(theta)
+
+
 def price_european(
     option: EuropeanOption,
     model: BlackScholesModel,
@@ -342,11 +367,9 @@ def greeks_european(
     s2 = crr_spot_level(spot=s0, up=lattice.up, down=lattice.down, level=2)
     v0, v1, v2 = kept[0][0], kept[1], kept[2]
 
-    delta = (v1[1] - v1[0]) / (s1[1] - s1[0])
-    delta_up = (v2[2] - v2[1]) / (s2[2] - s2[1])
-    delta_dn = (v2[1] - v2[0]) / (s2[1] - s2[0])
-    gamma = (delta_up - delta_dn) / (0.5 * (s2[2] - s2[0]))
-    theta = (v2[1] - v0) / (2.0 * lattice.dt)
+    delta, gamma, theta = lattice_delta_gamma_theta(
+        v0=v0, v1=v1, v2=v2, s1=s1, s2=s2, dt=lattice.dt
+    )
 
     def _price(mdl: BlackScholesModel, mkt: Market) -> float:
         return price_european(option, mdl, mkt, cfg=cfg).value
@@ -372,10 +395,10 @@ def greeks_european(
     meta["fd"] = "central"
     meta["bumps"] = {"sigma": VEGA_BUMP, "r": RHO_BUMP}
     return GreeksResult(
-        delta=float(delta),
-        gamma=float(gamma),
+        delta=delta,
+        gamma=gamma,
         vega=float(vega),
-        theta=float(theta),
+        theta=theta,
         rho=float(rho),
         meta=meta,
     )
