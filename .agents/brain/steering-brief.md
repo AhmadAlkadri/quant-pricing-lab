@@ -1,5 +1,101 @@
 # Steering Brief
 
+What changed in Slice 11 (files + bullets)
+
+Phase 3's Longstaff-Schwartz item, and the first three-way cross-method case.
+A third engine for early exercise -- a path sample rather than a lattice or a
+grid -- and the first American answer in this package that carries a standard
+error. Still on `dev/curriculum`; not pushed.
+
+- `src/qpl/engines/mc/american.py` (new): `price_american` (registered for
+  `(AmericanOption, BlackScholesModel, "mc")`), `greeks_american` (registered
+  and always raising, so the message names the exercise policy rather than an
+  unsupported combination), plus `lsm_rollback`, `simulate_exercise_grid`,
+  `basis_matrix`, `LSMFit`, `LSM_BASES`. Exact-GBM paths at the exercise dates;
+  `numpy.linalg.lstsq` on the in-the-money subset; regressors built on the
+  **moneyness** `S/K` (unscaled, the `exp(-x/2)` Laguerre weight gives a design
+  of condition number 5.0e+23 against 8.5e+04 scaled -- asserted, not
+  described).
+- `MCConfig` gains `exercise_dates=50`, `lsm_basis="laguerre"`, `lsm_degree=3`,
+  `lsm_in_sample=False`. All four are read by the new engine alone.
+- `PriceResult.meta` carries `exercise_style` (`"bermudan(m dates)"`),
+  `lsm_in_sample`, `lsm_basis`, `lsm_degree`, `n_basis_functions`,
+  `early_exercise_fraction`, `n_regressions`, `regression_condition_max` /
+  `_median`, `exercise_boundary`, `exercise_boundary_times`.
+- `qpl.cases.bermudan_value_on_lattice`: Slice 2's private test helper, promoted
+  because Slice 11 is the second case it said it was waiting for. Plus
+  `AMERICAN_LSM_CASES` (6 rows) and the settings they publish.
+- `tests/test_mc_american_lsm.py` (mechanics, the call, determinism, contract),
+  `tests/test_lsm_american.py` (published row, 1/m study, three-way, boundary),
+  `tests/test_lsm_american_bias.py` (the paired bias study),
+  `tests/oracle/test_lsm_vs_quantlib.py`, and the simulation column in
+  `examples/american_put_cross_method.py`.
+
+**`qpl.engines.dp.backward_induction_optimal_stopping` was NOT reused**, and the
+reason is its contract, not its idea: it requires `j + 1` states at level `j`
+(a recombining lattice) and a continuation operator that sees only the next
+level's values. LSM has `n_paths` states at every date and its operator is a
+regression on the **current** spots, which that signature cannot pass. Widening
+it to "any number of states plus a second state array" leaves a `for` loop with
+extra validation.
+
+**The published row** (their settings, in-sample): **4.467550 ± 6.032e-03**
+against 4.472 ± 0.010, a gap of **0.74** of its own standard error. Out of
+sample: **4.472996 ± 6.057e-03** against the 50-date lattice Bermudan 4.477922,
+**0.81**.
+
+**The Bermudan gap**, on the lattice where there is no noise: 4.4029e-02,
+8.750e-03, 1.672e-03 at m = 10, 50, 250; fitted order **1.0176** (residual
+0.0080). At the money 0.976 (0.0007).
+
+**The in-sample bias needs a paired design.** Unpaired (run both, subtract) over
+20 seeds at 50 000 paths: `-0.0022 ± 0.0028` -- wrong sign, not significant.
+Paired (two path sets, two policies, both valued on the *same* set), 2 000
+paths, 24 seeds:
+
+    basis        d=2                 d=3                 d=5
+    laguerre     +0.03794 ± 0.00663  +0.04585 ± 0.00614  +0.07413 ± 0.00729
+    polynomial   +0.04396 ± 0.00612  +0.05219 ± 0.00538  +0.07436 ± 0.00831
+
+decaying like **1/N** (order 1.020, not the sqrt the stderr obeys) and growing
+with the basis count (+0.02827 ± 0.00680 from four coefficients to six).
+
+**Out-of-sample bias vs the lattice Bermudan**, same runs: -0.026, -0.019,
+-0.034 (laguerre) and -0.027, -0.024, -0.034 (polynomial). Degree 3 beats
+degree 5 by +0.01470 ± 0.00544 paired -- overfitting, visible in the *policy*.
+Gone by 20 000 paths (-0.00016 ± 0.00111). Laguerre vs polynomial: not resolved
+at any degree (0.3, 1.5, 0.2 sigma).
+
+**Four contradicted expectations, all encoded.** (1) The three-way budget is
+NOT "stderr plus the Bermudan gap": the dominant term is the finite-sample low
+bias, 1.89e-02 at the money against a 2.46e-03 gap, and it is point-dependent by
+an order of magnitude (-1.5e-03 at the Longstaff-Schwartz point) and decays at
+`N^{-1/2}` -- the same rate as the stderr, so it never hides inside it.
+(2) The boundary rule in the brief ("smallest spot where intrinsic exceeds the
+fitted continuation") is the sample's lower tail for a put; the implemented rule
+is kind-dependent and matches the tree. Measured 2.0% agreement with PSOR,
+biased high early. (3) The call's early-exercise fraction is 1.9e-03 at 50 dates
+and **0.219** at 250 while the price stays inside one stderr: near expiry the
+true premium `K r dt` is the size of the fit's own error. The fraction measures
+the basis, not the policy. (4) The Bermudan gap cannot be fitted *through* the
+simulation -- at m = 250 it is 0.2 of a run's stderr.
+
+**QuantLib** (`MCAmericanEngine`, settings documented not defaulted): `z = -1.11`
+on the Longstaff-Schwartz row, stderrs within 0.6%, its own run 0.16 sigma from
+the published 4.472, its two basis families 0.36 sigma apart. It shows the ATM
+low bias too, -9.01e-03 ± 3.50e-03 over five seeds -- sign and order of
+magnitude confirmed, size explicitly not (1.9 sigma from ours).
+
+**Refused with reasons**: LSM Greeks (a bump moves the fitted policy), control
+variates (no known mean under a data-dependent stopping time), stratification
+(no single scalar to partition). Antithetic composes, because the pair average
+is taken on the realised cashflow *after* the exercise decision.
+
+Suite: **1387 tests, 145.3 s** (from 1322 / 125.6 s). The three new core test files run in 12.1 s together, the QuantLib oracle adds 7.3 s under the `[oracle]` extra only, and the extended example smoke adds about 1.3 s. Derivation and full tables:
+`docs/notes/lsm_american_monte_carlo.md`.
+
+---
+
 What changed in Slice 10 (files + bullets)
 
 Phase 3's pathwise/likelihood-ratio Greeks item. Three Greek estimators behind
