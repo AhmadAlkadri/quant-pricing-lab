@@ -34,82 +34,69 @@ import math
 import numpy as np
 import pytest
 
+from qpl.cases import (
+    MC_VARIANCE_REDUCTION_CASES,
+    MC_VR_BAND,
+    MC_VR_DRAWS,
+    MC_VR_N_STRATA,
+    MC_VR_POINTS,
+    MC_VR_SEEDS,
+    DigitalBSSpec,
+    paths_for_draws,
+)
 from qpl.engines.mc.pricers import MCConfig
 from qpl.engines.mc.variance_reduction import terminal_spots_from_normals
-from qpl.instruments.options import DigitalOption, EuropeanOption
 from qpl.instruments.payoffs import call_payoff, digital_payoff
-from qpl.market.curves import FlatDividendCurve, FlatRateCurve
-from qpl.market.market import Market
-from qpl.models.black_scholes import BlackScholesModel
 from qpl.pricing import greeks, price
 from qpl.validation import EvidenceClass, fit_convergence_order
 
-MARKET = Market(
-    spot=100.0,
-    rate_curve=FlatRateCurve(0.05),
-    dividend_curve=FlatDividendCurve(0.0),
-)
-MODEL = BlackScholesModel(sigma=0.20)
-SIGMA = 0.20
-EXPIRY = 1.0
+ATM_CALL = MC_VR_POINTS["atm_call"]
+OTM_CALL = MC_VR_POINTS["otm_call"]
+DIGITAL_CALL = MC_VR_POINTS["digital_call"]
+
+MARKET = ATM_CALL.market()
+MODEL = ATM_CALL.model()
+SIGMA = ATM_CALL.sigma
+EXPIRY = ATM_CALL.expiry
 MU = MARKET.rate(EXPIRY) - MARKET.dividend_yield(EXPIRY)
 DISCOUNT = MARKET.df_r(EXPIRY)
+"""Read back from the market rather than written as literals: `Market.rate(t)`
+recovers the rate from the curve's discount factor and is not bit-for-bit the
+`0.05` that was passed in. See `tests/test_mc_variance_reduction.py`."""
 
-ATM_CALL = EuropeanOption(kind="call", strike=100.0, expiry=EXPIRY)
-OTM_CALL = EuropeanOption(kind="call", strike=120.0, expiry=EXPIRY)
-DIGITAL_CALL = DigitalOption(kind="call", strike=100.0, expiry=EXPIRY, cash=1.0)
-
-INSTRUMENTS = {
-    "atm_call": ATM_CALL,
-    "otm_call": OTM_CALL,
-    "digital_call": DIGITAL_CALL,
-}
-
-SEEDS = tuple(range(101, 151))
-"""Fifty independent seeds. `numpy.random.default_rng` hashes the integer
-through a `SeedSequence`, and the independence of consecutive seeds is measured
-in `tests/test_mc_variance_reduction.py`, not assumed here."""
-
-N_DRAWS = 20_480
-"""Normal draws per run: 64 x 320, so every stratum count used below divides
-it."""
-
-N_STRATA = 64
-
-BAND = 1.7
-"""Multiplicative tolerance on every ratio below; see the module docstring."""
+SEEDS = MC_VR_SEEDS
+N_DRAWS = MC_VR_DRAWS
+N_STRATA = MC_VR_N_STRATA
+BAND = MC_VR_BAND
+"""Study constants live in `qpl.cases.mc_variance_reduction` next to the rows
+they parametrise, so a test and a row cannot drift apart."""
 
 
-def _paths_for(vr, n_draws: int) -> int:
-    return 2 * n_draws if "antithetic" in vr else n_draws
-
-
-def _price(instrument, vr, seed: int, n_strata: int = N_STRATA, n_draws: int = N_DRAWS):
+def _price(spec, vr, seed: int, n_strata: int = N_STRATA, n_draws: int = N_DRAWS):
     cfg = MCConfig(
-        n_paths=_paths_for(vr, n_draws),
+        n_paths=paths_for_draws(vr, n_draws),
         n_steps=1,
         seed=seed,
         variance_reduction=vr,
         n_strata=n_strata,
     )
-    return price(instrument, MODEL, MARKET, method="mc", cfg=cfg).value
+    return price(spec.option(), spec.model(), spec.market(), method="mc", cfg=cfg).value
 
 
-def _estimator_variance(instrument, vr, n_strata: int = N_STRATA) -> float:
-    values = np.array([_price(instrument, vr, seed, n_strata) for seed in SEEDS])
+def _estimator_variance(spec, vr, n_strata: int = N_STRATA) -> float:
+    values = np.array([_price(spec, vr, seed, n_strata) for seed in SEEDS])
     return float(values.var(ddof=1))
 
 
-def _payoff_of(instrument):
-    if isinstance(instrument, DigitalOption):
+def _payoff_of(spec):
+    if isinstance(spec, DigitalBSSpec):
         return lambda s_t: np.asarray(
-            digital_payoff(s_t, instrument.strike, instrument.cash, instrument.kind),
-            dtype=float,
+            digital_payoff(s_t, spec.strike, spec.cash, spec.kind), dtype=float
         )
-    return lambda s_t: call_payoff(s_t, instrument.strike)
+    return lambda s_t: call_payoff(s_t, spec.strike)
 
 
-def _pilot_correlations(instrument, n: int = 400_000, seed: int = 7) -> tuple[float, float]:
+def _pilot_correlations(spec, n: int = 400_000, seed: int = 7) -> tuple[float, float]:
     """`(corr(Y(Z), Y(-Z)), corr(Y, X))` from one large independent pilot run.
 
     The theoretical predictions below are derived from these two correlations
@@ -117,7 +104,7 @@ def _pilot_correlations(instrument, n: int = 400_000, seed: int = 7) -> tuple[fl
     measured prediction of it -- which is the comparison that can fail
     informatively. A hard-coded prediction would only re-assert this file.
     """
-    payoff = _payoff_of(instrument)
+    payoff = _payoff_of(spec)
     rng = np.random.default_rng(seed)
     z = rng.normal(size=(n, 1))
     spots = terminal_spots_from_normals(z, s0=100.0, mu=MU, sigma=SIGMA, t=EXPIRY)
@@ -137,32 +124,10 @@ def _pilot_correlations(instrument, n: int = 400_000, seed: int = 7) -> tuple[fl
 # (b) The table.
 # ---------------------------------------------------------------------------
 
-# (instrument, estimator, measured factor at 20 480 draws over 50 seeds)
-_MEASURED_FACTORS = (
-    ("atm_call", "antithetic", 4.59),
-    ("atm_call", "control_variate", 7.58),
-    ("atm_call", "stratified", 110.40),
-    ("atm_call", ("antithetic", "control_variate"), 90.80),
-    ("atm_call", ("stratified", "control_variate"), 577.80),
-    ("otm_call", "antithetic", 3.04),
-    ("otm_call", "control_variate", 2.71),
-    ("otm_call", "stratified", 42.41),
-    ("otm_call", ("antithetic", "control_variate"), 92.35),
-    ("otm_call", ("stratified", "control_variate"), 84.61),
-    ("digital_call", "antithetic", 9.32),
-    ("digital_call", "control_variate", 2.11),
-    ("digital_call", "stratified", 101.26),
-    ("digital_call", ("antithetic", "control_variate"), 9.73),
-    ("digital_call", ("stratified", "control_variate"), 82.32),
-)
-
-
 @pytest.mark.parametrize(
-    ("instrument_id", "vr", "recorded"),
-    _MEASURED_FACTORS,
-    ids=[f"{i}-{v if isinstance(v, str) else '+'.join(v)}" for i, v, _ in _MEASURED_FACTORS],
+    "case", MC_VARIANCE_REDUCTION_CASES, ids=[c.row.id for c in MC_VARIANCE_REDUCTION_CASES]
 )
-def test_measured_variance_factor(instrument_id, vr, recorded) -> None:
+def test_measured_variance_factor(case) -> None:
     """STATISTICAL: variance of plain / variance of reduced, at equal normal draws.
 
     Fifty seeds, 20 480 normal draws each, `K = 64` strata. The full table
@@ -202,17 +167,20 @@ def test_measured_variance_factor(instrument_id, vr, recorded) -> None:
     the seeds are fixed the measurement is reproducible exactly; the band is the
     statement of how much of it is signal (see the module docstring).
     """
-    assert EvidenceClass.STATISTICAL
-    instrument = INSTRUMENTS[instrument_id]
-    plain = _estimator_variance(instrument, "none")
-    reduced = _estimator_variance(instrument, vr)
+    assert case.row.evidence is EvidenceClass.STATISTICAL
+    plain = _estimator_variance(case.spec, "none")
+    reduced = _estimator_variance(case.spec, case.variance_reduction)
     factor = plain / reduced
-    assert recorded / BAND < factor < recorded * BAND, f"factor {factor:.2f}"
     assert factor > 1.0
+    assert abs(math.log(factor) - case.row.expected) <= case.row.tolerance, (
+        f"{case.row.id}: measured {factor:.2f}, "
+        f"expected {math.exp(case.row.expected):.2f} "
+        f"within a factor of {math.exp(case.row.tolerance):.2f}"
+    )
 
 
-@pytest.mark.parametrize("instrument_id", list(INSTRUMENTS))
-def test_antithetic_factor_matches_two_over_one_plus_rho(instrument_id) -> None:
+@pytest.mark.parametrize("point_id", list(MC_VR_POINTS))
+def test_antithetic_factor_matches_two_over_one_plus_rho(point_id) -> None:
     """STATISTICAL: the measured antithetic gain against `2/(1 + rho_a)`.
 
     Glasserman 4.2: with `m` normals the plain estimator has variance
@@ -238,20 +206,18 @@ def test_antithetic_factor_matches_two_over_one_plus_rho(instrument_id) -> None:
     deviation 20%) and is the reason the band is 1.7 rather than 1.2.
     """
     assert EvidenceClass.STATISTICAL
-    instrument = INSTRUMENTS[instrument_id]
-    rho_a, _ = _pilot_correlations(instrument)
+    spec = MC_VR_POINTS[point_id]
+    rho_a, _ = _pilot_correlations(spec)
     assert rho_a < 0.0, "a monotone payoff must have a negative antithetic correlation"
     predicted = 2.0 / (1.0 + rho_a)
-    measured = _estimator_variance(instrument, "none") / _estimator_variance(
-        instrument, "antithetic"
-    )
+    measured = _estimator_variance(spec, "none") / _estimator_variance(spec, "antithetic")
     assert predicted / BAND < measured < predicted * BAND, (
         f"measured {measured:.2f} against predicted {predicted:.2f}"
     )
 
 
-@pytest.mark.parametrize("instrument_id", list(INSTRUMENTS))
-def test_control_factor_matches_one_over_one_minus_rho_squared(instrument_id) -> None:
+@pytest.mark.parametrize("point_id", list(MC_VR_POINTS))
+def test_control_factor_matches_one_over_one_minus_rho_squared(point_id) -> None:
     """STATISTICAL: the measured control-variate gain against `1/(1 - rho**2)`.
 
     Pilot at 400 000 draws, seed 7:
@@ -274,11 +240,11 @@ def test_control_factor_matches_one_over_one_minus_rho_squared(instrument_id) ->
     makes the comparison a check rather than a restatement.
     """
     assert EvidenceClass.STATISTICAL
-    instrument = INSTRUMENTS[instrument_id]
-    _, rho = _pilot_correlations(instrument)
+    spec = MC_VR_POINTS[point_id]
+    _, rho = _pilot_correlations(spec)
     predicted = 1.0 / (1.0 - rho * rho)
-    measured = _estimator_variance(instrument, "none") / _estimator_variance(
-        instrument, "control_variate"
+    measured = _estimator_variance(spec, "none") / _estimator_variance(
+        spec, "control_variate"
     )
     assert predicted / BAND < measured < predicted * BAND, (
         f"measured {measured:.2f} against predicted {predicted:.2f}"
@@ -286,10 +252,10 @@ def test_control_factor_matches_one_over_one_minus_rho_squared(instrument_id) ->
 
 
 @pytest.mark.parametrize(
-    ("instrument_id", "expected_exponent"),
+    ("point_id", "expected_exponent"),
     [("atm_call", 1.0157), ("otm_call", 1.0384)],
 )
-def test_stratified_gain_grows_like_k_for_a_vanilla(instrument_id, expected_exponent) -> None:
+def test_stratified_gain_grows_like_k_for_a_vanilla(point_id, expected_exponent) -> None:
     """STATISTICAL + CONVERGENCE_ORDER: the gain is `O(K)`, not `O(K**2)`.
 
     Measured factors over 50 seeds at 20 480 draws:
@@ -319,10 +285,10 @@ def test_stratified_gain_grows_like_k_for_a_vanilla(instrument_id, expected_expo
     sampler does.
     """
     assert EvidenceClass.CONVERGENCE_ORDER
-    instrument = INSTRUMENTS[instrument_id]
-    plain = _estimator_variance(instrument, "none")
+    spec = MC_VR_POINTS[point_id]
+    plain = _estimator_variance(spec, "none")
     strata = (8, 16, 32, 64, 128, 256)
-    gains = [plain / _estimator_variance(instrument, "stratified", k) for k in strata]
+    gains = [plain / _estimator_variance(spec, "stratified", k) for k in strata]
     assert gains == sorted(gains)
     fit = fit_convergence_order([1.0 / k for k in strata], [1.0 / g for g in gains])
     assert abs(fit.order - expected_exponent) < 0.20, f"exponent {fit.order:.4f}"
@@ -366,9 +332,10 @@ def test_stratified_gain_for_a_digital_is_set_by_where_the_jump_falls() -> None:
     assert EvidenceClass.STATISTICAL
     from scipy.stats import norm
 
-    z_star = (math.log(100.0 / 100.0) - (MU - 0.5 * SIGMA * SIGMA) * EXPIRY) / (
-        SIGMA * math.sqrt(EXPIRY)
-    )
+    z_star = (
+        math.log(DIGITAL_CALL.strike / DIGITAL_CALL.spot)
+        - (MU - 0.5 * SIGMA * SIGMA) * EXPIRY
+    ) / (SIGMA * math.sqrt(EXPIRY))
     u_star = float(norm.cdf(z_star))
     p_itm = 1.0 - u_star
 
@@ -437,13 +404,14 @@ def test_crn_bump_delta_noise_falls_with_the_estimator() -> None:
       and this slice ships one.
     """
     assert EvidenceClass.STATISTICAL
-    analytic_delta = greeks(ATM_CALL, MODEL, MARKET, method="analytic").delta
+    option = ATM_CALL.option()
+    analytic_delta = greeks(option, MODEL, MARKET, method="analytic").delta
     sds = {}
     for label, vr, recorded in _DELTA_NOISE:
         deltas = []
         for seed in range(1, 21):
             cfg = MCConfig(
-                n_paths=_paths_for(vr, N_DRAWS),
+                n_paths=paths_for_draws(vr, N_DRAWS),
                 n_steps=1,
                 seed=seed,
                 variance_reduction=vr,
@@ -451,7 +419,7 @@ def test_crn_bump_delta_noise_falls_with_the_estimator() -> None:
             )
             deltas.append(
                 greeks(
-                    ATM_CALL, MODEL, MARKET, method="mc", cfg=cfg, bumps={"spot": 1e-2}
+                    option, MODEL, MARKET, method="mc", cfg=cfg, bumps={"spot": 1e-2}
                 ).delta
             )
         deltas = np.array(deltas)
@@ -466,3 +434,38 @@ def test_crn_bump_delta_noise_falls_with_the_estimator() -> None:
     assert sds["stratified"] < sds["none"] / 8.0
     # The one that goes the wrong way, pinned rather than smoothed over.
     assert sds["stratified+control"] > sds["stratified"]
+
+
+def test_every_variance_reduction_row_states_its_evidence_and_source() -> None:
+    """The row set's own metadata contract, and the fourth id space's disjointness.
+
+    `qpl.cases.mc_variance_reduction` is the first case module keyed by an
+    *estimator* rather than by an instrument, so it carries a vanilla and a
+    digital point in the same table and its ids must not collide with any of
+    the three instrument id spaces. This is the same check
+    `tests/cases/test_european_black_scholes_cases.py` runs on `ALL_CASES`,
+    extended across all four.
+    """
+    from qpl.cases import ALL_AMERICAN_CASES, ALL_CASES, ALL_DIGITAL_CASES
+
+    ids = [case.row.id for case in MC_VARIANCE_REDUCTION_CASES]
+    assert len(set(ids)) == len(ids)
+    others = {
+        case.row.id
+        for case in (*ALL_CASES, *ALL_AMERICAN_CASES, *ALL_DIGITAL_CASES)
+    }
+    assert others.isdisjoint(ids)
+
+    for case in MC_VARIANCE_REDUCTION_CASES:
+        row = case.row
+        assert isinstance(row.evidence, EvidenceClass)
+        assert row.evidence is EvidenceClass.STATISTICAL
+        assert row.description.strip()
+        assert row.source.strip()
+        assert row.notes.strip()
+        assert row.tolerance > 0.0
+        assert case.point_id in MC_VR_POINTS
+        assert case.spec is MC_VR_POINTS[case.point_id]
+        # Cost bookkeeping: antithetic runs twice the paths for the same draws.
+        expected_paths = 2 * N_DRAWS if "antithetic" in case.variance_reduction else N_DRAWS
+        assert case.n_paths() == expected_paths

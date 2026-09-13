@@ -16,6 +16,11 @@ import pytest
 from qpl.cases import (
     KNOWN_VALUE_CASES,
     LIMIT_CASES,
+    MC_CROSS_ENGINE_DRAWS,
+    MC_CROSS_ENGINE_N_STRATA,
+    MC_CROSS_ENGINE_SEED,
+    MC_CROSS_ENGINE_STDERR_MULTIPLE,
+    MC_CROSS_ENGINE_VARIANCE_REDUCTION,
     MONOTONICITY_CASES,
     PARITY_CASES,
     PDE_GREEK_CASES,
@@ -116,10 +121,19 @@ def test_cross_engine_agreement_on_known_values(case: EuropeanBSCase) -> None:
       refinement level of the order-2 sequence measured in
       `tests/test_pde_ch4.py`. Tightening below ~2e-4 would make the test
       sensitive to harmless changes in the spline interpolation at spot.
-    - Monte Carlo, terminal sampling, 200_000 paths, seed 123: 4 standard
-      errors. The estimator is unbiased, so the only question is sampling
-      noise; 4 sigma is a ~6e-5 false-failure rate for a fixed seed that is
-      already known to land at 0.75 (call) and 0.13 (put) standard errors.
+    - Monte Carlo, terminal sampling, **stratified** (K = 64), 12 800 paths,
+      seed 123: 4 standard errors. The estimator is unbiased, so the only
+      question is sampling noise; 4 sigma is a ~6e-5 false-failure rate for a
+      fixed seed that lands at 0.954 (call) and 0.905 (put) standard errors.
+      This leg was 200 000 plain paths until Slice 7. Stratifying the single
+      normal that drives the terminal price buys a measured variance factor of
+      about 110 at this point, so the leg now runs at **one sixteenth** of the
+      paths and still reports a standard error three times *smaller* (1.107e-02
+      against the plain run's 3.283e-02). The tolerance is deliberately
+      unchanged -- four of the estimator's own standard errors is the only
+      honest form for a Monte Carlo agreement -- but the interval it must fall
+      inside shrank by a factor of three, so the leg is a strictly stronger
+      check that costs less.
     - CRR tree, n_steps = 2000: `TREE_KNOWN_VALUE_TOLERANCE` (2.5e-3). This
       one is derived from the measured error constant rather than chosen:
       `n * |tree - closed form|` tends to 1.9994 on even `n`, so the predicted
@@ -154,10 +168,23 @@ def test_cross_engine_agreement_on_known_values(case: EuropeanBSCase) -> None:
         model,
         market,
         method="mc",
-        cfg=MCConfig(n_paths=200_000, n_steps=1, seed=123),
+        cfg=MCConfig(
+            n_paths=MC_CROSS_ENGINE_DRAWS,
+            n_steps=1,
+            seed=MC_CROSS_ENGINE_SEED,
+            variance_reduction=MC_CROSS_ENGINE_VARIANCE_REDUCTION,
+            n_strata=MC_CROSS_ENGINE_N_STRATA,
+        ),
     )
     assert mc_res.stderr is not None
-    assert abs(mc_res.value - expected) <= 4.0 * mc_res.stderr
+    assert abs(mc_res.value - expected) <= MC_CROSS_ENGINE_STDERR_MULTIPLE * mc_res.stderr
+    # The leg is tighter than the plain 200 000-path one it replaced, not just
+    # cheaper: assert the standard error itself, so a run that had silently
+    # fallen back to plain sampling (stderr 3.283e-02 at 200 000 paths, and
+    # 0.13 at 12 800) would fail here rather than pass on a wider interval.
+    assert mc_res.stderr < 0.02
+    assert mc_res.meta is not None
+    assert mc_res.meta["variance_reduction"] == ("stratified",)
 
     tree = price(
         option,
