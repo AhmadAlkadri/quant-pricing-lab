@@ -122,7 +122,7 @@ Top 10 cheapest checks
 
 8) Decisions log (index)
 - ADRs live in `.agents/brain/adr/` (see `.agents/brain/adr/0000-template.md`).
-- Active ADRs: `.agents/brain/adr/0002-thin-vertical-slices.md`, `.agents/brain/adr/0003-pre-1-0-lab-authority-and-api-churn.md`.
+- Active ADRs: `.agents/brain/adr/0002-thin-vertical-slices.md`, `.agents/brain/adr/0003-pre-1-0-lab-authority-and-api-churn.md` (still active; compatible with ADR-0004), `.agents/brain/adr/0004-textbook-driven-development.md`.
 - Historical/superseded ADRs: `.agents/brain/adr/0001-public-api-truth-source.md`.
 - ADR rules: one decision per ADR, keep under 1 page, include status and supersedes links. (source: .agents/brain/adr/0000-template.md)
 
