@@ -8,6 +8,7 @@ fast, and designed to run without external data sources.
 - `bs_analytic_greeks.py`
 - `mc_pricing_and_stderr.py`
 - `pde_theta_scheme.py`
+- `tree_convergence.py`
 - `american_put_binomial_dp.py`
 - `quadrature_demo.py`
 - `laplace_inversion_demo.py`

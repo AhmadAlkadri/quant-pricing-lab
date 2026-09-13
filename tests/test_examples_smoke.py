@@ -16,6 +16,18 @@ import pytest
         ),
         ("pde_theta_scheme.py", ["example=pde_theta_scheme", "analytic_price=", "theta=0.0", "theta=0.5", "theta=1.0"]),
         (
+            "tree_convergence.py",
+            [
+                "example=tree_convergence",
+                "black_scholes=",
+                "odd_order=",
+                "even_order=",
+                "odd_sign=above",
+                "even_sign=below",
+                "richardson_order=",
+            ],
+        ),
+        (
             "american_put_binomial_dp.py",
             ["example=american_put_binomial_dp", "american_put=", "european_put=", "early_exercise_premium="],
         ),
@@ -61,6 +73,7 @@ def test_public_examples_smoke(script_name: str, required_keys: list[str]) -> No
         "bs_analytic_greeks.py",
         "mc_pricing_and_stderr.py",
         "pde_theta_scheme.py",
+        "tree_convergence.py",
         "american_put_binomial_dp.py",
         "quadrature_demo.py",
         "laplace_inversion_demo.py",
