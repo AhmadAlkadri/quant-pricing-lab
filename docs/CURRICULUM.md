@@ -148,29 +148,40 @@ unknowns stay unknown.
   finding and confirmed independently in QuantLib.
 - A non-uniform grid concentrated at the strike, as the second standard
   remedy for the strike-kink pathology documented in
-  `docs/notes/pde_strike_alignment.md`. Still open, and Slice 4 sharpened the
-  motivation: strike alignment improves the undamped gamma error by a factor
+  `docs/notes/pde_strike_alignment.md`. Still open, and now motivated twice
+  over. Slice 4: strike alignment improves the undamped gamma error by a factor
   of nine but leaves its fitted order negative, so the two remedies address
   different halves of the problem and a grid concentrated at the strike is not
-  a substitute for damping either.
-- PSOR for American exercise, cross-checked against the Phase 1 trees. Still
-  open. `qpl.engines.pde` now solves its tridiagonal step with
-  `scipy.linalg.solve_banded` (Slice 4), which PSOR cannot use -- the
-  projection is applied inside the sweep -- so that slice will need its own
-  iteration and is the natural place for the `qpl.numerics.linear_systems`
-  question below to be answered.
+  a substitute for damping either. Slice 5 adds a second reason -- the American
+  price order is 1.85 and falling toward 1 because the free boundary is located
+  only to the node spacing, and nodes concentrated where the boundary actually
+  travels are the obvious way to buy that back. It would also let the PSOR
+  sweep count be traded against accuracy rather than against `dt / ds**2`.
+- ~~PSOR for American exercise, cross-checked against the Phase 1 trees.~~
+  **Delivered in Slice 5** (see below): the LCP solved by red-black projected
+  SOR inside each time step, measured order 1.85 against the lattice-bracketed
+  limit, and three-way agreement with the CRR and Leisen-Reimer lattices and
+  with QuantLib's American finite differences.
 - A digital (discontinuous-payoff) option, showing the pathology and the
   remedies rather than only the smooth-payoff case. Still open, and now better
   motivated: Slice 4 measured the kink's damage on gamma; a jump is one
   derivative worse, so the same experiment on a digital should show the
   pathology in the *price*.
-- `qpl.numerics.linear_systems` used where it earns its place, or a recorded
-  reason why not. **Recorded reason so far**: the European theta scheme needs
-  a direct tridiagonal solve, and Slice 4 measured LAPACK's banded solver to be
-  7.4x-28.7x faster than the in-repo Python loop at round-off-equal results, so
-  an iterative solver would be strictly worse here. The open question moves to
-  the PSOR slice, where projection forces an iteration and `sor_solve` is the
-  obvious starting point.
+
+**Phase 2 has two items left**: the non-uniform grid and the digital.
+- ~~`qpl.numerics.linear_systems` used where it earns its place, or a recorded
+  reason why not.~~ **Answered, in two halves.** For the European theta scheme
+  a direct tridiagonal solve is needed and Slice 4 measured LAPACK's banded
+  solver at 7.4x-28.7x the in-repo Python loop with round-off-equal results, so
+  an iterative solver would be strictly worse there. For the American LCP,
+  Slice 5 could not call `sor_solve` -- it takes a dense `(n, n)` matrix, so one
+  sweep is `O(n**2)` against a tridiagonal `O(n)`, and it has no hook at which
+  to project an iterate onto a constraint set. What was reused is its shape (the
+  relaxation update, the `0 < omega < 2` validation with the same message,
+  reporting iterations and convergence) and, more usefully, its *role as the
+  reference*: with the obstacle removed, the new red-black sweep reproduces
+  `sor_solve` and the banded solve to 3.2e-13. That is the recorded reason why
+  not, and the place it did earn.
 
 ### Phase 3 — Monte Carlo (Glasserman)
 - Explicit stderr/CI discipline throughout.
@@ -539,6 +550,99 @@ unknowns stay unknown.
   tables above with fitted orders, `--case smooth` and `--case startup`, both
   under a second and both in the curated smoke list.
 - Full tables and the derivation: `docs/notes/pde_greeks_and_rannacher.md`.
+
+### Slice 5
+- **A user can price an American call or put by finite differences**:
+  `qpl.pricing.price(AmericanOption(...), model, market, method="pde",
+  cfg=PDEConfig(...))`, with grid Greeks and the exercise boundary. The engine
+  is `qpl.engines.pde.american`, registered for `(AmericanOption,
+  BlackScholesModel, "pde")` for price and Greeks; `method="pde"` no longer
+  raises `NotSupportedError` for early exercise.
+- The problem solved is the **linear complementarity problem** `V - g >= 0`,
+  `V_t + L V <= 0`, `(V - g)(V_t + L V) = 0`, discretised with the same theta
+  scheme and the same operator the European engine uses (extracted and shared,
+  not copied -- European prices and Greeks are **bit-for-bit unchanged** over
+  160 configurations x 6 quantities). Each step is solved by **projected SOR**:
+  an SOR sweep with every updated component clipped against the payoff.
+- The sweep is **red-black** (even indices, then odd), which on a tridiagonal
+  matrix is exactly a Gauss-Seidel sweep in a permuted order and costs two
+  vectorised numpy expressions instead of a Python loop over nodes. A
+  tridiagonal matrix is consistently ordered under both orderings, so they
+  share a spectral radius and a limit; the test checks against a lexicographic
+  PSOR written out as a loop.
+- `PSORConfig(omega=1.2, tol=1e-8, max_iter=10_000, on_max_iter="raise")`, on
+  `PDEConfig.psor`. `omega = 1.2` is **measured**, not taken from a reference:
+  it is the flattest column of the sweep-count table over `n_s = n_t = n` from
+  100 to 1600 (11.33, 11.17, 10.65, 10.18, 12.75), where the per-grid optimum
+  drifts from 1.00 to 1.30 and `omega = 1.0` degrades 3.5x. `tol` is absolute
+  on the max update; at the default the price given up is 2.3e-08 to 1.5e-07
+  against discretisation errors 2.1e-02 to 1.2e-04. An exhausted `max_iter`
+  raises or is recorded in `meta`, never silently returned.
+- **Measured price order 1.8502** (log-space residual 0.0265) over
+  `n = 50 ... 800` and **1.8506** (0.0261) over the disjoint window
+  `100 ... 1600`, against `AMERICAN_BRACKETED_LIMIT`. The band asserted is
+  `1.85 +- 0.12`, justified by the two error terms present -- an `O(1/n^2)`
+  scheme term and an `O(ds)` free-boundary term -- and backed by the measured
+  local orders 1.739, 1.888, 1.895, 1.837, 1.766, 1.476, which are already
+  falling toward 1. Every error is negative: the PDE approaches from below and
+  the CRR lattice from above, so they bracket.
+- **The LCP is checked, not assumed.** The engine measures, over the whole
+  march, the constraint slack (**exactly 0.0** -- the projection assigns the
+  obstacle value itself), the operator residual (down to -1.1e-07) and
+  `min(slack, |residual|)` (at most 1.1e-07 at the default `tol`, and it falls
+  by three orders of magnitude when `tol` falls by four).
+- **Three-way agreement.** `qpl.cases` gains two INDEPENDENT_ENGINE rows: CRR,
+  Leisen-Reimer and PDE/PSOR agree to 6.040e-04 at the ATM put (a *sum* of
+  opposite-signed errors, tolerance 1.5e-03) and to 1.624e-04 at the
+  Longstaff-Schwartz row-1 point (all three below the limit, tolerance 5e-04).
+  New constant `LS2001_BRACKETED_LIMIT = 4.4866721476`.
+- **Five contradicted expectations, all encoded:**
+  1. The slice suggested `omega` around 1.2-1.5. The measured optimum is
+     **1.00 at `n = 100`** and only reaches 1.30 by `n = 1600`; on a stiff grid
+     (`n_s = 80 n_t`) it is 1.8 or beyond. There is no single optimal `omega`,
+     because what sets it is `dt / ds**2`, not the grid size.
+  2. The slice expected PSOR sweep counts to grow with refinement (Forsyth &
+     Vetzal). On `n_s = n_t = n` they are **flat** from 100 to 1600 -- the
+     stiffer matrix and the better starting iterate cancel -- and the fit is
+     not a power law (residual 0.195). Isolating the stiffness on `n_s = 8 n_t`
+     recovers a clean power law: exponent **0.787**, residual 0.0018.
+  3. **The projection makes PSOR faster, not slower.** The no-dividend American
+     call has an empty active set, so the iteration must converge the whole
+     linear system: 12, 12, 16, 33, 59 sweeps over `n = 50 ... 800`, against
+     11-12 flat for the put.
+  4. The slice asked for the boundary to be monotone "in the sense established
+     in Slice 2 (each parity/level subsequence)". On a grid there are **no
+     parities**: the node set is the same at every time level, so the whole
+     sequence is monotone with zero tolerance. The grid also has no NaN prefix
+     -- the lattice's boundary is NaN for its first 47 of 2000 levels -- because
+     it reaches `S = 0` at every level.
+  5. **QuantLib's American FD engine is first order where this one is 1.85.**
+     Fitted 1.0328 (residual 0.0220) against 1.8502 on a joint `tGrid = xGrid`
+     refinement, so this engine at `n = 800` is within 12% of QuantLib's 1600
+     error and at `n = 1600` is ahead of its 3200. `dampingSteps` is not the
+     cause (1.5e-05 at grid 3200, and in the wrong direction); the candidates
+     are the unaligned log-spot mesher and `FdmAmericanStepCondition`, which
+     projects *between* steps rather than solving complementarity inside them.
+     Slice 5 did not separate the two and says so.
+- **Theta inside the exercise region** is reported as exactly 0, not from the
+  PDE identity: there the PDE is a strict inequality and `V = g(S)` is constant
+  in time, while the identity would return `rK - qS` (`+5.0` at `S = 40,
+  K = 100`). Delta and gamma need no correction; the stencils return -1 and
+  4.3e-15 of their own accord.
+- **Degenerate limits are re-derived, not cross-checked.** The `sigma = 0`
+  answer is imported from `qpl.engines.tree.american` because it is a fact
+  about the model, so the test scans 200001 exercise dates instead of comparing
+  the two engines -- including the Slice 2 `q > r` interior turning point
+  (83.9505861332, 2.75 above the better endpoint).
+- Oracle: `tests/oracle/test_pde_american_vs_quantlib.py` (11 tests, 5.5 s),
+  `T = 1.0` with `Actual365Fixed`. Gaps 2.331e-04, 4.209e-05, 1.215e-04 against
+  a budget of 8e-04 derived as the sum of both engines' measured errors.
+- `examples/american_put_cross_method.py` (0.42 s, curated smoke): both
+  engines' values, each one's signed error, the premium, the sweep count, the
+  LCP residuals, and the boundary from both engines next to the node spacing
+  that limits it.
+- Suite: 679 tests, 72.6 s (from 597 / 62.2 s).
+- Full tables and the derivation: `docs/notes/pde_american_psor.md`.
 
 ## Reconciled old roadmap
 

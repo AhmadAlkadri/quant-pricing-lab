@@ -1,5 +1,111 @@
 # Steering Brief
 
+What changed in Slice 5 (files + bullets)
+
+Phase 2's third item: American exercise by finite differences, the linear
+complementarity problem solved with projected SOR. Still on `dev/curriculum`;
+not pushed.
+
+- `src/qpl/engines/pde/american.py` (new):
+  - `price_american` / `greeks_american`, registered for `(AmericanOption,
+    BlackScholesModel, "pde")`. The dispatcher now prices early exercise two
+    ways; `method="analytic"` and `method="mc"` still refuse.
+  - Each time step is the algebraic LCP `A x - b >= 0`, `x - g >= 0`,
+    `(x - g)(A x - b) = 0`, with `A = I - theta dt L_h` and `L_h` the operator
+    the European engine assembles. Solved by **red-black PSOR**: even indices,
+    then odd, two vectorised numpy expressions per sweep instead of a Python
+    loop over nodes. On a tridiagonal matrix that is exactly a Gauss-Seidel
+    sweep in a permuted order, and consistent ordering (Young) makes the
+    spectral radius and the optimal `omega` the same as the natural order's.
+  - `PSORConfig(omega=1.2, tol=1e-8, max_iter=10_000, on_max_iter="raise")` on
+    `PDEConfig.psor`, read only by this engine. `tol` is **absolute** on the max
+    update; an exhausted cap raises naming the step, or is recorded in
+    `meta["psor_unconverged_steps"]` with `psor_converged=False`. Never both
+    silent and returned.
+  - American Dirichlet values are the European ones lifted to the payoff:
+    `max(g(0), V_eu(0))` and `max(g(s_max), V_eu(s_max))`. For a put that turns
+    `K e^{-r tau}` into `K`; for a call nothing changes, which is why the
+    no-dividend American call keeps its European boundary.
+  - `meta` carries sweeps per step and their summary, the exercise boundary
+    **with its times** (Rannacher makes the tau grid non-uniform), and the LCP
+    measured rather than assumed: worst complementarity, worst slack, worst
+    operator residual over the whole march.
+  - `sigma = 0` and `T = 0` import `_degenerate_value` from
+    `qpl.engines.tree.american`, because that is a fact about the model and not
+    about a discretisation -- including the Slice 2 `q > r` interior turning
+    point.
+- `src/qpl/engines/pde/pricers.py`: `_build_grid`, `_payoff`, `_dirichlet` and
+  `_operator` extracted so the American engine shares them; `_greeks_from_grid`
+  and `_greeks_by_bump` take the solver as a parameter. **European prices and
+  Greeks are bit-for-bit unchanged** over 160 configurations x 6 quantities.
+  `_greeks_from_grid` gains an `obstacle` argument, used for one thing: theta.
+- **omega = 1.2 is measured, not cited.** Mean sweeps per step on
+  `n_s = n_t = n`, ATM put:
+
+    n       w=1.00  w=1.05  w=1.10  w=1.15  w=1.20  w=1.30  w=1.50
+    100      5.96    7.00    8.51   10.03   11.33   14.38   24.52
+    400      9.72    7.98    8.07    9.28   10.65   13.50   22.49
+    1600    21.12   18.97   16.78   14.65   12.75   12.38   20.13
+
+  The per-grid optimum drifts 1.00 -> 1.30 because `dt / ds**2` grows like `n`.
+  1.2 is the flattest column, never worse than 1.9x the optimum. On
+  `n_s = 80 n_t, n_t = 20` the optimum is 1.8 or beyond (1367 sweeps at 1.0,
+  173 at 1.8).
+- `tests/test_pde_american.py` (new, 55 tests, 4.7 s),
+  `tests/test_pde_american_convergence.py` (new, 11 tests, 5.6 s),
+  `tests/oracle/test_pde_american_vs_quantlib.py` (new, 11 tests, 5.5 s),
+  `tests/cases/test_american_black_scholes_cases.py`,
+  `tests/test_tree_american.py`, `src/qpl/cases/american_black_scholes.py`,
+  `examples/american_put_cross_method.py` (new),
+  `docs/notes/pde_american_psor.md` (new):
+  - **Price order 1.8502** (residual 0.0265) over `n = 50 ... 800` and
+    **1.8506** (0.0261) over the disjoint `100 ... 1600`, against
+    `AMERICAN_BRACKETED_LIMIT`. Errors -6.96e-02 ... -1.25e-04, all negative:
+    from below, where CRR comes from above, so they bracket. Local orders
+    1.739, 1.888, 1.895, 1.837, 1.766, 1.476 -- already falling toward 1.
+  - **Unaligned is not a power law**: residual **0.2688** against 0.0265. The
+    test pins the residual, not the order it reports.
+  - **The LCP holds**: slack exactly 0.0, operator residual to -1.1e-07,
+    complementarity at most 1.1e-07, and it falls three decades when `tol` falls
+    four.
+  - **Boundary**: monotone at every level with zero tolerance, no NaN prefix,
+    `K - ds/2` at expiry. Against the `n = 2000` lattice at seven times: +0.19,
+    +0.45, -0.04, -0.10, +0.72, +0.27, -0.10, worst 0.72 against a combined node
+    spacing of 1.4412, both signs present.
+  - **Three-engine agreement** (`qpl.cases`, two new INDEPENDENT_ENGINE rows):
+    6.040e-04 at the ATM put (tolerance 1.5e-03) and 1.624e-04 at L&S row 1
+    (5e-04). New `LS2001_BRACKETED_LIMIT = 4.4866721476`.
+  - **Oracle**: gaps to QuantLib 2.331e-04, 4.209e-05, 1.215e-04 against 8e-04,
+    at `T = 1.0` with `Actual365Fixed`.
+- **Five contradicted expectations, all encoded rather than smoothed over:**
+  1. No single optimal `omega` -- it is set by `dt / ds**2`, and the measured
+     optimum is 1.00 at `n = 100`, not the 1.2-1.5 the slice suggested.
+  2. Sweep counts do **not** grow on `n_s = n_t = n` (flat 100 -> 1600, fit
+     residual 0.195, not a power law): the stiffer matrix and the better
+     starting iterate cancel. Isolated on `n_s = 8 n_t` the growth is clean --
+     exponent **0.787**, residual 0.0018, between optimal SOR's 0.5 and
+     Gauss-Seidel's 1.0.
+  3. **The projection makes PSOR faster.** The no-dividend American call, with
+     an empty active set, needs 12, 12, 16, 33, 59 sweeps over `n = 50 ... 800`
+     against the put's flat 11-12.
+  4. The boundary has **no parity structure** to be monotone within: the grid is
+     the same node set at every time level, so the whole sequence is monotone.
+     The Slice 2 parity caveat is a lattice artefact, not a fact about American
+     boundaries.
+  5. **QuantLib's American FD is order 1.0328**, not comparable to this engine's
+     1.8502. `dampingSteps` is not the cause (1.5e-05 at grid 3200, wrong
+     direction). Candidates: the unaligned log-spot mesher and
+     `FdmAmericanStepCondition`, which projects between steps instead of solving
+     complementarity inside them. Not separated here, and said so.
+- **Theta in the exercise region** is 0 exactly, not the PDE identity's
+  `rK - qS` (`+5.0` at `S = 40, K = 100`). `meta["theta_source"]` says which.
+- `qpl.numerics.linear_systems.sor_solve` could not be the solver (dense
+  `O(n**2)` sweep, no projection hook) but is the **reference**: unprojected,
+  the red-black sweep reproduces it and the LAPACK banded solve to 3.2e-13.
+- Suite: 679 tests, 72.6 s (from 597 / 62.2 s). `ruff check .` clean.
+
+---
+
 What changed in Slice 4 (files + bullets)
 
 Phase 2's first item: Rannacher start-up and Greeks read off the
