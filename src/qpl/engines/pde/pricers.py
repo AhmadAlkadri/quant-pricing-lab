@@ -41,6 +41,16 @@ class PDEConfig:
         - `"midpoint"`: the spacing is nudged so the strike sits exactly halfway
           between two adjacent nodes. See `price_european` for the derivation and
           for why this matters.
+    time_stepping
+        How the march in `tau = T - t` is started.
+
+        - `"theta"` (default): every step uses `theta`. Bit-for-bit identical
+          to the pre-Slice-4 engine.
+        - `"rannacher"`: the first **two** steps are replaced by **four fully
+          implicit steps of `dt / 2`**, and the remaining `n_t - 2` steps use
+          `theta`. Requires `n_t >= 2`. Total time is exact: the four half
+          steps cover `4 * (dt/2) = 2 dt` and the march resumes at `tau = 2 dt`.
+          See `RANNACHER_STARTUP_STEPS` and `price_european` for why.
     """
 
     n_s: int = 200
@@ -49,10 +59,47 @@ class PDEConfig:
     s_max: float | None = None
     s_max_multiplier: float = 4.0
     strike_alignment: Literal["none", "midpoint"] = "none"
+    time_stepping: Literal["theta", "rannacher"] = "theta"
 
 
 PDE_METHOD_SPEC = MethodSpec(method="pde", cfg_type=PDEConfig)
 """Keyword contract for `method="pde"`: a required `PDEConfig`, nothing else."""
+
+
+RANNACHER_STARTUP_STEPS = 4
+"""Number of fully implicit start-up steps used by `time_stepping="rannacher"`.
+
+Each is half the nominal step, so the four of them replace the **first two**
+nominal steps and cover `4 * (dt/2) = 2 dt` of `tau`. This is the standard
+choice: Rannacher (1984), "Finite element solution of diffusion problems with
+irregular data", Numerische Mathematik 43, 309-327, and the analysis in Giles
+and Carter (2006), "Convergence analysis of Crank-Nicolson and Rannacher
+time-marching", Journal of Computational Finance 9(4), 89-112, which is where
+the "two half steps, twice" phrasing comes from -- the same four half steps,
+counted as two pairs.
+
+Why it is needed. Write the scheme in terms of the eigenvalues `-lambda` of the
+discrete space operator. One theta step multiplies the mode by the
+amplification factor
+
+    R(z) = (1 + (1 - theta) z) / (1 - theta z),      z = -lambda * dt.
+
+At `theta = 1/2` this is the Cayley transform `(1 + z/2) / (1 - z/2)`, whose
+modulus is below one for every `z < 0` -- Crank-Nicolson is unconditionally
+stable -- but which tends to **-1** as `z -> -infinity`. The stiffest modes are
+therefore not damped at all: they are merely flipped in sign at every step.
+A vanilla payoff's kink at the strike is exactly high-frequency content in that
+sense, so it survives the whole march as a sign-alternating ripple. The price is
+an average over the grid and barely notices; the second difference that gives
+gamma differences neighbouring ripples and is dominated by it.
+
+Fully implicit stepping has `R(z) = 1 / (1 - z) -> 0`, so a few such steps kill
+the stiff modes outright. Four half steps damp a mode of size `|z|` by
+`(1 + |z| / 2)**-4`, which is `O(dt**2)` for the modes that matter, i.e. enough
+to remove the ripple without spoiling the `O(dt**2)` accuracy of the
+Crank-Nicolson steps that follow -- that trade-off is the content of Giles and
+Carter (2006). Two half steps would damp by `(1 + |z|/2)**-2` only.
+"""
 
 
 def _solve_tridiagonal(
@@ -80,6 +127,30 @@ def _solve_tridiagonal(
     for i in range(n - 2, -1, -1):
         x[i] = d_prime[i] - c_prime[i] * x[i + 1]
     return x
+
+
+def _time_levels(t: float, cfg: PDEConfig) -> list[tuple[float, float, float, float]]:
+    """The march in `tau`, as `(tau_start, tau_end, dt_step, theta_step)` per step.
+
+    For `time_stepping="theta"` this is exactly `n_t` steps of `dt = t / n_t`,
+    each with `cfg.theta`, and the endpoint arithmetic (`n * dt`) is the same
+    expression the pre-Slice-4 engine evaluated inline -- which is what makes
+    that path bit-for-bit unchanged.
+
+    For `"rannacher"` the first two of those steps are replaced by
+    `RANNACHER_STARTUP_STEPS = 4` fully implicit steps of `dt / 2`. Halving is
+    exact in binary floating point, so `4 * (0.5 * dt)` is `2 * dt` to the last
+    bit and the Crank-Nicolson march resumes at exactly the level it would
+    otherwise have reached; the total time covered is `n_t * dt` either way.
+    """
+    dt = t / cfg.n_t
+    if cfg.time_stepping == "theta":
+        return [(n * dt, (n + 1) * dt, dt, cfg.theta) for n in range(cfg.n_t)]
+
+    half = 0.5 * dt
+    steps = [(i * half, (i + 1) * half, half, 1.0) for i in range(RANNACHER_STARTUP_STEPS)]
+    steps += [(n * dt, (n + 1) * dt, dt, cfg.theta) for n in range(2, cfg.n_t)]
+    return steps
 
 
 def price_european(
@@ -147,8 +218,23 @@ def price_european(
 
     What this does not fix: Crank-Nicolson still produces oscillatory Greeks
     near a non-smooth terminal condition because the scheme damps
-    high-frequency modes only marginally. That needs Rannacher time stepping
-    or a non-uniform grid, neither of which is implemented here.
+    high-frequency modes only marginally. That is what
+    `cfg.time_stepping="rannacher"` is for; a non-uniform grid concentrated at
+    the strike is the other standard remedy and is not implemented here.
+
+    Time stepping (`cfg.time_stepping`)
+    -----------------------------------
+    `"theta"` marches `n_t` steps of `dt = T / n_t`, each with `cfg.theta`.
+
+    `"rannacher"` replaces the first two of those by four fully implicit steps
+    of `dt / 2` and then continues with `cfg.theta`. Crank-Nicolson's
+    amplification factor tends to `-1` for the stiffest modes, so the payoff
+    kink's high-frequency content is flipped rather than damped and survives
+    the whole march; a few fully implicit steps, whose factor tends to `0`,
+    remove it. The price barely notices -- it is an average over the grid --
+    but gamma, which differences neighbouring values twice, is dominated by it.
+    See `RANNACHER_STARTUP_STEPS` for the mechanism and the citations, and
+    `docs/notes/pde_greeks_and_rannacher.md` for the measured effect.
     """
     if cfg.n_s < 3:
         raise InvalidInputError("n_s must be >= 3")
@@ -162,6 +248,13 @@ def price_european(
         raise InvalidInputError("s_max_multiplier must be > 0")
     if cfg.strike_alignment not in {"none", "midpoint"}:
         raise InvalidInputError("strike_alignment must be 'none' or 'midpoint'")
+    if cfg.time_stepping not in {"theta", "rannacher"}:
+        raise InvalidInputError("time_stepping must be 'theta' or 'rannacher'")
+    if cfg.time_stepping == "rannacher" and cfg.n_t < 2:
+        raise InvalidInputError(
+            "time_stepping='rannacher' requires n_t >= 2: the four implicit "
+            "start-up half steps replace the first two nominal steps"
+        )
 
     s0 = market.spot
     k = option.strike
@@ -203,7 +296,7 @@ def price_european(
             f"strike {k} must lie strictly inside the spot grid (0, {s_max})"
         )
 
-    dt = t / n_t
+    steps = _time_levels(t, cfg)
 
     if cfg.strike_alignment == "midpoint":
         # Build from ds directly so the half-integer node position is exact.
@@ -217,10 +310,7 @@ def price_european(
 
     s_inner = s_grid[1:-1]
 
-    for n in range(n_t):
-        tau_n = n * dt
-        tau_np1 = (n + 1) * dt
-
+    for tau_n, tau_np1, dt, theta_step in steps:
         df_r_n = market.df_r(tau_n)
         df_q_n = market.df_q(tau_n)
         df_r_np1 = market.df_r(tau_np1)
@@ -247,11 +337,11 @@ def price_european(
         b = -(sigma * sigma) * (s_inner**2) / (ds * ds) - r
         c = 0.5 * sigma * sigma * (s_inner**2) / (ds * ds) + (r - q) * s_inner / (2.0 * ds)
 
-        lower = -theta * dt * a
-        diag = 1.0 - theta * dt * b
-        upper = -theta * dt * c
+        lower = -theta_step * dt * a
+        diag = 1.0 - theta_step * dt * b
+        upper = -theta_step * dt * c
 
-        rhs = (1.0 + (1.0 - theta) * dt * b) * v[1:-1] + (1.0 - theta) * dt * (
+        rhs = (1.0 + (1.0 - theta_step) * dt * b) * v[1:-1] + (1.0 - theta_step) * dt * (
             a * v[:-2] + c * v[2:]
         )
 
@@ -280,6 +370,11 @@ def price_european(
         "s_max": s_max,
         "ds": ds,
         "strike_alignment": cfg.strike_alignment,
+        "time_stepping": cfg.time_stepping,
+        "implicit_startup_steps": (
+            RANNACHER_STARTUP_STEPS if cfg.time_stepping == "rannacher" else 0
+        ),
+        "n_steps_taken": len(steps),
     }
     return PriceResult(value=price, meta=meta)
 

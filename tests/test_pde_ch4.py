@@ -69,6 +69,7 @@ def _pde_error(
     n_t: int,
     theta: float,
     alignment: str,
+    time_stepping: str = "theta",
 ) -> float:
     cfg = PDEConfig(
         n_s=n_s,
@@ -76,6 +77,7 @@ def _pde_error(
         theta=theta,
         s_max_multiplier=4.0,
         strike_alignment=alignment,  # type: ignore[arg-type]
+        time_stepping=time_stepping,  # type: ignore[arg-type]
     )
     value = price(option, model, market, method="pde", cfg=cfg).value
     return abs(value - analytic)
@@ -219,3 +221,99 @@ def test_ch4_call_monotonicity_in_spot_for_each_theta() -> None:
 
         assert prices[0] <= prices[1] + 1e-12
         assert prices[1] <= prices[2] + 1e-12
+
+
+def test_pde_rannacher_preserves_second_order_price_convergence() -> None:
+    """Rannacher start-up keeps the price at order two.
+
+    Evidence class: CONVERGENCE_ORDER. Four fully implicit half steps replace
+    the first two Crank-Nicolson steps, so the start-up is locally first order
+    in dt over an interval of length 2*dt. That contributes O(dt**2) to the
+    global error -- which is the whole point of the construction, and the
+    reason it is four *half* steps rather than two *full* ones -- so the
+    order-2 price convergence measured for plain Crank-Nicolson on an aligned
+    grid must survive.
+
+    Measured on the reference ATM call, n_s = n_t = n over (50, 100, 200, 400,
+    800), strike-aligned: order 1.9973 with log-space residual 0.0213, against
+    1.9972 / 0.0224 for plain Crank-Nicolson. The band is the same +/- 0.2 the
+    plain-CN test uses and for the same two reasons.
+
+    The constant is checked separately below; it is the only thing that moves.
+    """
+    option, model, market, analytic = _conv_setup()
+
+    levels = (50, 100, 200, 400, 800)
+    h = [1.0 / n for n in levels]
+    errs = [
+        _pde_error(
+            option,
+            model,
+            market,
+            analytic,
+            n_s=n,
+            n_t=n,
+            theta=0.5,
+            alignment="midpoint",
+            time_stepping="rannacher",
+        )
+        for n in levels
+    ]
+
+    fit = fit_convergence_order(h, errs)
+
+    assert 1.8 <= fit.order <= 2.2
+    assert fit.residual < 0.1
+    assert fit.n_points == len(levels)
+
+
+def test_pde_rannacher_price_error_constant_is_slightly_worse_than_plain_cn() -> None:
+    """The damping is not free: it costs about 5% on the price error constant.
+
+    Evidence class: CONVERGENCE_ORDER (the claim is about the constant of a
+    measured power law, not about a single price).
+
+    Four implicit half steps are only first-order accurate over the 2*dt they
+    cover, so they add an O(dt**2) term with the same sign as Crank-Nicolson's
+    own. Measured scaled errors n**2 * |error| on the reference ATM call:
+
+    | n   | theta   | rannacher |
+    |-----|---------|-----------|
+    | 50  | 19.0195 | 20.0666   |
+    | 100 | 20.3437 | 21.3925   |
+    | 200 | 19.2799 | 20.3290   |
+    | 400 | 19.5074 | 20.5566   |
+    | 800 | 19.6144 | 20.6636   |
+
+    The ratio is 1.052-1.055 across the whole sequence: a constant factor, as a
+    same-order perturbation must be, not a growing gap. Both engines undershoot
+    the closed form at every n, so the comparison is between two same-signed
+    errors. The bounds below are deliberately loose enough to survive a
+    round-off-level change and tight enough that the ratio turning into a
+    growth in n (i.e. an order loss) would fail.
+    """
+    option, model, market, analytic = _conv_setup()
+
+    levels = (50, 100, 200, 400, 800)
+    ratios = []
+    for n in levels:
+        base = _pde_error(
+            option, model, market, analytic, n_s=n, n_t=n, theta=0.5, alignment="midpoint"
+        )
+        damped = _pde_error(
+            option,
+            model,
+            market,
+            analytic,
+            n_s=n,
+            n_t=n,
+            theta=0.5,
+            alignment="midpoint",
+            time_stepping="rannacher",
+        )
+        ratios.append(damped / base)
+
+    assert all(1.02 <= ratio <= 1.10 for ratio in ratios), ratios
+    # A constant factor, not a drift: the spread across a 16x refinement is
+    # measured at 0.003.
+    assert max(ratios) - min(ratios) < 0.02, ratios
