@@ -198,6 +198,21 @@ mesh-refinement machinery against a case that needs it produces a better
 design than building it against three cases that would only be a little more
 accurate with it. Slice 7 (Monte Carlo variance reduction) went first for the
 same reason: Phase 3 had a case waiting and Phase 2's last item did not.
+
+**The barrier case has now arrived, and it does force the mesh.** Slice 12
+delivered the barrier as a contract with three engines and none of them is a
+grid: the analytic closed form, a lattice that knocks out at nodes, and a
+simulation that observes a schedule. Both numerical routes were measured at
+**order one half** for the same reason -- the barrier is displaced by
+`O(sigma sqrt(dt))` and the price is locally linear in it -- and the two
+remedies that exist for the lattice (choose `n` so a layer lands on the
+barrier; interpolate at the straddling nodes) are both statements about node
+*placement*. A finite-difference grid has the same problem and the same cure,
+except that it can place a node exactly on the barrier for every time step at
+once, which a uniform grid cannot do for a boundary that is not the strike.
+**The barrier PDE with a non-uniform grid is the next slice**, and it is the
+first one in which the mesh is not an accuracy improvement but the thing that
+makes the method work at all.
 - ~~`qpl.numerics.linear_systems` used where it earns its place, or a recorded
   reason why not.~~ **Answered, in two halves.** For the European theta scheme
   a direct tridiagonal solve is needed and Slice 4 measured LAPACK's banded
@@ -271,11 +286,15 @@ same reason: Phase 3 had a case waiting and Phase 2's last item did not.
   the 1.5e-03 the lattice-and-grid pair gets, and the reason is measured: a
   third term the slice statement did not anticipate, the low bias of a policy
   fitted on a finite sample.
-- Barrier monitoring bias checked against the Reiner-Rubinstein closed form.
-  **This is Phase 3's last open item** and the natural next slice: the Slice 11
-  Bermudan-gap study measured `O(1/m)` for an exercise frequency and predicted
-  in passing that a barrier's discrete-monitoring bias is `O(1/sqrt(m))`
-  instead, which is exactly the claim that case exists to check.
+- ~~Barrier monitoring bias checked against the Reiner-Rubinstein closed
+  form.~~ **Delivered in Slice 12** (see below), and the prediction held:
+  Slice 11 measured `O(1/m)` for an exercise frequency and predicted
+  `O(1/sqrt(m))` for a monitoring frequency; the measured bias order is
+  **0.5045** against the continuous closed form, with a lower-noise paired
+  estimate of 0.4603 +- 0.0125. The same one-half turns up on the lattice, as
+  the Boyle-Lau sawtooth's amplitude order (0.4566), because both
+  discretisations displace the barrier by `O(sigma sqrt(dt))` and the price is
+  locally linear in the barrier level. **Phase 3 is complete.**
 - QMC only if a case motivates it. Still open; nothing has motivated it.
 
 ### Phase 4 — Transforms and volatility
@@ -1339,6 +1358,87 @@ same reason: Phase 3 had a case waiting and Phase 2's last item did not.
   in the order the corrections have to be applied.
 - Suite: **1387 tests, 145.3 s** (from 1322 / 125.6 s). The three new core test files run in 12.1 s together, the QuantLib oracle adds 7.3 s under the `[oracle]` extra only, and the extended example smoke adds about 1.3 s.
 - Full tables and the derivation: `docs/notes/lsm_american_monte_carlo.md`.
+
+### Slice 12
+- **A user can price a single barrier, eight types, with a rebate, three ways.**
+  `BarrierOption(kind, strike, expiry, barrier, barrier_type, rebate,
+  monitoring)` with `barrier_type` over down/up x in/out and `monitoring` either
+  `"continuous"` or a tuple of dates. `method="analytic"` prices the continuous
+  contract by the Reiner-Rubinstein closed forms; `method="mc"` prices the
+  discrete one on the schedule the contract names, with
+  `MCConfig(barrier_correction="none"|"bgk"|"brownian_bridge")`;
+  `method="tree"` approximates the continuous one by knocking out at lattice
+  nodes, CRR or Leisen-Reimer.
+- **The first instrument whose contract carries a monitoring convention**, and
+  the reason it has to: continuous and discrete monitoring are different
+  contracts whose prices differ by `O(1/sqrt(m))`, and putting the convention
+  on the instrument is what lets `method="analytic"` refuse a discrete schedule
+  by inspecting the contract rather than quietly answering a different question.
+- **The closed forms, derived rather than copied.** The joint law of the
+  terminal value and the running extremum from the reflection principle plus
+  Girsanov (Shreve II ch. 7), assembled into the six `A`-`F` blocks and the
+  eight types. In-out parity is exact at zero rebate (**1.42e-14** over twenty
+  cells) and *false* with a rebate by exactly `E + F`; every knock-out collapses
+  to its rebate at `H = S` exactly, by block cancellation for a call and by a
+  difference of sums for a put. Three published Haug rows reproduce to
+  **3.23e-05, 3.66e-05, 1.98e-05** against four-decimal figures, and QuantLib's
+  `AnalyticBarrierEngine` agrees to **2.886e-14 over 96 cells** (eight types x
+  two kinds x three strikes x two rebates).
+- **The monitoring bias is order one half, as predicted.** Measured biases
+  +1.1211 / +0.8164 / +0.6221 / +0.4490 / +0.2631 at `m = 25 ... 400`
+  (40 000 paths, antithetic + vanilla control variate), fitted **0.5045**
+  (residual 0.0687); the paired low-noise estimator gives **0.4603 +- 0.0125**
+  over ten seeds, and the shortfall from 0.5 is the `o(1/sqrt(m))` term rather
+  than noise. QuantLib's `MCBarrierEngine(isBiased=True)` prices the same
+  discrete contract at `z = -0.202` and `-0.879`.
+- **The Brownian bridge removes the bias entirely, at `m = 1`.** The estimator
+  conditions on the sampled points, so its mean does not depend on how many
+  there are: `z = -0.10` with a single observation at expiry, where the plain
+  estimator returns the vanilla 7.849. Coverage 39/40 and 38/40 over 40 seeds.
+- **The Boyle-Lau sawtooth, and what does not fix it.** Amplitude over a full
+  period: 0.93510 / 0.63967 / 0.49654 at `n0 = 100 / 200 / 400`, order
+  **0.4566** -- half an order, the same displacement seen from the lattice side.
+  Leisen-Reimer removes **2%** of it (ratio 0.977-0.980, order 0.4542). The
+  Boyle-Lau step counts `n_k = floor(k^2 sigma^2 T / log(S/H)^2)` make CRR first
+  order (block-RMS **1.1258**, residual 0.0041) and do nothing at all for
+  Leisen-Reimer (0.4254).
+- **Five findings that contradicted the slice's written expectations**, all
+  encoded as tests: (1) gamma does **not** blow up as `S -> H` -- the value
+  vanishes linearly and delta/gamma converge to 0.9265 and -0.0125, with the
+  barrier flipping gamma's *sign*; the singularity is at the corner
+  `(S = H, t = T)` and only when the terminal payoff jumps across `H`. (2) The
+  Boyle-Lau subsequence is first order but **not monotone**: `floor` leaves a
+  residual misalignment spanning three decimal orders, so `|error x n|` is
+  bounded in `[0.025, 1.70]` with an erratic constant. (3) BGK's *order* is not
+  measurable at this cost -- inside two paired standard errors from `m = 50`,
+  with a wandering sign and a fit residual of 1.02. (4) At `sigma = 0` the
+  discretely monitored knock-out is worth **less**, not more (2.94060 against
+  2.97022): a later knock-out preserves more option value and less rebate
+  value, and there is no option value left to preserve. (5) The closed forms do
+  not detect a spot beyond the barrier -- they return **-1.0394** where the true
+  value is 3.00 -- so the inception guard cannot be replaced by a limit.
+- **And one from the oracle, which is the argument for the next slice.**
+  QuantLib's `BinomialCRRBarrierEngine` has **no sawtooth at all**: amplitude
+  1.98e-03 against this package's 1.229 over `n = 200 ... 239`, a factor of
+  **620**, and it beats this package's Boyle-Lau-aligned prices at the same step
+  counts. That is the behaviour of the Derman-Kani-Ergener-Bardhan
+  interpolation, which Slice 12 cited and deliberately did not implement so that
+  one remedy could be measured properly rather than two badly.
+- **Cases**: a seventh id space, `qpl.cases.barrier_black_scholes`, 18 rows --
+  three PUBLISHED_BENCHMARK, four EXACT_IDENTITY, two CLOSED_FORM, three Monte
+  Carlo rows (CONVERGENCE_ORDER / STATISTICAL / NEGATIVE_FINDING), three lattice
+  rows and three INDEPENDENT_ENGINE rows. The lattice leg's budget is
+  `BARRIER_BOYLE_LAU_ENVELOPE / n` with the envelope taken from the measured
+  `max |error| x n` across the three points, not from the error at the chosen
+  layer, because that would be cherry-picking an erratic constant.
+- `examples/barrier_option_monitoring_bias.py` (also `--case sawtooth`).
+- **Refused, with reasons**: MC and tree Greeks (a surface measure on the
+  barrier; the sawtooth amplified by `1/dt`), stratified sampling, a knock-out
+  rebate under the bridge (the hit *time* is unknown), `bgk` on a non-uniform
+  schedule, discrete monitoring on the lattice and continuous monitoring in the
+  simulation.
+- Suite: **1602 tests, 161.2 s** (from 1486 / 146.8 s). The three new core test files run in 3.6 s together and the cases file in 0.6 s; the QuantLib oracle adds 2.4 s under the `[oracle]` extra only, and the two new curated example invocations add 6.3 s -- six subprocess launches, since every example is run once for its keys and twice for determinism. That example cost is the whole overshoot against the slice's ~12 s budget and is the one place a later slice could buy time back cheaply.
+- Full tables and the derivation: `docs/notes/barrier_options_monitoring_bias.md`.
 
 ## Reconciled old roadmap
 

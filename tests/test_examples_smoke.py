@@ -337,6 +337,57 @@ _SMOKE_CASES = [
         ],
     ),
     (
+        # One barrier, two discretisations, one half-order. The curated keys
+        # are the ones a run that had lost the point would not print:
+        # `plain_bias_order=+0.51` next to a plain bias of +1.17 at m = 25 is
+        # the monitoring bias and its order in one line; `single_observation
+        # bridge=` with `plain=7.849428` is the slice's most surprising result
+        # -- at ONE observation date the Brownian-bridge estimator already
+        # prices the continuous barrier while the plain estimator returns the
+        # vanilla; and `bgk_bias=+0.070633` against `plain_bias=+1.171070` at
+        # the same m is the continuity correction's size.
+        "barrier_option_monitoring_bias.py",
+        [],
+        [
+            "example=barrier_option_monitoring_bias",
+            "case=monitoring",
+            "analytic_continuous=4.5125986078",
+            "bgk_beta=0.5825971579",
+            "monitoring m=  25 plain=5.6836",
+            "plain_bias=+1.1710",
+            "bgk_bias=+0.0706",
+            "bgk_closed_form=5.619546",
+            "effective_barrier=96.977095",
+            "monitoring m= 400",
+            "plain_bias_order=+0.51",
+            "single_observation bridge=4.5198",
+            "plain=7.849428",
+        ],
+    ),
+    (
+        # The lattice leg. `sawtooth_order crr=+0.45` next to
+        # `sawtooth_order leisen-reimer=+0.45` is the whole negative finding --
+        # half an order for both schemes -- and `lr_over_crr=0.97` pins that
+        # Leisen-Reimer buys 2% of the amplitude where it buys two decimal
+        # orders on a vanilla. `err_times_n=` on the Boyle-Lau rows is the
+        # bounded-but-erratic constant.
+        "barrier_option_monitoring_bias.py",
+        ["--case", "sawtooth"],
+        [
+            "case=sawtooth",
+            "window n0=  100 period=  70",
+            "crr_amplitude=0.93510",
+            "lr_amplitude=0.91326",
+            "lr_over_crr=0.97",
+            "sawtooth_order crr=+0.45",
+            "sawtooth_order leisen-reimer=+0.45",
+            "boyle_lau k=  7 n=   582 err=-6.38024e-05",
+            "err_times_n=",
+            "misalignment=",
+            "nearby_unaligned_err=+3.19468e-01",
+        ],
+    ),
+    (
         "american_put_binomial_dp.py",
         [],
         [

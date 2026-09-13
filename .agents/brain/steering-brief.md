@@ -1,5 +1,96 @@
 # Steering Brief
 
+What changed in Slice 12 (files + bullets)
+
+Phase 3's last item, and the case Phase 2 has been waiting for. The single
+barrier as a contract -- eight types, rebates, and a **monitoring convention**
+that is part of the instrument -- priced three ways, with the same half-order
+displacement measured from the simulation side and the lattice side. Still on
+`dev/curriculum`; not pushed. **Phase 3 is complete.**
+
+- `src/qpl/instruments/options.py`: `BarrierOption(kind, strike, expiry,
+  barrier, barrier_type, rebate, monitoring)` plus `BARRIER_TYPES`,
+  `uniform_monitoring_times`, and `is_touched(spot)` / `is_down` /
+  `is_knock_out` / `is_continuous` / `monitoring_times` / `n_monitoring`.
+  `AsianOption`'s fixing-schedule validation moved into a shared
+  `_validated_schedule` (same rules, same messages, one copy).
+- `src/qpl/engines/analytic/barrier.py` (new): `barrier_price`,
+  `barrier_blocks`, `BarrierBlocks`, `price_barrier`, `greeks_barrier`,
+  `shifted_barrier`, `BGK_BETA`, and the deliberately-unregistered
+  `bgk_continuity_corrected_price`. Registered for price and Greeks.
+- `src/qpl/engines/mc/barrier.py` (new): `price_barrier`,
+  `barrier_terminal_sample`, `bridge_survival`,
+  `normalise_barrier_correction`, and a
+  registered-and-raising `greeks_barrier`. `MCConfig` gains
+  `barrier_correction: "none"|"bgk"|"brownian_bridge"`, read by this engine
+  alone.
+- `src/qpl/engines/tree/barrier.py` (new): `price_barrier`, `boyle_lau_steps`,
+  `barrier_layer_index`, registered-and-raising `greeks_barrier`. Knock-in is
+  assembled from three roll-backs on the *same* lattice, so in-out parity holds
+  on the discretisation (1e-13 at `n = 51`) and not only in its limit.
+- `src/qpl/cases/barrier_black_scholes.py` (new, 18 rows, seventh id space).
+- `tests/test_barrier_analytic.py`, `tests/test_barrier_mc.py`,
+  `tests/test_barrier_tree_convergence.py`,
+  `tests/cases/test_barrier_black_scholes_cases.py`,
+  `tests/oracle/test_barrier_vs_quantlib.py`,
+  `examples/barrier_option_monitoring_bias.py` (also `--case sawtooth`).
+
+**One displacement, three sides.** A discrete schedule, a Monte Carlo sample
+and a lattice all substitute an effective barrier displaced by
+`O(sigma sqrt(dt))`, and the price is locally linear in the barrier level.
+Half an order, therefore, not one -- and that is the whole slice:
+
+    monitoring bias order (MC vs closed form)      0.5045  (residual 0.0687)
+    ... paired, ten seeds                          0.4603 +- 0.0125
+    sawtooth amplitude order (CRR)                 0.4566  (residual 0.030)
+    sawtooth amplitude order (Leisen-Reimer)       0.4542
+    Boyle-Lau subsequence (CRR, block-RMS)         1.1258  (residual 0.0041)
+    Boyle-Lau subsequence applied to LR            0.4254
+
+**The bridge prices the continuous barrier at `m = 1`** (`z = -0.10`), because
+it conditions on the sampled points and its *mean* does not depend on how many
+there are. The plain estimator at the same `m` returns the vanilla, 7.849
+against 4.513.
+
+**Published and oracle.** Three Haug rows to 3.23e-05 / 3.66e-05 / 1.98e-05
+(four-decimal figures); QuantLib's `AnalyticBarrierEngine` to **2.886e-14 over
+96 cells**; QuantLib's `MCBarrierEngine(isBiased=True)` on the discrete
+contract at `z = -0.202` / `-0.879`; its Brownian-bridge mode against ours at
+`z = -0.585` / `-0.531`.
+
+**Six contradicted expectations, all encoded.** (1) Gamma does **not** blow up
+as `S -> H`: the value vanishes linearly, delta and gamma converge to 0.9265
+and -0.0125, and what the barrier changes is gamma's *sign* (concave where the
+vanilla is convex). The singularity is at `(S = H, t = T)` and appears only when
+the terminal payoff jumps across `H`. (2) The Boyle-Lau subsequence is first
+order but **not monotone** -- `floor` leaves a misalignment spanning three
+decimal orders, so `|error x n|` is bounded in `[0.025, 1.70]` with an erratic
+constant. (3) BGK's *order* is below the paired noise floor from `m = 50` on
+(fit residual 1.02); only the size of the drop is measurable (>=12x against the
+plain estimator's 1.37x). (4) At `sigma = 0` the discrete knock-out is worth
+**less** (2.94060 vs 2.97022): a later knock-out preserves more option value
+and less rebate value, and there is none left to preserve. (5) The closed forms
+return **-1.0394** on the wrong side of the barrier, so the inception guard is
+not replaceable by a limit. (6) The published table's varying column is the
+**strike** at a fixed spot of 100, not the spot -- the mis-reading turns 9.02
+into 3.00 and is pinned as a test.
+
+**And the oracle finding that sets up the next slice.** QuantLib's
+`BinomialCRRBarrierEngine` shows **no sawtooth**: amplitude 1.98e-03 against
+this package's 1.229 over `n = 200 ... 239` (620x), and it beats this package's
+*aligned* prices too. That is the Derman-Kani-Ergener-Bardhan interpolation,
+cited here and deliberately not implemented so that one remedy could be
+measured properly rather than two badly.
+
+**Next slice: the barrier PDE on a non-uniform grid.** Phase 2 deferred the
+mesh until a case forced it; this is that case. Both numerical routes here fail
+for a *node-placement* reason, and a grid is the one method that can place a
+node on a boundary that is not the strike for every time step at once.
+
+---
+
+What changed in Slice 11 (files + bullets)
+
 What changed in Slice 11 (files + bullets)
 
 Phase 3's Longstaff-Schwartz item, and the first three-way cross-method case.
