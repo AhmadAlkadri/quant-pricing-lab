@@ -12,6 +12,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from .engines.analytic.asian import (
+    greeks_asian as greeks_asian_analytic,
+    price_asian as price_asian_analytic,
+)
 from .engines.analytic.black_scholes import (
     ANALYTIC_METHOD_SPEC,
     greeks_european as greeks_european_analytic,
@@ -63,7 +67,12 @@ from .engines.tree.pricers import (
     greeks_european as greeks_european_tree,
     price_european as price_european_tree,
 )
-from .instruments.options import AmericanOption, DigitalOption, EuropeanOption
+from .instruments.options import (
+    AmericanOption,
+    AsianOption,
+    DigitalOption,
+    EuropeanOption,
+)
 from .models.black_scholes import BlackScholesModel
 
 Method = Literal["analytic", "mc", "pde", "tree"]
@@ -155,6 +164,25 @@ def _register_builtin_engines() -> None:
         spec=MC_METHOD_SPEC,
         price=price_digital_mc,
         greeks=greeks_digital_mc,
+    )
+    # Slice 8: the fixed-strike Asian, a *path-dependent* payoff. Only the two
+    # engines that can see a path register: the analytic one for the geometric
+    # average (which is exactly lognormal) and Monte Carlo for both averagings.
+    # The tree and the grid do not register at all -- pricing an average needs a
+    # second state variable, which is a different discretisation and not a
+    # different branch inside these ones.
+    #
+    # Both analytic entries are registered even though `price_asian` refuses an
+    # *arithmetic* Asian: the refusal has to be the one that names
+    # Turnbull-Wakeman and Monte Carlo, and an unregistered key would report
+    # "Unsupported instrument/model/market combination" instead. Same reasoning
+    # as the MC digital Greeks above.
+    asian = {"instrument_type": AsianOption, "model_type": BlackScholesModel}
+    register(
+        **asian,
+        spec=ANALYTIC_METHOD_SPEC,
+        price=price_asian_analytic,
+        greeks=greeks_asian_analytic,
     )
 
 
