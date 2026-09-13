@@ -1,5 +1,99 @@
 # Steering Brief
 
+What changed in Slice 13 (files + bullets)
+
+**Phase 2's last item, closed by the case that forced it.** The single barrier
+by finite differences, on a grid that can put a node on the barrier -- which is
+the one thing neither of Slice 12's discretisations could do. Still on
+`dev/curriculum`; not pushed. **Phase 2 is complete.**
+
+- `src/qpl/engines/pde/grid.py` (new): `SpotGrid`, `build_spot_grid`,
+  `operator_coefficients`, `delta_gamma_nodes`, `stencil_weights`,
+  `sinh_coordinate`, `inverse_sinh_coordinate`, `UNIFORM` / `SINH` /
+  `GRID_KINDS`. The mesh and the three-point stencil, shared by the vanilla,
+  American, digital and barrier PDE engines.
+- `PDEConfig` gains four fields, all defaulting to the pre-slice behaviour:
+  `grid="uniform"|"sinh"`, `concentration=0.05`, `grid_points=None`,
+  `barrier_alignment="node"|"none"` (read only by the barrier engine).
+- `src/qpl/engines/pde/barrier.py` (new): `price_barrier`, `greeks_barrier`,
+  `solve_leg`, `BARRIER_LEGS` / `KNOCK_OUT` / `KNOCK_IN` / `VANILLA_LEG`.
+  Registered for `(BarrierOption, BlackScholesModel, "pde")` for **price and
+  Greeks** -- the first barrier engine here with real Greeks, and the first
+  engine of any kind that prices both monitoring conventions.
+- `src/qpl/engines/pde/pricers.py`, `american.py`, `digital.py`: `_build_grid`
+  returns a `SpotGrid`, `_operator` takes one, `_GridSolution` carries one.
+  Uniform output is **bit-for-bit** unchanged, asserted with `==` against the
+  pre-slice expressions written out in the tests.
+- `src/qpl/cases/barrier_black_scholes.py`: 18 rows -> 26; the continuous
+  cross-engine rows become **four**-engine.
+- `tests/test_pde_nonuniform_grid.py`, `tests/test_pde_barrier.py`,
+  `tests/oracle/test_barrier_pde_vs_quantlib.py`,
+  `examples/barrier_pde_grid.py` (also `--case mesh`, `--case discrete`),
+  `docs/notes/pde_nonuniform_grids_and_barriers.md`.
+- `tests/test_examples_smoke.py`: three subprocess runs per curated invocation
+  became two (keys and determinism from the same pair). 42.2 s -> 28.2 s, and
+  36.6 s with the three new invocations, so the slice leaves the harness
+  **5.6 s cheaper** than it found it.
+
+**The stencil, stated honestly.** The second-derivative arm of the three-point
+stencil is *first order pointwise* -- its leading term is proportional to
+`h+ - h-` -- and the global error is second order only because a grid from a
+smooth map has `h+ - h- = O(dxi^2)`. Both halves measured:
+
+    pointwise 2nd derivative, spacings alternating h, 2h     1.0000
+    pointwise 1st derivative, same grid                      2.0000
+    both, on the sinh grid                                   ~2
+
+**Order two on the mesh** (`n = 50 ... 800`, `S=K=100`, `T=1`): vanilla price
+1.9915, digital price 1.9907, delta 1.9911, gamma 1.9924.
+
+**The barrier, on a node and off it** (`S=K=100, H=95, T=0.5`, closed form
+4.5125986078):
+
+    continuous, barrier on a node       2.0668  (res 0.0883)
+    continuous, barrier off a node      0.7079  (res 0.3068), |err| x n in
+                                        [85.2, 245.7], all signs positive,
+                                        182x-4021x the aligned errors
+    sinh vs uniform error ratio         18.0 / 13.0 / 15.4 / 14.5
+    discrete-to-continuous gap in 1/m   0.4431  (res 0.0101)
+    ... BGK shift's own gap, same m     0.4361
+    in-out parity residual              1.1e-16 to 1.1e-15 relative
+    grid delta / gamma order (sinh)     1.9980 / 1.9558
+
+**The mesh is a placement remedy, not free accuracy.** Concentration scan at
+`n = 100`: gains of 22.1 / 18.0 / 10.7 / 5.0 on the barrier at 0.02 / 0.05 /
+0.10 / 0.20, and *losses* of 0.10 / 0.18 / 0.28 / 0.49 on the plain vanilla at
+the same point. The default 0.05 is not the best cell and is kept as a
+compromise, reported rather than tuned.
+
+**One contradicted expectation, and it is the interesting one.** The slice said
+"projection to the rebate at each monitoring date" and left the discretisation
+of that projection unsaid. Sampling it at *nodes* costs a full order and biases
+low -- observing a barrier makes the value function discontinuous (the Slice 6
+digital pathology, once per date), and on a grid where `H` is a node half that
+node's cell is alive while the node is set to the rebate. Measured on one grid:
+**0.9619** node-sampled against **2.2844** cell-weighted, errors
+-6.34e-01 -> -8.60e-02 against +3.64e-02 -> +3.26e-04. The implemented
+projection is the `L2` one, weighted by the cell fraction, which needs no node
+placement at all.
+
+**Oracle.** QuantLib's `FdBlackScholesBarrierEngine` over 24 cells at `T = 1.0`:
+worst error 2.663e-03 against this engine's 2.958e-05 (90x). The finding:
+QuantLib's engine is **order one** on exactly the contracts whose terminal
+payoff jumps across the barrier (0.9502 on a down-and-out put with `K = 110`)
+and order two on the rest (1.8767) -- what carrying the dead region costs.
+`dampingSteps` ruled out (zero beats twenty on both cells), the same shape of
+finding Slice 4 recorded for the vanilla FD engine.
+
+**Next.** Phase 4: Fourier pricing of Black-Scholes as a sanity check, then the
+Heston characteristic function in a branch-cut-safe form, Lewis / Carr-Madan,
+and Heston Monte Carlo with the QE scheme -- whose prerequisite (Slice 9's SDE
+layer, including the CIR boundary) is already delivered. The interpolation
+remedy for the lattice barrier (Derman-Kani-Ergener-Bardhan), cited twice and
+still not implemented, remains the cheapest outstanding numerical item.
+
+---
+
 What changed in Slice 12 (files + bullets)
 
 Phase 3's last item, and the case Phase 2 has been waiting for. The single

@@ -155,17 +155,18 @@ unknowns stay unknown.
   and `greeks_method="grid"`, with delta, gamma and theta measured at order
   ~2 and the plain-Crank-Nicolson gamma divergence pinned as a negative
   finding and confirmed independently in QuantLib.
-- A non-uniform grid concentrated at the strike, as the second standard
+- ~~A non-uniform grid concentrated at the strike, as the second standard
   remedy for the strike-kink pathology documented in
-  `docs/notes/pde_strike_alignment.md`. Still open, and now motivated twice
-  over. Slice 4: strike alignment improves the undamped gamma error by a factor
-  of nine but leaves its fitted order negative, so the two remedies address
-  different halves of the problem and a grid concentrated at the strike is not
-  a substitute for damping either. Slice 5 adds a second reason -- the American
-  price order is 1.85 and falling toward 1 because the free boundary is located
-  only to the node spacing, and nodes concentrated where the boundary actually
-  travels are the obvious way to buy that back. It would also let the PSOR
-  sweep count be traded against accuracy rather than against `dt / ds**2`.
+  `docs/notes/pde_strike_alignment.md`.~~ **Delivered in Slice 13** (see
+  below), and it arrived as a *barrier* mesh rather than as a strike mesh,
+  which is what the deferral was waiting for. `PDEConfig(grid="sinh",
+  concentration=..., grid_points=(...))` places nodes uniformly in
+  `xi(S) = sum_j asinh((S - c_j)/alpha)`, with the barrier written back exactly
+  as an anchor and the strike nudged to a cell midpoint. Measured order two in
+  price, digital price, delta and gamma; the constant it buys is 13x-18x on a
+  barrier and a *loss* on a plain vanilla at the same point, which settles what
+  the mesh is for. The three motivations recorded here were all accuracy
+  constants and all of them turn out to have been the weaker argument.
 - ~~PSOR for American exercise, cross-checked against the Phase 1 trees.~~
   **Delivered in Slice 5** (see below): the LCP solved by red-black projected
   SOR inside each time step, measured order 1.85 against the lattice-bracketed
@@ -179,40 +180,29 @@ unknowns stay unknown.
   the same grid. Four written expectations did not hold, and each is encoded
   rather than quietly dropped.
 
-**Phase 2 has one item left, and it is now deferred rather than next**: the
-non-uniform grid. Slice 6 added a third motivation for it -- the digital's
-price error on an unaligned grid is `O(cash * ds)` near the strike, so nodes
-concentrated there buy the constant back directly, and
-`payoff_projection="cell_average"` is the cheap substitute that a non-uniform
-grid would make unnecessary.
+**The deferral, and how it closed.** The mesh was deferred three times
+(decision by the orchestrator, 2026-09-13), because all three motivations then
+on record -- the strike kink of Slice 0/4, the free boundary of Slice 5, the
+digital's `O(cash * ds)` of Slice 6 -- were *accuracy constants* on problems
+that already had a working remedy. Strike alignment, the cell-average
+projection and Rannacher between them covered every measured pathology, and a
+non-uniform grid would only have improved numbers that were already at the
+measured order. The argument was to build the mesh against a case that needed
+it rather than against three that would merely be a little more accurate with
+it, and Slice 7 went ahead of it for exactly that reason.
 
-**Deferred until the barrier case forces it** (decision by the orchestrator,
-2026-09-13). All three motivations so far are *accuracy constants* on problems
-that already have a working remedy: strike alignment, the cell-average
-projection and Rannacher between them cover every measured pathology, and a
-non-uniform grid would improve numbers that are already at the measured order.
-A barrier is different in kind -- the grid has to place a node on a boundary
-that is not the strike, and where the payoff is not merely kinked but cut off
--- so it forces the mesh rather than merely rewarding it. Building the
-mesh-refinement machinery against a case that needs it produces a better
-design than building it against three cases that would only be a little more
-accurate with it. Slice 7 (Monte Carlo variance reduction) went first for the
-same reason: Phase 3 had a case waiting and Phase 2's last item did not.
-
-**The barrier case has now arrived, and it does force the mesh.** Slice 12
-delivered the barrier as a contract with three engines and none of them is a
-grid: the analytic closed form, a lattice that knocks out at nodes, and a
-simulation that observes a schedule. Both numerical routes were measured at
-**order one half** for the same reason -- the barrier is displaced by
-`O(sigma sqrt(dt))` and the price is locally linear in it -- and the two
-remedies that exist for the lattice (choose `n` so a layer lands on the
-barrier; interpolate at the straddling nodes) are both statements about node
-*placement*. A finite-difference grid has the same problem and the same cure,
-except that it can place a node exactly on the barrier for every time step at
-once, which a uniform grid cannot do for a boundary that is not the strike.
-**The barrier PDE with a non-uniform grid is the next slice**, and it is the
-first one in which the mesh is not an accuracy improvement but the thing that
-makes the method work at all.
+**The barrier was that case, and Slice 13 closed the item.** Slice 12 shipped
+the barrier with three engines and none of them a grid, and measured both
+numerical routes at **order one half** for one reason: the barrier is displaced
+by `O(sigma sqrt(dt))` and the price is locally linear in it. A grid can put a
+node on the barrier for every time step at once -- by truncating the domain
+there -- and Slice 13 measures what that is worth: **order 2.0668 on a node
+against 0.7079 off it**, with errors 182x to 4021x apart at the same node
+count. The deferral's judgement held: the mesh built against the barrier has a
+design (anchors that must be nodes, a strike that must not be, and a
+cell-weighted projection that makes placement irrelevant for the discrete
+contract) that none of the three earlier motivations would have produced.
+**Phase 2 is complete.**
 - ~~`qpl.numerics.linear_systems` used where it earns its place, or a recorded
   reason why not.~~ **Answered, in two halves.** For the European theta scheme
   a direct tridiagonal solve is needed and Slice 4 measured LAPACK's banded
@@ -294,7 +284,9 @@ makes the method work at all.
   estimate of 0.4603 +- 0.0125. The same one-half turns up on the lattice, as
   the Boyle-Lau sawtooth's amplitude order (0.4566), because both
   discretisations displace the barrier by `O(sigma sqrt(dt))` and the price is
-  locally linear in the barrier level. **Phase 3 is complete.**
+  locally linear in the barrier level. **Phase 3 is complete**, and it stays
+  complete: Slice 13 added no Monte Carlo capability, it used the Slice 12
+  simulation as an independent check on a grid.
 - QMC only if a case motivates it. Still open; nothing has motivated it.
 
 ### Phase 4 — Transforms and volatility
@@ -1439,6 +1431,109 @@ makes the method work at all.
   simulation.
 - Suite: **1602 tests, 161.2 s** (from 1486 / 146.8 s). The three new core test files run in 3.6 s together and the cases file in 0.6 s; the QuantLib oracle adds 2.4 s under the `[oracle]` extra only, and the two new curated example invocations add 6.3 s -- six subprocess launches, since every example is run once for its keys and twice for determinism. That example cost is the whole overshoot against the slice's ~12 s budget and is the one place a later slice could buy time back cheaply.
 - Full tables and the derivation: `docs/notes/barrier_options_monitoring_bias.md`.
+
+
+### Slice 13
+**Phase 2's last item, and the case that forced it.** The single barrier by
+finite differences, on a grid that can put a node on the barrier -- which is
+the one thing neither Slice 12 discretisation could do.
+
+- `qpl.engines.pde.grid` (new): the spot mesh and the three-point stencil,
+  shared by every PDE engine. `PDEConfig(grid="sinh", concentration=...,
+  grid_points=(...))` places nodes uniformly in
+  `xi(S) = sum_j asinh((S - c_j) / alpha)`, `alpha = concentration * (s_max -
+  s_min)`. Mesh formula: In 't Hout & Foulon (2010), IJNAM 7(2), section 3,
+  cited for the mesh alone; the several-point generalisation is the density
+  view of Tavella & Randall (2000) chapter 5.
+- **The stencil's order, stated honestly and measured both ways.** The
+  second-derivative arm is *first order pointwise* (leading term proportional
+  to `h+ - h-`) and the global error is second order because a grid from a
+  smooth map has `h+ - h- = O(dxi^2)`. Control: on spacings alternating
+  `h, 2h` the pointwise second-derivative order is **1.0000** against the
+  first derivative's **2.0000**; on the `sinh` grid both are ~2.
+- **Order two on the sinh grid** for the vanilla price (1.9915), the digital
+  price (1.9907), delta (1.9911) and gamma (1.9924), over `n = 50 ... 800`.
+  `grid="uniform"` is bit-for-bit unchanged: construction, operator
+  coefficients and Greek stencils are each compared with `==` against the
+  pre-slice expressions written out in the tests.
+- `qpl.engines.pde.barrier` (new), registered for `(BarrierOption,
+  BlackScholesModel, "pde")` for **price and Greeks**. It is the first engine
+  here that prices both monitoring conventions: continuous by truncating the
+  domain at the barrier (`[H, s_max]` or `[0, H]`, so the Dirichlet condition
+  sits on `S = H` with no alignment arithmetic), discrete by projecting at each
+  monitoring date on a time grid built as the union of the `n_t` uniform levels
+  and the `m` monitoring levels. It is also the first barrier engine with real
+  Greeks.
+- **On a node, order 2.0668** (residual 0.0883) against the Reiner-Rubinstein
+  form. **Off a node, first order with an erratic constant**: fit 0.7079 with a
+  log-space residual of 0.3068, `|error| x n` in `[85.2, 245.7]` through
+  `n = 1600`, every error positive (the scheme prices a barrier further from
+  the spot), and 182x to 4021x the aligned errors at the same node count. The
+  requirement is Zvan, Vetzal & Forsyth (2000), JEDC 24, 1563-1590; the numbers
+  are measured here, and `PDEConfig(barrier_alignment="none")` keeps the
+  configuration reachable.
+- **The mesh buys a factor of 13-18 in the constant, and costs on a vanilla.**
+  Uniform/sinh error ratios 18.0, 13.0, 15.4, 14.5 at `n = 100 ... 800`;
+  concentration scan at `n = 100` giving gains of 22.1, 18.0, 10.7 and 5.0 at
+  0.02, 0.05, 0.10 and 0.20 -- and *losses* of 0.10, 0.18, 0.28 and 0.49 on the
+  plain vanilla at the same point. Reported rather than tuned: the package
+  default 0.05 is not the best cell.
+- **Discrete monitoring.** Against the plain Monte Carlo estimator (unbiased
+  for that contract) `z` = -0.57, -2.31, -1.15, -1.25, -0.32 over
+  `m = 10 ... 160`. The discrete-to-continuous gap fits order **0.4431**
+  (residual 0.0101) in `1/m`, and the BGK closed-form shift on the same ladder
+  fits **0.4361** -- so the deficit from one half is the correction's own
+  `o(1/sqrt(m))` and not the grid's, the same effect Slice 12 saw from the
+  simulation side (0.4603 +- 0.0125 paired). The gap/BGK ratio is 1.0147 down
+  to 0.9915: a continuity correction predicting the gap of a scheme that knows
+  nothing about `beta = -zeta(1/2)/sqrt(2 pi)`.
+- **In-out parity as a statement about the matrix.** The knock-in is priced by
+  its own boundary problem (terminal data the rebate, the Black-Scholes value
+  imposed at the barrier), and the two legs plus a third whose data is their
+  sum share one grid and one matrix, so their prices add to **1.13e-16 to
+  1.13e-15 relative** -- at `n = 100`, where the knock-in is still 3.96e-03
+  from its own closed form.
+- **Greeks.** Delta and gamma from the non-uniform stencil match central
+  differences of the closed form to 2.8e-06 / 1.5e-07 at `n = 400` on the
+  `sinh` grid, orders 1.9980 and 1.9558. Slice 12's finding is reproduced: gamma
+  does **not** blow up as `S -> H`, it converges having changed **sign**
+  (+0.002874 at `S = 110`, -0.011563 at `S = 95.5`, against a convex vanilla).
+- **One contradicted expectation, and it is the interesting one.** The slice
+  said "projection to the rebate at each monitoring date" and left the
+  discretisation of that projection unsaid. Sampling it at *nodes* costs a full
+  order and biases the price **low**, because observing a barrier makes the
+  value function discontinuous -- the Slice 6 digital pathology, once per date
+  -- and on a grid where `H` is a node, half that node's cell is alive while the
+  node is set to the rebate. Measured on one grid: order **0.9619** node-sampled
+  against **2.2844** cell-weighted, errors -6.34e-01 -> -8.60e-02 against
+  +3.64e-02 -> +3.26e-04. The implemented projection is the `L2` one, weighted
+  by the cell fraction, which needs no node placement at all.
+- **Oracle.** QuantLib's `FdBlackScholesBarrierEngine` over 24 cells at
+  `T = 1.0`: worst error 2.663e-03 against this engine's 2.958e-05, a factor of
+  90, and agreement to the coarser engine's accuracy (budget 5.0e-3, derived).
+  The finding: QuantLib's engine is **order one** on exactly the contracts whose
+  terminal payoff jumps across the barrier (0.9502 on a down-and-out put with
+  `K = 110 > H`) and order two on the rest (1.8767) -- which is what carrying the
+  dead region costs. `dampingSteps` is ruled out (zero beats twenty on both
+  cells), the same shape of finding Slice 4 recorded for the vanilla FD engine.
+  QuantLib has no FD engine that accepts a monitoring schedule, so the discrete
+  half has no FD oracle and a test records that.
+- **Cases**: `qpl.cases.barrier_black_scholes` grows to 26 rows -- five PDE
+  order rows and three discrete cross-engine rows -- and the continuous
+  cross-engine rows become **four**-engine agreement (closed form, Boyle-Lau
+  lattice, Brownian-bridge Monte Carlo, finite differences; grid errors
+  -1.665e-05, -3.588e-06, -3.836e-05 against a flat 2.0e-4).
+- `examples/barrier_pde_grid.py` (also `--case mesh`, `--case discrete`).
+- **Refused / out of scope**: double barriers, moving barriers, a rebate paid
+  at a discretely observed touch time with more care than "the date it was seen
+  at", and ADI / two-factor grids.
+- **Harness**: the example smoke test ran every curated invocation three times
+  (once for its keys, twice against each other for determinism). It now runs
+  each twice and asserts both from the same pair, cutting that file from
+  **42.2 s to 28.2 s**; the three new invocations bring it to 36.6 s, so the
+  slice leaves the harness 5.6 s cheaper than it found it.
+- Suite: **1668 tests, 166-173 s** across repeated runs on this machine (from 1602 / 157 s). The growth is 66 tests for about 11 s net: the new core test files run in 15.2 s together (10.6 s barrier, 4.7 s grid), the cases file is unchanged at 1.4 s, the QuantLib oracle adds 3.8 s under the `[oracle]` extra only, and the example harness is **5.6 s cheaper** than before the slice despite three new curated invocations.
+- Full derivation and tables: `docs/notes/pde_nonuniform_grids_and_barriers.md`.
 
 ## Reconciled old roadmap
 

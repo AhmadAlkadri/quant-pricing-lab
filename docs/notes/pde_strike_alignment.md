@@ -94,8 +94,15 @@ order two on both grids (1.888 aligned, 1.933 unaligned). Alignment fixes where
 the kink sits; it does nothing about what the scheme does to it. Full tables:
 `docs/notes/pde_greeks_and_rannacher.md`.
 
-The second remedy, a non-uniform grid concentrated at the strike, is still not
-implemented; it remains a Phase 2 item.
+The second remedy, a non-uniform grid concentrated at the strike, arrived in
+Slice 13 as `PDEConfig(grid="sinh", concentration=...)` -- and arrived as a
+*barrier* mesh rather than a strike mesh. On this very point it is worth about
+15% in the price constant and a factor of ten in the Greeks; on the barrier
+that forced it, a factor of 13-18; and on the Slice 13 study point it is a
+**loss** on a plain vanilla. Alignment stays the right remedy for a kink, and
+the mesh is for a level the grid has to hit. Derivation, the three-point
+stencil it needs and the measured tables:
+`docs/notes/pde_nonuniform_grids_and_barriers.md`.
 
 ## Reproducing
 
