@@ -187,6 +187,51 @@ _SMOKE_CASES = [
         ],
     ),
     (
+        # The Kemna-Vorst control variate on an arithmetic Asian, at two fixing
+        # counts and equal normal draws. The curated keys are the ones a run
+        # that had lost the point would not print: `pilot_rho=0.999608` next to
+        # `predicted_factor=   1276.7` is the whole slice in one line (the
+        # control is worth three orders of magnitude because rho is 0.9996,
+        # against the 7.6 the terminal spot buys on a vanilla in Slice 7), and
+        # `tw_minus_reference=+0.017777` pins the approximation's bias with its
+        # sign -- a number that must not quietly become zero.
+        "asian_option_control_variate.py",
+        [],
+        [
+            "example=asian_option_control_variate",
+            "case=control_variate",
+            "fixings= 10",
+            "fixings= 52",
+            "geometric_closed_form=6.0191160793",
+            "geometric_closed_form=5.6374316204",
+            "pilot_rho=0.999608",
+            "predicted_factor=   1276.7",
+            "estimator=none",
+            "estimator=antithetic+control",
+            "paths=  4160 normals= 41600",
+            "paths=   800 normals= 41600",
+            "turnbull_wakeman=6.2523156852",
+            "tw_minus_reference=+0.017777",
+            "arithmetic_minus_geometric=+0.215",
+        ],
+    ),
+    (
+        # The fixing-refinement leg, which exists for one number:
+        # `fixing_order=+1.0002`. A right-endpoint fixing convention approaches
+        # the continuous-averaging limit at order ONE, and
+        # `errors_halve_at_each_level=True` is the assumption-free form of that.
+        "asian_option_control_variate.py",
+        ["--case", "fixings"],
+        [
+            "case=fixings",
+            "continuous_limit=5.5468186338",
+            "fixings=   20 geometric=5.7826160816",
+            "fixings= 2560 geometric=5.5486582749",
+            "fixing_order=+1.0002",
+            "errors_halve_at_each_level=True",
+        ],
+    ),
+    (
         "american_put_binomial_dp.py",
         [],
         [

@@ -217,6 +217,16 @@ same reason: Phase 3 had a case waiting and Phase 2's last item did not.
   and a different instrument. Stratified sampling is terminal-only;
   Brownian-bridge stratification for multi-step paths is refused with a message
   naming it.
+- ~~Asian options (arithmetic and geometric averaging) with the Kemna-Vorst
+  geometric control variate.~~ **Delivered in Slice 8** (see below):
+  `AsianOption(kind, strike, expiry, fixing_times, averaging)` priced in closed
+  form for the geometric average and by Monte Carlo for both, with the
+  geometric-average payoff and its exact discrete closed form as the control.
+  Measured control-variate variance factor **1433** (10 fixings) and **1196**
+  (52), against `1/(1-rho^2)` predictions of 1277 and 1262 from an independent
+  pilot at `rho = 0.9996` -- three orders of magnitude, against the 7.6 the
+  discounted terminal spot buys on a vanilla in Slice 7. This is the control
+  variate the Slice 7 entry said was waiting for the arithmetic Asian.
 - Euler vs Milstein strong/weak order measured against exact GBM.
 - Pathwise and likelihood-ratio Greeks checked against the analytic engine.
 - Longstaff-Schwartz American put validated against Longstaff & Schwartz
@@ -860,6 +870,119 @@ same reason: Phase 3 had a case waiting and Phase 2's last item did not.
 - Suite: 1004 tests, 87.0 s (from 903 / 80.6 s); the two new test files run in
   3.3 s.
 - Full tables and the derivation: `docs/notes/mc_variance_reduction.md`.
+
+### Slice 8
+- **A user can price a fixed-strike Asian.**
+  `AsianOption(kind, strike, expiry, fixing_times=(...), averaging="arithmetic"
+  | "geometric")` -- a new instrument type outside the vanilla and digital
+  hierarchies, because its payoff reads the *path* rather than the terminal
+  spot. `method="analytic"` prices the geometric average exactly and raises
+  `NotSupportedError` on the arithmetic one, naming the approximations and
+  Monte Carlo; `method="mc"` prices both, with
+  `MCConfig(variance_reduction="control_variate")` using the geometric-average
+  discounted payoff and its exact closed form as the control (Kemna & Vorst
+  1990). `qpl.engines.analytic.asian.turnbull_wakeman_price` is reachable only
+  by name, so the dispatcher never returns an approximation as if it were
+  exact.
+- **The discrete geometric closed form is derived, not looked up.** `log G` is
+  exactly normal with `m = log S + (mu - sigma^2/2) tbar` and the collapsed
+  covariance sum `v = (sigma^2/n^2) sum_i (2(n-i)+1) t_i`, so the price is
+  Black (1976) in `F = E[G]`. `T` enters only through the discount, so an
+  average that ends before settlement is handled by construction. Checked
+  against the `O(n^2)` double sum on irregular schedules, and against
+  Black-Scholes to 1e-13 in the `n = 1` limit.
+- **Fixing convention**: `t_i = i T / n`, last fixing at expiry, built by
+  `qpl.instruments.uniform_fixing_times` (`linspace`, so `t_n == T` exactly --
+  `(i+1) * T / n` lands one ulp above at `T = 90/365, n = 2560` and the
+  instrument then correctly refuses it). All three published benchmarks are
+  reproduced under this convention, which is how it was chosen.
+- **Three published values reproduced**: Clewlow-Strickland discrete geometric
+  call 5.3425606635 to **5.8e-11**; Haug continuous geometric **put** 4.6922 to
+  **3.7e-05** at 20 000 fixings; Turnbull-Wakeman 19.5152 to **9.8e-06**.
+- **The discrete-to-continuous rate is order 1, derived before it was
+  measured**: `tbar = (T/2)(1 + 1/n)` and
+  `v = (sigma^2 T/3)(1 + 3/(2n) + 1/(2n^2))` each carry an `O(1/n)` term with
+  no cancellation. Measured **1.0002** (residual 0.00017) and **1.0096**
+  (0.00917) over `n` in 20...2560, and **1.0002** (0.00024) against QuantLib's
+  continuous engine -- so the rate belongs to the convention, not to either
+  implementation.
+- **Measured variance factors**, 50 seeds at 41 600 normal draws
+  (`4160 x 10 == 800 x 52`, equal cost), predictions from an independent
+  40 000-path pilot:
+
+  | fixings | antithetic | control variate | antithetic+control |
+  |---|---:|---:|---:|
+  | 10 | 5.54 (4.17) | **1433.0** (1276.7) | 2113.8 (2387.7) |
+  | 52 | 6.31 (4.14) | **1196.2** (1262.2) | 2584.0 (2360.8) |
+
+  `rho = 0.999608` and `0.999604` -- a difference of 4e-06, inside the pilot's
+  own noise, so the control does not need retuning when the monitoring
+  frequency changes. At 52 fixings the control-variate column runs **800
+  paths** and still resolves the price to four decimals.
+- **No time-discretisation bias.** `simulate_gbm_exact` gained an optional
+  `times=` grid (the uniform `(t, n_steps)` branch untouched and pinned
+  bit-for-bit, since `t_{i+1} - t_i` is not bit-for-bit `t/n_steps`), so every
+  fixing is an exact draw with the correct joint law and the only error is
+  statistical. There is no refinement study to run, which is why this slice has
+  none.
+- **Identities.** Asian put-call parity `C - P = e^{-rT}(E[A] - K)` holds **per
+  sample** to 1e-11 (the same paths drive both legs), and the AM-GM ordering
+  `price_arith > price_geom` for calls holds for **every seed** rather than
+  within noise -- with the sign reversed for puts.
+- **The Turnbull-Wakeman gap, measured with its sign**: +0.018162 (ATM 10f,
+  +0.29%), +0.019331 (ATM 52f, +0.33%), +0.001823 (K=80 26f q=r, +0.009%),
+  +0.092724 (ATM 52f vol 40%, +0.89%), resolved at 18 to 143 standard errors.
+  Always positive -- the fitted lognormal is more right-skewed than the true
+  law -- growing with `sigma^2 T` and collapsing deep in the money, where the
+  first moment (matched exactly) determines the price.
+- **Five contradicted expectations, all encoded:**
+  1. **The Haug 4.6922 is a PUT on a 90/360 year fraction**, not a call on
+     90/365. The call at that point is 0.4714, and at `T = 90/365` the exact
+     value is 4.6924339 -- 2.34e-04 from the published four decimals, twice the
+     tolerance such a quote deserves.
+  2. **The Turnbull-Wakeman benchmark point needs `q = r = 5%`**, recovered by
+     matching; at `q = 0` the same construction gives 20.7865.
+  3. **The combinations DO compose -- with the right second factor.** Slice 7's
+     "not multiplicative" holds for the product of the two marginal factors
+     (7933 and 7543 against measured 2114 and 2584), but the combined estimator
+     regresses the control on the *pair-averaged* units, and
+     `factor(antithetic) x 1/(1 - rho_pair^2)` is right to 11% at both fixing
+     counts. Slice 7's finding was about which correlation was measured.
+  4. **The control collapses exactly where plain Monte Carlo is worst, and the
+     confidence interval fails with it.** At `sigma = 10%, K = 130`, 52
+     fixings, 40 000 paths, no path's geometric average is in the money: the
+     control has zero sample variance, `beta = 0`, `rho = 0`, factor 1.0, no
+     NaN -- and the estimator silently becomes the plain one. One arithmetic
+     path pays, so the answer is 5.275e-06 +- 5.275e-06 while the geometric
+     closed form (a valid lower bound by AM-GM) is 3.533e-05:
+     `value + 4 stderr = 2.64e-05` does **not** reach the truth.
+  5. **Antithetic sampling is not worth reaching for on an Asian**: 5.5 and 6.3
+     against the control variate's 1433 and 1196 at the same cost.
+- **Cases**: `qpl.cases.asian_black_scholes` -- a **fifth** id space, asserted
+  disjoint from the other four, and the first whose two halves carry different
+  evidence classes on purpose: geometric rows are `CLOSED_FORM` /
+  `PUBLISHED_BENCHMARK` at 1e-13, arithmetic rows are `STATISTICAL` against a
+  2 000 000-path control-variate reference with the tolerance set to four times
+  the combined standard error, and the Turnbull-Wakeman row is a published
+  benchmark **for the approximation** paired with four signed gap rows. A test
+  asserts that no arithmetic row can claim `CLOSED_FORM`.
+- **Oracle**: four legs against QuantLib -- the discrete geometric analytic
+  engine at **2.487e-14** (four ulp), `TurnbullWakemanAsianEngine` at
+  **3.055e-13** (an order looser, and the 5-fixing points agree to 1.2e-14
+  while the 73-fixing ones do not, because `E[A^2]` is a 5329-term double sum
+  accumulated differently), the continuous engine as an independently-supplied
+  convergence limit, and `MCDiscreteArithmeticAPEngine(controlVariate=True)` --
+  which uses the *same* Kemna-Vorst control -- at `|z| <= 0.72`. Day-count
+  residual between the two fixing schedules: **1.11e-16**, one ulp.
+- `examples/asian_option_control_variate.py` (0.67 s, curated smoke, also
+  `--case fixings` at 0.21 s): two fixing counts, four estimators at equal
+  normal draws, the realised correlation, both readings of each variance
+  factor, the geometric closed form, a 200 000-path reference and the signed
+  Turnbull-Wakeman gap.
+- Suite: **1174 tests, 99.1 s** (from 1004 / 87.0 s); the five new Asian test
+  files run in 7.5 s and the two new example smoke invocations in 3.4 s.
+- Full tables and the derivation:
+  `docs/notes/asian_options_control_variate.md`.
 
 ## Reconciled old roadmap
 
