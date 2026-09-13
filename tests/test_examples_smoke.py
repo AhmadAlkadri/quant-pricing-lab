@@ -467,6 +467,85 @@ _SMOKE_CASES = [
         [],
         ["example=copula_gaussian_demo", "tau_emp=", "spearman_emp=", "coexceedance_corr=", "coexceedance_ind="],
     ),
+    (
+        # Slice 14: the four transform methods side by side. The curated keys
+        # are the ones a run that had lost the point would not print.
+        # `abs_error=6.4e-04` next to three methods at the floating-point floor
+        # is the whole FFT finding in one line, and it is deliberately the only
+        # error digit pinned here -- the other three are round-off and their
+        # leading digit is not a cross-platform constant. `fft_on_grid` and
+        # `fft_off_grid` on one line carry the `--case fft` headline into this
+        # invocation, so that study needs no curated run of its own.
+        "fourier_methods_bs.py",
+        [],
+        [
+            "example=fourier_methods_bs",
+            "case=methods",
+            "analytic=9.8262977827",
+            "method=cos",
+            "method=carr_madan_fft",
+            "abs_error=6.4e-04",
+            "method=lewis",
+            "method=gil_pelaez",
+            "carr_madan_fft_minus_quadrature=+6.447e-04",
+            "fft_on_grid=2.1e-07 fft_off_grid=6.4e-04",
+        ],
+    ),
+    (
+        # The COS leg. `cos_decay_ratio=1.1` is the curated part: the measured
+        # decay of log10(error) in N^2 against the derived -pi^2/(8 L^2 ln 10),
+        # so a run that had lost the cumulant-based range would still print an
+        # error column but not a ratio near one. `cos_range_L4_error_flat_in_N`
+        # pins that a too-narrow range is an error no term count removes.
+        "fourier_methods_bs.py",
+        ["--case", "cos"],
+        [
+            "case=cos",
+            "cos_error N=  16 err=5.2e-02",
+            "cos_error N=  32 err=1.3e-06",
+            "cos_decay_ratio=1.1",
+            "cos_range L=  4.0 err=6.2e-04",
+            "cos_range L=  6.0 err=2.0e-08",
+            "cos_range_L4_error_flat_in_N=0.0e+00",
+        ],
+    ),
+    (
+        # The damping sweep. The curated cells are the two *failures*, which
+        # are both outside the range the slice statement predicted would fail:
+        # `a=0.25 1e-04` at the small end and `alpha=40.00 err=3.6e-03` at the
+        # large one, with `S/K=1.667` printed next to the row that fails first.
+        "fourier_methods_bs.py",
+        ["--case", "alpha"],
+        [
+            "case=alpha",
+            "S/K=1.667",
+            "a=0.25 1e-04",
+            "alpha= 0.10 err=4.7e-01",
+            "alpha= 1.50 err=3.2e-14",
+            "alpha=40.00 err=3.6e-03",
+            "cancellation_bound=",
+        ],
+    ),
+    (
+        # The Chapter 6 rules on a pricing integral. `simpson_identity` printing
+        # two equal columns is the mechanism, and
+        # `simpson_over_trapezoid_at_n128=7.7e+03` is the consequence: the
+        # nominally order-4 rule is four decimal orders worse than the
+        # nominally order-2 one at the same evaluation count.
+        "fourier_methods_bs.py",
+        ["--case", "quadrature"],
+        [
+            "case=quadrature",
+            "rule=trapezoid",
+            "n=128 2e-07",
+            "rule=simpson",
+            "n=256 6e-08",
+            "rule=gauss_legendre",
+            "simpson_identity n= 256 simpson_err=-6.117e-08",
+            "minus_third_of_trapezoid_at_half=-6.117e-08",
+            "simpson_over_trapezoid_at_n128=7.7e+03",
+        ],
+    ),
 ]
 
 _SMOKE_IDS = [
