@@ -214,8 +214,8 @@ BARRIER_MC_VARIANCE_REDUCTION: tuple[str, ...] = ("antithetic", "control_variate
 BARRIER_MC_STDERR_MULTIPLE = 4.0
 """The Monte Carlo leg's tolerance is a multiple of its own reported standard
 error, not an absolute accuracy claim. Four standard errors is a two-sided
-false-failure rate of about 6e-05 at a fixed seed; at 200 000 paths this seed
-lands at |z| of 0.085, 0.126 and 0.004 across the three points."""
+false-failure rate of about 6e-05 at a fixed seed; at 100 000 paths this seed
+lands at |z| of 0.008, 0.055 and 0.440 across the three points."""
 
 BARRIER_BOYLE_LAU_ENVELOPE = 8.0
 """`max |error| * n` along the Boyle-Lau subsequence: the constant that sets the
@@ -470,7 +470,7 @@ BARRIER_MC_ORDER_CASES: tuple[BarrierBSCase, ...] = (
                 "(25, 50, 100, 200, 400), while the plain estimator on the "
                 "SAME paths is 8 to 40 standard errors out. Unbiasedness is "
                 "checked by coverage rather than closeness: over 40 seeds at "
-                "20 000 paths the 95% interval covers the closed form 37/40 at "
+                "20 000 paths the 95% interval covers the closed form 39/40 at "
                 "m = 25 and 38/40 at m = 100, against a Binomial(40, 0.95) "
                 "mean of 38. The surprise is that it holds at m = 1 (z = "
                 "-0.10): the estimator conditions on the sampled points, so "
@@ -645,8 +645,9 @@ BARRIER_CROSS_ENGINE_CASES: tuple[BarrierBSCase, ...] = tuple(
                 f"{BARRIER_MC_MONITORING} dates -- the Brownian-bridge "
                 "estimator is what makes that an unbiased estimate of the "
                 "continuous price the other two legs compute. Measured "
-                "lattice errors -1.075e-05, +1.730e-04 and +1.055e-04, and "
-                "Monte Carlo |z| of 0.085, 0.126 and 0.004 at 200 000 paths."
+                "lattice errors -1.075e-05, +1.730e-04 and +1.055e-04 against "
+                "budgets of 3.44e-03, 3.28e-03 and 3.86e-03, and Monte Carlo "
+                "|z| of 0.008, 0.055 and 0.440."
             ),
         ),
         specs=(spec,),

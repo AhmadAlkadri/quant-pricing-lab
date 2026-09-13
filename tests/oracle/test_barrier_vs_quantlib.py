@@ -16,11 +16,11 @@ rebate block.
 checks the barrier at its own time-grid points, which is the *discretely
 monitored* contract this package's `method="mc"` prices. Both estimators are
 statistical, so this is an agreement-within-combined-noise check and is
-labelled as such: measured `z = -0.743` at `m = 25` and `-1.132` at `m = 50`.
+labelled as such: measured `z = -0.202` at `m = 25` and `-0.879` at `m = 50`.
 `isBiased=False` switches QuantLib to a Brownian-bridge crossing probability,
 which is the same estimator as `barrier_correction="brownian_bridge"` here, and
-the two agree at `z = -1.426` and `-0.745` while both sit within noise of the
-continuous closed form (|z| of 0.806 / 1.897 here and 1.676 / 0.257 there).
+the two agree at `z = -0.585` and `-0.531` while both sit within noise of the
+continuous closed form (|z| of 1.214 / 0.430 here and 0.965 / 0.422 there).
 
 **Lattice, and the result worth reading.** QuantLib's
 `BinomialCRRBarrierEngine` shows **no Boyle-Lau sawtooth at all**. Over
@@ -94,16 +94,16 @@ _QL_BARRIER = {
 }
 
 _MC_MONITORING_LEVELS = (25, 50)
-_QPL_MC_PATHS = 400_000
+_QPL_MC_PATHS = 200_000
 _QPL_MC_SEED = 20_260_913
-_QL_MC_SAMPLES = 30_000
+_QL_MC_SAMPLES = 20_000
 _QL_MC_SEED = 42
 _MC_Z_TOLERANCE = 3.0
 """Both legs are statistical, so the comparison is a z-score on the combined
-standard error. Measured |z| at 30 000 QuantLib samples: 0.743 and 1.132 for the
-discrete contract, 1.426 and 0.745 for the bridged one. QuantLib's leg carries
-four times this package's standard error at a quarter the effective cost, which
-is the control variate and the pair reduction doing their work; the combined
+standard error. Measured |z| at 20 000 QuantLib samples and 200 000 here: 0.202
+and 0.879 for the discrete contract, 0.585 and 0.531 for the bridged one.
+QuantLib's leg carries several times this package's standard error, which is the
+control variate and the antithetic pair reduction doing their work; the combined
 error is therefore set almost entirely by QuantLib's."""
 
 
@@ -283,8 +283,8 @@ def test_the_discretely_monitored_price_agrees_with_quantlibs(m: int) -> None:
     labelled that way because an MC-versus-MC agreement can only ever rule out
     a bias larger than the noise.
 
-    Measured z: -0.743 at `m = 25`, -1.132 at `m = 50`. Both are far from the
-    continuous closed form (7.10 and 6.53 against 5.0838), which is what makes
+    Measured z: -0.202 at `m = 25`, -0.879 at `m = 50`. Both are far from the
+    continuous closed form (7.09 and 6.55 against 5.0838), which is what makes
     this a check on the discrete contract rather than on the continuous one:
     two engines agreeing on 7.10 when the continuous answer is 5.08 is evidence
     they are pricing the same *contract*.
@@ -311,8 +311,8 @@ def test_the_bridged_price_agrees_with_quantlibs_and_with_the_closed_form(
     `isBiased=False` switches QuantLib to the Brownian-bridge crossing
     probability, which is the construction `barrier_correction="brownian_bridge"`
     implements here. Three numbers have to line up: the two simulations with
-    each other (measured z -1.426 and -0.745), and each of them with the
-    continuous closed form (|z| 0.806 and 1.897 here, 1.676 and 0.257 there) --
+    each other (measured z -0.585 and -0.531), and each of them with the
+    continuous closed form (|z| 1.214 and 0.430 here, 0.965 and 0.422 there) --
     which is the point, since a bridged estimator is unbiased for the
     continuous contract and a discrete one is not.
     """

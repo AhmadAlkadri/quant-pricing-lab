@@ -521,7 +521,7 @@ def test_the_bridge_removes_the_monitoring_bias_at_every_m(ladder) -> None:
 
     Unbiasedness is checked separately by coverage rather than by closeness:
     over 40 seeds at 20 000 paths the reported 95% interval covers the closed
-    form 37/40 at `m = 25` and 38/40 at `m = 100` (Binomial(40, 0.95) mean 38),
+    form 39/40 at `m = 25` and 38/40 at `m = 100` (Binomial(40, 0.95) mean 38),
     with a mean z of -0.13 and -0.09. That measurement is recorded here and not
     re-run, because 80 more simulations would triple this file's runtime to
     confirm a number that has already been taken.

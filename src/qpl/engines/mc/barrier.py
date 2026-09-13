@@ -103,7 +103,7 @@ from ...instruments.options import BarrierOption
 from ...instruments.payoffs import call_payoff, put_payoff
 from ...market.market import Market
 from ...models.black_scholes import BlackScholesModel, bs_price
-from ..analytic.barrier import barrier_price, shifted_barrier
+from ..analytic.barrier import shifted_barrier
 from ..base import GreeksResult, PriceResult
 from .pricers import MCConfig
 from .processes import gbm_paths_from_normals
@@ -576,27 +576,3 @@ def greeks_barrier(
     prices exactly that combination.
     """
     raise NotSupportedError(_GREEKS_REFUSAL)
-
-
-def continuous_reference(
-    option: BarrierOption, model: BlackScholesModel, market: Market
-) -> float:
-    """The continuously monitored closed form at the same specification.
-
-    A one-line convenience that the bias studies and the example both use, so
-    that "the continuous price of this contract" is written once. It is the
-    same `BarrierOption` with its monitoring schedule ignored.
-    """
-    t = option.expiry
-    return barrier_price(
-        S=market.spot,
-        K=option.strike,
-        T=t,
-        r=market.rate(t),
-        sigma=model.sigma,
-        q=market.dividend_yield(t),
-        H=option.barrier,
-        rebate=option.rebate,
-        barrier_type=option.barrier_type,
-        kind=option.kind,
-    )
