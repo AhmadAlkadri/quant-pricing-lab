@@ -16,6 +16,7 @@ fast, and designed to run without external data sources.
 - `mc_variance_reduction.py` (also `--case digital`)
 - `asian_option_control_variate.py` (also `--case fixings`)
 - `sde_convergence.py` (also `--case cir`)
+- `mc_greeks_estimators.py` (also `--case h`)
 - `quadrature_demo.py`
 - `laplace_inversion_demo.py`
 - `copula_gaussian_demo.py`

@@ -288,6 +288,40 @@ _SMOKE_CASES = [
         ],
     ),
     (
+        # Slice 10's three Greek estimators on the same two payoffs. The
+        # curated keys are the ones that would survive a run which had lost
+        # the point: `pathwise_lr_mixed` next to `call pathwise gamma` pins
+        # that a pathwise result does NOT carry a pathwise gamma; the digital
+        # `refused=payoff_derivative_is_zero_ae` line pins the one estimator
+        # that is refused and why; and the two spread ratios are the slice's
+        # headline read in both directions -- the likelihood ratio costs 5.03
+        # in variance on a smooth delta and buys 983.07 on a discontinuous one.
+        "mc_greeks_estimators.py",
+        [],
+        [
+            "example=mc_greeks_estimators",
+            "source=pathwise_lr_mixed",
+            "digital pathwise refused=payoff_derivative_is_zero_ae",
+            "call_spread delta likelihood_ratio sd=9.4740e-03 variance_ratio=5.03",
+            "call_spread gamma bump sd=7.3400e-03 variance_ratio=805.52",
+            "digital_spread delta bump sd=6.3260e-03 variance_ratio=983.07",
+        ],
+    ),
+    (
+        # The bump-size study, where the trade-off has an interior optimum.
+        # `bump_h_optimal=3` is the curated part: it is 300x the package
+        # default, and a run that had lost the variance branch would report
+        # the smallest h instead.
+        "mc_greeks_estimators.py",
+        ["--case", "h"],
+        [
+            "case=h",
+            "bump_h_sd_order=-0.4263",
+            "bump_h_bias_order=+1.9979",
+            "bump_h_optimal=3",
+        ],
+    ),
+    (
         "american_put_binomial_dp.py",
         [],
         [
