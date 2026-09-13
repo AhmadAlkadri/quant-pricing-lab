@@ -30,6 +30,11 @@ __all__ = [
     "LIMIT_CASES",
     "MONOTONICITY_CASES",
     "PARITY_CASES",
+    "TREE_EVEN_LEVELS",
+    "TREE_KNOWN_VALUE_TOLERANCE",
+    "TREE_ODD_LEVELS",
+    "TREE_ORDER_CASES",
+    "TREE_REFERENCE_N_STEPS",
     "EuropeanBSCase",
     "EuropeanBSSpec",
 ]
@@ -273,6 +278,97 @@ KNOWN_VALUE_CASES: tuple[EuropeanBSCase, ...] = (
 
 
 # --------------------------------------------------------------------------
+# (v) The CRR binomial tree: order, oscillation, and the tolerance the
+#     cross-engine test uses.
+#
+# Unlike the rows above, these are claims about a *rate*, not about a price:
+# the expected value is a convergence order and the tolerance is the band the
+# fitted slope must fall in. They are evaluated at the reference ATM call,
+# where the strike sits in the densest part of the terminal grid and the
+# odd/even effect is cleanest.
+#
+# The order-1 behaviour and the odd/even oscillation of the CRR tree are the
+# subject of Leisen & Reimer (1996); the numbers quoted in `notes` were
+# measured in this repository, not copied from that paper.
+# --------------------------------------------------------------------------
+
+TREE_ODD_LEVELS: tuple[int, ...] = (25, 51, 101, 201, 401, 801)
+"""Odd step counts for the convergence fit; `h = 1 / n`."""
+
+TREE_EVEN_LEVELS: tuple[int, ...] = (26, 50, 100, 200, 400, 800)
+"""Even step counts for the convergence fit; `h = 1 / n`."""
+
+TREE_REFERENCE_N_STEPS = 2000
+"""Step count at which the tree prices the known-value rows in the
+cross-engine test."""
+
+TREE_KNOWN_VALUE_TOLERANCE = 2.5e-3
+"""Absolute tolerance for the tree leg of the cross-engine test.
+
+Derived from the measured error constant rather than guessed. On the reference
+ATM point the scaled error `n * |tree - closed form|` tends to about 1.9994 on
+even `n`, so at `n = 2000` the predicted error is `1.9994 / 2000 = 1.00e-3`;
+the measured error there is 9.998e-04 for both the call and the put. The
+tolerance keeps a factor of 2.5 of headroom, which is enough to absorb the
+neighbouring odd-`n` constant (1.7529, i.e. 8.8e-04) but not enough to hide a
+tree that had fallen to half-order accuracy.
+"""
+
+_TREE_ORDER_SOURCE = (
+    "order-1 convergence and the odd/even oscillation of the CRR tree: Leisen "
+    "& Reimer (1996), 'Binomial models for option valuation - examining and "
+    "improving convergence', Applied Mathematical Finance 3(4), 319-346. The "
+    "fitted slopes and error constants in `notes` were measured in-repo "
+    "(tests/test_tree_convergence.py); they are not quoted from that paper."
+)
+
+TREE_ORDER_CASES: tuple[EuropeanBSCase, ...] = (
+    EuropeanBSCase(
+        row=BenchmarkRow(
+            id="tree_crr_order_one_odd_n",
+            description=(
+                "CRR tree error against the closed form decays like 1/n on odd "
+                "step counts"
+            ),
+            expected=1.0,
+            tolerance=0.2,
+            evidence=EvidenceClass.CONVERGENCE_ORDER,
+            source=_TREE_ORDER_SOURCE,
+            notes=(
+                "Measured order 1.0010, log-space RMS residual 0.0005 over "
+                "n in (25, 51, 101, 201, 401, 801). The tree price is ABOVE "
+                "Black-Scholes at every one of these n; scaled error n*|err| "
+                "tends to 1.7529."
+            ),
+        ),
+        specs=(REFERENCE_ATM_CALL,),
+    ),
+    EuropeanBSCase(
+        row=BenchmarkRow(
+            id="tree_crr_order_one_even_n",
+            description=(
+                "CRR tree error against the closed form decays like 1/n on even "
+                "step counts"
+            ),
+            expected=1.0,
+            tolerance=0.2,
+            evidence=EvidenceClass.CONVERGENCE_ORDER,
+            source=_TREE_ORDER_SOURCE,
+            notes=(
+                "Measured order 0.9987, log-space RMS residual 0.0007 over "
+                "n in (26, 50, 100, 200, 400, 800). The tree price is BELOW "
+                "Black-Scholes at every one of these n, so odd and even n "
+                "bracket the true value; scaled error n*|err| tends to 1.9994. "
+                "At the money an even n places a terminal node exactly on the "
+                "strike, which is the source of the parity dependence."
+            ),
+        ),
+        specs=(REFERENCE_ATM_CALL,),
+    ),
+)
+
+
+# --------------------------------------------------------------------------
 # (iv) Comparative statics.
 #
 # A call is non-decreasing in spot (its payoff is), non-decreasing in
@@ -341,5 +437,5 @@ MONOTONICITY_CASES: tuple[EuropeanBSCase, ...] = (
 
 
 ALL_CASES: tuple[EuropeanBSCase, ...] = (
-    PARITY_CASES + LIMIT_CASES + KNOWN_VALUE_CASES + MONOTONICITY_CASES
+    PARITY_CASES + LIMIT_CASES + KNOWN_VALUE_CASES + TREE_ORDER_CASES + MONOTONICITY_CASES
 )

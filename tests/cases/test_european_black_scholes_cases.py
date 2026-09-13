@@ -16,13 +16,19 @@ from qpl.cases import (
     LIMIT_CASES,
     MONOTONICITY_CASES,
     PARITY_CASES,
+    TREE_EVEN_LEVELS,
+    TREE_KNOWN_VALUE_TOLERANCE,
+    TREE_ODD_LEVELS,
+    TREE_ORDER_CASES,
+    TREE_REFERENCE_N_STEPS,
     EuropeanBSCase,
     parity_residual,
 )
 from qpl.engines.mc.pricers import MCConfig
 from qpl.engines.pde.pricers import PDEConfig
+from qpl.engines.tree import TreeConfig
 from qpl.pricing import price
-from qpl.validation import EvidenceClass
+from qpl.validation import EvidenceClass, fit_convergence_order
 
 
 def _ids(cases: tuple[EuropeanBSCase, ...]) -> list[str]:
@@ -82,7 +88,7 @@ def test_monotonicity_rows(case: EuropeanBSCase) -> None:
 
 @pytest.mark.parametrize("case", KNOWN_VALUE_CASES, ids=_ids(KNOWN_VALUE_CASES))
 def test_cross_engine_agreement_on_known_values(case: EuropeanBSCase) -> None:
-    """Three independent routes to the same number.
+    """Four independent routes to the same number.
 
     Evidence class: INDEPENDENT_ENGINE for the PDE leg (a different numerical
     method reaching the same value), STATISTICAL for the Monte Carlo leg (the
@@ -104,6 +110,13 @@ def test_cross_engine_agreement_on_known_values(case: EuropeanBSCase) -> None:
       errors. The estimator is unbiased, so the only question is sampling
       noise; 4 sigma is a ~6e-5 false-failure rate for a fixed seed that is
       already known to land at 0.75 (call) and 0.13 (put) standard errors.
+    - CRR tree, n_steps = 2000: `TREE_KNOWN_VALUE_TOLERANCE` (2.5e-3). This
+      one is derived from the measured error constant rather than chosen:
+      `n * |tree - closed form|` tends to 1.9994 on even `n`, so the predicted
+      error at n = 2000 is 1.00e-3 and the measured error is 9.998e-04 for
+      both rows. The tree is an order-1 scheme, so it is deliberately two
+      orders of magnitude looser than the order-2 PDE leg at a comparable
+      grid size; that difference is the point of having both.
     """
     spec = case.spec
     option, model, market = spec.option(), spec.model(), spec.market()
@@ -128,6 +141,15 @@ def test_cross_engine_agreement_on_known_values(case: EuropeanBSCase) -> None:
     assert mc_res.stderr is not None
     assert abs(mc_res.value - expected) <= 4.0 * mc_res.stderr
 
+    tree = price(
+        option,
+        model,
+        market,
+        method="tree",
+        cfg=TreeConfig(n_steps=TREE_REFERENCE_N_STEPS),
+    ).value
+    assert tree == pytest.approx(expected, abs=TREE_KNOWN_VALUE_TOLERANCE)
+
 
 def test_every_row_states_its_evidence_and_source() -> None:
     from qpl.cases import ALL_CASES
@@ -142,3 +164,40 @@ def test_every_row_states_its_evidence_and_source() -> None:
         assert row.source.strip()
         assert row.tolerance > 0.0
         assert case.specs
+
+
+@pytest.mark.parametrize("case", TREE_ORDER_CASES, ids=_ids(TREE_ORDER_CASES))
+def test_tree_convergence_order_rows(case: EuropeanBSCase) -> None:
+    """Evaluate the CRR convergence-order rows.
+
+    The row's `expected` is the convergence order and its `tolerance` is the
+    band the fitted slope must land in; nothing numeric is hardcoded here. The
+    sign structure recorded in `row.notes` is checked too, because "order 1"
+    alone would not distinguish a tree that brackets Black-Scholes from one
+    that approaches it from a single side.
+
+    The detailed study -- Richardson extrapolation, the scaled constants, the
+    replication and parity identities -- lives in
+    `tests/test_tree_convergence.py`. This test is here so that the cases
+    layer carries the claim as data.
+    """
+    assert case.row.evidence is EvidenceClass.CONVERGENCE_ORDER
+
+    spec = case.spec
+    option, model, market = spec.option(), spec.model(), spec.market()
+    analytic = price(option, model, market, method="analytic").value
+
+    levels = TREE_ODD_LEVELS if case.row.id.endswith("odd_n") else TREE_EVEN_LEVELS
+    signed = [
+        price(option, model, market, method="tree", cfg=TreeConfig(n_steps=n)).value - analytic
+        for n in levels
+    ]
+
+    fit = fit_convergence_order([1.0 / n for n in levels], [abs(e) for e in signed])
+    assert abs(fit.order - case.row.expected) <= case.row.tolerance, case.row.source
+    assert fit.residual < 0.01
+
+    if "ABOVE" in case.row.notes:
+        assert all(e > 0.0 for e in signed), signed
+    else:
+        assert all(e < 0.0 for e in signed), signed
