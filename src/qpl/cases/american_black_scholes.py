@@ -423,15 +423,23 @@ AMERICAN_REFERENCE_CASES: tuple[AmericanBSCase, ...] = (
                 f"n={AMERICAN_REFERENCE_N_STEPS}"
             ),
             expected=AMERICAN_REFERENCE_VALUE,
-            tolerance=1e-12,
+            tolerance=1e-10,
             evidence=EvidenceClass.CONVERGENCE_ORDER,
             source=_REFERENCE_SOURCE,
             notes=(
                 "The tolerance pins the engine, not the American put: it is a "
-                "bit-equality budget. The value's own accuracy is about "
-                "1.8e-04, measured against the average of n=64000 and n=64001 "
-                "(6.090376463020103), which brackets the oscillation. The "
-                "order-1 evidence behind that is in "
+                "round-off budget. It is NOT a bit-equality budget, and cannot "
+                "be: the digits were recorded on macOS/arm64 and an 8001-step "
+                "rollback amplifies a one-ULP difference in "
+                "u = exp(sigma sqrt(dt)) -- which is exactly the kind of "
+                "difference a different libm produces -- into 6.7e-13 on the "
+                "price (measured, by nudging u with math.nextafter). 1e-12 "
+                "would therefore fail on a platform whose exp rounds two ULP "
+                "the other way, so the budget is 1e-10, about 150 such ULP and "
+                "still six orders of magnitude below the value's own accuracy. "
+                "That accuracy is about 1.8e-04, measured against the average "
+                "of n=64000 and n=64001 (6.090376463020103), which brackets "
+                "the oscillation. The order-1 evidence behind that is in "
                 "tests/test_tree_american_convergence.py."
             ),
         ),
