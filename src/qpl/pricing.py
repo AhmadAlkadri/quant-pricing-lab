@@ -22,6 +22,10 @@ from .engines.analytic.digital import (
     price_digital as price_digital_analytic,
 )
 from .engines.base import GreeksResult, PriceResult
+from .engines.mc.digital import (
+    greeks_digital as greeks_digital_mc,
+    price_digital as price_digital_mc,
+)
 from .engines.mc.pricers import (
     MC_METHOD_SPEC,
     greeks_european as greeks_european_mc,
@@ -139,6 +143,18 @@ def _register_builtin_engines() -> None:
         spec=PDE_METHOD_SPEC,
         price=price_digital_pde,
         greeks=greeks_digital_pde,
+    )
+    # The MC entry registers a `greeks` callable that always raises
+    # `NotSupportedError`, rather than registering no callable at all: the two
+    # differ in the message the caller gets. Not registering would report
+    # "Unsupported instrument/model/market combination", which is true but
+    # says nothing about *why* and nothing about the likelihood-ratio
+    # estimator that will replace it in Phase 3.
+    register(
+        **digital,
+        spec=MC_METHOD_SPEC,
+        price=price_digital_mc,
+        greeks=greeks_digital_mc,
     )
 
 

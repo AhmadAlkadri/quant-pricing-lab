@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from typing import Literal
 
 import numpy as np
@@ -105,8 +106,20 @@ def price_european_from_terminal(
     strike: float,
     discount_factor: float,
     kind: Literal["call", "put"] = "call",
+    payoff: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> PriceResult:
-    """Estimate discounted European option value/stderr from terminal samples."""
+    """Estimate discounted European option value/stderr from terminal samples.
+
+    `payoff` maps the terminal sample vector to the payoff vector and defaults
+    to the vanilla call or put selected by `kind`. It exists so that
+    `qpl.engines.mc.digital` reuses this estimator rather than writing a second
+    copy of "discount, average, divide the sample standard deviation by
+    `sqrt(N)`": the estimator is the same for any payoff that has a finite
+    variance, and a cash-or-nothing indicator plainly does -- it is a Bernoulli
+    variable, so its exact standard error is `cash * df * sqrt(p (1 - p) / N)`.
+    `kind` is still validated when `payoff` is supplied, since the caller is
+    describing the same contract either way.
+    """
     s_t_arr = np.asarray(s_t, dtype=float)
     if s_t_arr.ndim != 1:
         raise InvalidInputError("s_t must be a 1D array of terminal prices")
@@ -119,8 +132,11 @@ def price_european_from_terminal(
     if kind not in {"call", "put"}:
         raise InvalidInputError("kind must be 'call' or 'put'")
 
-    payoff = call_payoff(s_t_arr, strike) if kind == "call" else put_payoff(s_t_arr, strike)
-    pv = discount_factor * payoff
+    if payoff is None:
+        values = call_payoff(s_t_arr, strike) if kind == "call" else put_payoff(s_t_arr, strike)
+    else:
+        values = payoff(s_t_arr)
+    pv = discount_factor * values
 
     value = float(np.mean(pv))
     stderr = float(np.std(pv, ddof=1) / math.sqrt(s_t_arr.size))
