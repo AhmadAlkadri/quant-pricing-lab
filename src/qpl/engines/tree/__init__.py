@@ -1,6 +1,11 @@
 """Binomial lattice engines."""
 
 from .american import greeks_american, price_american
+from .barrier import (
+    boyle_lau_steps,
+    greeks_barrier,
+    price_barrier,
+)
 from .digital import greeks_digital, price_digital
 from .lattice import (
     SCHEMES,
@@ -21,16 +26,19 @@ __all__ = [
     "BinomialLattice",
     "Scheme",
     "TreeConfig",
+    "boyle_lau_steps",
     "build_recombining_spot_tree",
     "crr_parameters",
     "crr_spot_level",
     "greeks_american",
+    "greeks_barrier",
     "greeks_digital",
     "greeks_european",
     "lattice_parameters",
     "leisen_reimer_parameters",
     "peizer_pratt_inversion",
     "price_american",
+    "price_barrier",
     "price_digital",
     "price_european",
 ]

@@ -74,6 +74,10 @@ from .engines.tree.american import (
     greeks_american as greeks_american_tree,
     price_american as price_american_tree,
 )
+from .engines.tree.barrier import (
+    greeks_barrier as greeks_barrier_tree,
+    price_barrier as price_barrier_tree,
+)
 from .engines.tree.digital import (
     greeks_digital as greeks_digital_tree,
     price_digital as price_digital_tree,
@@ -244,6 +248,16 @@ def _register_builtin_engines() -> None:
         spec=MC_METHOD_SPEC,
         price=price_barrier_mc,
         greeks=greeks_barrier_mc,
+    )
+    # The lattice approximates the CONTINUOUS contract by knocking out at every
+    # time level, and refuses a discrete schedule; its Greeks are registered
+    # and always raise, because the lattice estimators would report the
+    # Boyle-Lau sawtooth amplified by 1/dt under a Greek's name.
+    register(
+        **barrier,
+        spec=TREE_METHOD_SPEC,
+        price=price_barrier_tree,
+        greeks=greeks_barrier_tree,
     )
 
 
