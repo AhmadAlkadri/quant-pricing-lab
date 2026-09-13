@@ -1,5 +1,97 @@
 # Steering Brief
 
+What changed in Slice 10 (files + bullets)
+
+Phase 3's pathwise/likelihood-ratio Greeks item. Three Greek estimators behind
+one config field, each with a per-Greek standard error, checked by coverage
+rather than closeness and chosen by measured variance. Still on
+`dev/curriculum`; not pushed.
+
+- `src/qpl/engines/mc/greeks.py` (new): the estimator layer. `PathSample`
+  (terminal spots plus the normal **recovered** from them by inverting the
+  terminal law, so the formulas hold at any `n_steps`), `draw_path_sample`
+  (reproduces the price engine's generator consumption exactly),
+  `pathwise_terminal_greeks`, `likelihood_ratio_terminal_greeks`,
+  `estimate_greek` (routes through the Slice 7 `estimate_from_sample`, so the
+  antithetic pair `ddof=1`, the control-variate `ddof=2` and the strata-weighted
+  standard errors are not a second copy), `scenario` / `bump_greeks_terminal` /
+  `bump_estimates` / `one_sided_estimate` / `bump_sizes`, `control_samples`,
+  `greeks_result`.
+- `MCConfig.greeks_estimator: Literal["bump","pathwise","likelihood_ratio"] =
+  "bump"`. The default is **bit-for-bit** the pre-slice CRN bump (asserted with
+  `==` over seven configurations including `n_steps=4`, all three
+  variance-reduction samplers and `sigma=0`), even though the implementation
+  moved from eight `price_european` calls to one sample repriced eight ways.
+- `GreeksResult.meta` gains `stderr` and `estimator` as **per-Greek** dicts,
+  plus `greeks_estimator`, `fd_by_greek`, `control_variate_greeks` and (digital
+  bump only) `estimator_caveat`.
+- `src/qpl/engines/mc/digital.py`: LR Greeks; `digital_payoff_derivative`
+  exported so a test can compute the identically-zero pathwise sample; pathwise
+  refused; bump available and measured to be the wrong tool. `T = 0` and
+  `sigma = 0` now raise for Greeks.
+- `src/qpl/engines/mc/asian.py`: `asian_fixings_sample` split out; pathwise
+  delta/vega, LR delta, bump for the rest, theta by the **roll**.
+- `src/qpl/engines/analytic/asian.py`: `discrete_geometric_greeks` and a real
+  `greeks_asian`, reversing Slice 8's blanket refusal.
+- Cases: `MC_GREEK_CASES` + `MC_GREEK_CASE_KEYS` (30 rows),
+  `DIGITAL_MC_GREEKS_CASES` (15), `MC_GREEKS_VARIANCE_CASES` +
+  `MCGreeksVarianceCase` + `MC_GREEKS_VARIANCE_BAND` (5).
+- `tests/test_mc_greeks.py` (rewritten), `tests/test_mc_greeks_variance.py`
+  (new), `examples/mc_greeks_estimators.py` (two curated smoke triples).
+
+**Coverage of the nominal 95% interval, 40 seeds at 20 000 paths**, against a
+Binomial(40, 0.95) mean of 38:
+
+    Greek    call bump   call pw   call LR   digital LR
+    delta       35          35        38         38
+    gamma       37          38        38         37
+    vega        38          38        38         37
+    theta       38          38        38         38
+    rho         34          34        38         38
+
+**Variance at equal normal draws** (50 seeds, 20 480 draws, Slice 7 points):
+
+    point         greek   numerator / denominator        factor
+    atm call      delta   likelihood_ratio / pathwise      6.46
+    atm call      gamma   likelihood_ratio / pathwise     13.03
+    atm call      vega    likelihood_ratio / pathwise     13.03
+    atm call      gamma   bump / pathwise                559.64
+    digital       delta   bump / likelihood_ratio        864.73
+
+The first and last rows are one rule read both ways: differentiate the payoff
+when it is smooth, the density when it is not.
+
+**Digital bump bias/variance in h** (24 seeds, 20 000 paths): sd order
+**-0.4263** (r 0.0968), bias order **+1.9979** (r 0.0042; exactly 2.0000 for
+`h <= 1`), RMSE minimum at **h = 3** -- 300x the package default, scaling like
+`N^{-1/5}`. The bias is computed from the closed form, because the estimator is
+exactly unbiased for the finite difference and its bias IS that difference's
+truncation error.
+
+**Composition** (ATM call delta, equal draws), antithetic / control_variate /
+stratified: pathwise 20.43 / 3.92 / 84.42, LR 3.35 / 4.09 / 15.24, bump
+20.20 / 3.88 / 86.34. The control variate is delta-only at sample level.
+
+**Six contradicted expectations, all encoded.** (1) The pre-slice bump theta is
+a *backward* difference, not central -- reproduced, not upgraded. (2) The LR
+vega and LR gamma weights are proportional path by path, so
+`vega = S_0^2 sigma T gamma` holds in the *sample*: one measurement, not two.
+(3) The digital LR delta's `1/T` blow-up does not degrade relative precision at
+the money (0.0107 -> 0.0106) because the Greek grows with the noise; it
+degrades it 4.3x off the money. (4) The digital bump's failure is "no error
+bar", not "noisy": theta covers **0/40** because the event carrying the signal
+has probability 2e-06 per path, and the same estimator reads z = -0.60 and
+z = +531 at the same path count. (5) `-dV/dT` is not an Asian's theta -- it is
+`-r V` (-0.325 against -8.028); the roll derivative is, the variance weights sum
+to exactly `n^2`, and at one fixing it reproduces Black-Scholes theta to 1e-12.
+(6) The bump's move to sample level agrees **bit-for-bit**, not merely to
+round-off.
+
+Suite: **1322 tests, 125.6 s** (from 1224 / 112.2 s). Derivation and full
+tables: `docs/notes/mc_greeks_pathwise_likelihood_ratio.md`.
+
+---
+
 What changed in Slice 9 (files + bullets)
 
 Phase 3's Euler-vs-Milstein item, and the prerequisite for Heston Monte Carlo:

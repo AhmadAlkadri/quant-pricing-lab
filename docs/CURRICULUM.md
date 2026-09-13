@@ -236,7 +236,20 @@ same reason: Phase 3 had a case waiting and Phase 2's last item did not.
   Heston Monte Carlo in Phase 4: a variance process that is simulated rather
   than sampled needs a scheme whose order and whose boundary behaviour have
   both been measured.
-- Pathwise and likelihood-ratio Greeks checked against the analytic engine.
+- ~~Pathwise and likelihood-ratio Greeks checked against the analytic engine.~~
+  **Delivered in Slice 10** (see below):
+  `MCConfig(greeks_estimator="bump"|"pathwise"|"likelihood_ratio")` for European
+  vanillas (all three), cash-or-nothing digitals (likelihood ratio and bump;
+  pathwise refused, because its almost-everywhere payoff derivative is
+  identically zero and the test computes that zero) and discretely-monitored
+  Asians (pathwise delta and vega, likelihood-ratio delta, the rest by bump),
+  with a per-Greek standard error and a per-Greek estimator name in the result
+  metadata. Checked by 95%-interval **coverage** over 40 seeds rather than by
+  closeness, and compared by measured variance at equal normal draws: the
+  likelihood ratio costs 6.46x on a smooth delta and buys 864.73x on a
+  discontinuous one. Slice 8's analytic Asian Greeks refusal is reversed for
+  the geometric average as part of the same slice, since the Monte Carlo
+  estimators needed a closed form to be checked against.
 - Longstaff-Schwartz American put validated against Longstaff & Schwartz
   (2001) Table 1 and against the Phase 1/2 engines — the first three-way
   cross-method case. Note the Slice 2 finding before writing that test: the
@@ -1094,6 +1107,111 @@ same reason: Phase 3 had a case waiting and Phase 2's last item did not.
 - Suite: **1224 tests, 107.7 s** (from 1174 / 99.1 s); the three new test files
   run in 4.7 s and the two new example smoke invocations in 6.7 s.
 - Full tables and the derivation: `docs/notes/sde_discretization.md`.
+
+### Slice 10
+- **A user can choose a Greek estimator.**
+  `greeks(instrument, model, market, method="mc",
+  cfg=MCConfig(..., greeks_estimator="bump" | "pathwise" | "likelihood_ratio"))`.
+  The default `"bump"` is the pre-slice central-difference common-random-numbers
+  path and is **bit-for-bit** what it was (asserted with `==` over seven
+  configurations including `n_steps = 4`, all three variance-reduction samplers
+  and `sigma = 0`), even though the implementation moved from "call
+  `price_european` eight times" to "draw the normals once, reprice the sample
+  eight ways" -- which is what makes the paired per-path differences exist and a
+  CRN difference reportable at all.
+- **Every Greek carries its own standard error and names its own estimator.**
+  `GreeksResult.meta["stderr"]` and `meta["estimator"]` are per-Greek
+  dictionaries, because a result genuinely mixes families: a pathwise call
+  carries a mixed LR-PW gamma (the payoff has no second derivative) and an
+  Asian carries bumped rho and theta next to pathwise delta and vega.
+- **Derivations** (`src/qpl/engines/mc/greeks.py`), all from the exact terminal
+  lognormal law with `Z` **recovered** from the sample so the formulas hold at
+  any `n_steps`: pathwise `dS_T/dS_0 = S_T/S_0`,
+  `dS_T/dsigma = S_T(sqrt(T) Z - sigma T)`, `dS_T/dr = S_T T`,
+  `dS_T/dT = S_T((mu - sigma^2/2) + sigma Z/(2 sqrt(T)))`, with
+  `rho_pw = T e^{-rT}(f'(S_T) S_T - f(S_T))` -- whose second term is the
+  discount factor's own and whose collapse to `T e^{-rT} K 1{S_T>K}` for a call
+  is asserted path by path. Likelihood-ratio scores `z/(S_0 sigma sqrt(T))`,
+  `(z^2 - z sigma sqrt(T) - 1)/(S_0^2 sigma^2 T)` (the **second-order** score,
+  not the square of the first), `(z^2-1)/sigma - z sqrt(T)`,
+  `z sqrt(T)/sigma - T` and `r - [(z^2-1)/(2T) + z(mu - sigma^2/2)/(sigma
+  sqrt(T))]`. Mixed gamma
+  `e^{-rT} f'(S_T) S_T (Z/(sigma sqrt(T)) - 1)/S_0^2`.
+- **Unbiasedness is coverage, not closeness.** 40 seeds at 20 000 paths, count
+  of nominal 95% intervals covering the closed form, against a Binomial(40,
+  0.95) mean of 38. ATM call: LR 38/38/38/38/38, pathwise 35/38/38/38/34, bump
+  35/37/38/38/34. ATM digital, likelihood ratio: 38/37/37/38/38. Geometric
+  Asian: 35-40 of 40 for every Greek and every estimator.
+- **Variance, at equal normal draws** (50 seeds, 20 480 draws, the Slice 7
+  points): LR/pathwise **6.46** on the call's delta and **13.03** on its gamma
+  and vega; bump/pathwise **559.64** on gamma; bump/LR **864.73** on the
+  digital's delta. The first and last are the same rule in opposite directions
+  -- differentiate the payoff when it is smooth, the density when it is not.
+- **The digital.** `"likelihood_ratio"` is the estimator Slice 6's refusal
+  message named, delivered. `"pathwise"` raises, and the test **computes** the
+  exactly-zero sample it would have returned
+  (`qpl.engines.mc.digital.digital_payoff_derivative`). `"bump"` is available
+  and measured to be the wrong tool: coverage 36 / 39 / 36 / 26 / **0** of 40
+  for delta / gamma / vega / rho / theta, with a gamma standard deviation 4666x
+  the Greek. Bias/variance in `h` (24 seeds): sd order **-0.4263** (r 0.0968),
+  bias order **+1.9979** (r 0.0042, exactly 2.0000 for `h <= 1`), RMSE minimum
+  at `h = 3` -- **300x the package default**, and it moves like `N^{-1/5}`.
+- **The Asian.** Pathwise delta (`dA/dS_0 = A/S_0`, both averagings are
+  homogeneous of degree one in the spot) and vega (the Brownian path recovered
+  from the fixings); LR delta from the **first-transition** score
+  `Z_1/(S_0 sigma sqrt(t_1))`; gamma, rho, theta by bump. The LR penalty grows
+  with the schedule: 1.567 at six fixings, 3.439 at twelve, 5.228 at
+  twenty-six.
+- **Analytic geometric Asian Greeks** (`discrete_geometric_greeks`), reversing
+  Slice 8's blanket refusal. Arithmetic averaging now raises a *mathematical*
+  reason -- a derivative of an approximation with no error control has none
+  either -- and names `greeks_estimator='pathwise'`.
+- **Composition** (40 seeds, equal draws, ATM call delta), variance factors for
+  antithetic / control_variate / stratified: pathwise 20.43 / 3.92 / 84.42, LR
+  3.35 / 4.09 / 15.24, bump 20.20 / 3.88 / 86.34. The control variate is
+  **delta only** under the sample-level estimators and
+  `meta["control_variate_greeks"]` says so.
+- **Six contradicted expectations, all encoded:**
+  1. The pre-slice bump theta was never a central difference; it is a
+     **backward** one, first order in `dt`. Reproduced rather than upgraded,
+     and recorded in `meta["fd_by_greek"]`.
+  2. The LR vega and LR gamma are **the same estimator up to a constant**:
+     their weights are proportional path by path, so `vega = S_0^2 sigma T
+     gamma` holds in the sample. Equal coverage counts, equal variance ratios,
+     one measurement rather than two.
+  3. The digital LR delta's `1/T` blow-up is real in absolute terms (sd x4.67
+     from `T = 1` to `T = 0.05`, predicted x4.47) but **does not degrade
+     relative precision at the money** (0.0107 -> 0.0106), because the Greek
+     grows with the noise. It degrades it 4.3-fold off the money.
+  4. The digital bump's failure is not "noisy", it is "**no error bar**". Its
+     theta covers 0 times in 40 -- not from bias (it is exactly unbiased for
+     the difference it computes) but because the event carrying the signal has
+     probability 2e-06 per path and never occurs. A single seed's z-score for
+     it is meaningless: the same estimator reads -0.60 and +531 at the same
+     path count.
+  5. `-dV/dT` is **not** an Asian's theta: settlement enters the price only
+     through the discount factor, so it is `-r V` (-0.325 against the roll
+     theta's -8.028). The roll derivative is time decay, the variance weights
+     sum to exactly `n^2` so `dv/ds = -sigma^2`, and at one fixing it
+     reproduces Black-Scholes theta term for term (asserted to 1e-12).
+  6. Moving the bump to sample level was expected to agree "to round-off"; the
+     measured agreement is **bit-for-bit**, because the new sampler reproduces
+     the generator's consumption pattern exactly.
+- **Cases**: 50 new rows. `MC_GREEK_CASES` (30) and `DIGITAL_MC_GREEKS_CASES`
+  (15) state their tolerance as a **z-score** against the estimator's own
+  reported standard error -- a Monte Carlo Greek has no absolute error budget,
+  it has an error bar -- and both use a 4-sigma budget, which is what makes the
+  bump's pass on a vanilla and its failure on a digital comparable rather than
+  asserted. `MC_GREEKS_VARIANCE_CASES` (5, `MCGreeksVarianceCase`) pins the
+  estimator-cost ratios in log space with a 2.0 multiplicative band.
+- `examples/mc_greeks_estimators.py` (1.8 s, curated smoke, also `--case h` at
+  0.6 s): both payoffs, all applicable estimators, estimate / stderr / analytic
+  / z / source, plus the spread-over-seeds table that actually decides the
+  choice, plus the bump-size sweep.
+- Suite: **1322 tests, 125.6 s** (from 1224 / 112.2 s); the two new Greek test
+  files run in 3.9 s and the two new example smoke invocations in 2.5 s.
+- Full tables and the derivation:
+  `docs/notes/mc_greeks_pathwise_likelihood_ratio.md`.
 
 ## Reconciled old roadmap
 
