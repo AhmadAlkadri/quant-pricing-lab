@@ -10,12 +10,12 @@ Four kinds of claim, kept apart because they are justified differently:
 (c) CONVERGENCE_ORDER -- the error against the closed form decays like `1/n`,
     separately on odd and on even `n`, and the two subsequences sit on
     opposite sides of the Black-Scholes value.
-(d) EXACT_IDENTITY -- the American-put dynamic program and this European tree
-    agree bit-for-bit when early exercise is never optimal, which is the
-    observable consequence of their sharing one lattice builder. The
-    complementary check, that the DP engine's own numbers did not move when
-    that builder was extracted, is pinned in
-    `tests/test_tree_pricing.py::test_american_put_dp_is_unchanged_by_the_shared_lattice`.
+(d) EXACT_IDENTITY -- the American tree engine and this European tree agree
+    bit-for-bit when early exercise is never optimal, which is the observable
+    consequence of their sharing one lattice and one continuation expression.
+    The complementary check, that the American numbers did not move when the
+    Slice 1 keyword entry point was retired, is pinned in
+    `tests/test_tree_american.py::test_american_put_matches_the_retired_dp_engine_bit_for_bit`.
 
 A fitted slope is not a theorem: the orders below are measurements of this
 implementation on these refinement sequences. The order-1 behaviour and the
@@ -33,9 +33,8 @@ from itertools import pairwise
 
 import pytest
 
-from qpl.engines.dp import BinomialDPConfig, price_american_put_binomial
 from qpl.engines.tree import TreeConfig
-from qpl.instruments.options import EuropeanOption
+from qpl.instruments.options import AmericanOption, EuropeanOption
 from qpl.market.curves import FlatDividendCurve, FlatRateCurve
 from qpl.market.market import Market
 from qpl.models.black_scholes import BlackScholesModel
@@ -344,18 +343,18 @@ def test_richardson_extrapolation_of_two_odd_n_improves_the_order() -> None:
 
 
 # --------------------------------------------------------------------------
-# (d) The DP engine and the tree engine share one lattice
+# (d) American and European exercise share one lattice
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("n_steps", [51, 200, 501])
-def test_american_put_dp_equals_european_tree_when_r_is_zero(n_steps: int) -> None:
+def test_american_put_equals_european_tree_when_r_is_zero(n_steps: int) -> None:
     """Evidence class: EXACT_IDENTITY.
 
     Early exercise of a put pays for itself out of interest earned on the
     strike; at `r = 0` (and a positive dividend yield, which makes waiting
     strictly more attractive still) it is never optimal, so the American value
-    equals the European value. Both engines now build their lattice with
+    equals the European value. Both engines build their lattice with
     `qpl.engines.tree.lattice`, and the Bellman step reduces to the same
     continuation expression, so the agreement is bit-for-bit -- measured at
     exactly 0.0 difference for all three `n`. A tolerance of 1e-12 is kept as
@@ -365,12 +364,12 @@ def test_american_put_dp_equals_european_tree_when_r_is_zero(n_steps: int) -> No
     spot, strike, expiry, r, q, sigma = 100.0, 105.0, 1.0, 0.0, 0.03, 0.30
     market = _market(spot, r, q)
 
-    american = price_american_put_binomial(
-        strike=strike,
-        expiry=expiry,
-        market=market,
-        model=BlackScholesModel(sigma=sigma),
-        cfg=BinomialDPConfig(n_steps=n_steps),
+    american = price(
+        AmericanOption(kind="put", strike=strike, expiry=expiry),
+        BlackScholesModel(sigma=sigma),
+        market,
+        method="tree",
+        cfg=TreeConfig(n_steps=n_steps),
     ).value
     european = _tree(
         EuropeanOption(kind="put", strike=strike, expiry=expiry), sigma, market, n_steps

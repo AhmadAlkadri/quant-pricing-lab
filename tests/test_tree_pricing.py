@@ -1,8 +1,8 @@
-"""CRR tree engine: configuration, degenerate limits, metadata, and the
-bit-for-bit invariance of the American-put DP engine under the shared lattice.
+"""CRR tree engine: configuration, degenerate limits, metadata, lattice Greeks.
 
-The measured-convergence evidence lives in `tests/test_tree_convergence.py`;
-this file covers the parts that are exact rather than asymptotic.
+The measured-convergence evidence lives in `tests/test_tree_convergence.py`,
+and everything about American exercise in `tests/test_tree_american.py`; this
+file covers the European parts that are exact rather than asymptotic.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ import math
 
 import pytest
 
-from qpl.engines.dp import BinomialDPConfig, price_american_put_binomial
 from qpl.engines.tree import TreeConfig, crr_parameters, crr_spot_level
 from qpl.exceptions import InvalidInputError
 from qpl.instruments.options import EuropeanOption
@@ -160,55 +159,6 @@ def test_tree_is_deterministic() -> None:
     a = _tree(option, 0.3, market, 333)
     b = _tree(option, 0.3, market, 333)
     assert a == b
-
-
-# --------------------------------------------------------------------------
-# The DP engine now consumes the shared lattice: it must not have moved.
-# --------------------------------------------------------------------------
-
-# Values produced by the American-put DP engine *before* it was rewritten onto
-# `qpl.engines.tree.lattice`, recorded to full double precision. The shared
-# builder performs the same arithmetic in the same order, so these are expected
-# to agree exactly, not merely to 1e-12.
-_DP_PRE_REFACTOR = (
-    ("atm_1y_q1_n200", 100.0, 100.0, 1.0, 0.05, 0.01, 0.2, 200, 6.362744790336522),
-    ("otm_spot95_n1", 95.0, 100.0, 1.0, 0.05, 0.0, 0.2, 1, 8.930470562349573),
-    ("itm_short_n401", 120.0, 90.0, 0.5, 0.03, 0.05, 0.35, 401, 1.6458008994012916),
-    ("lowvol_2y_n1000", 100.0, 100.0, 2.0, 0.0, 0.0, 0.1, 1000, 5.635788658985444),
-    ("zerovol_n200", 100.0, 100.0, 1.0, 0.05, 0.01, 0.0, 200, 0.0),
-)
-
-
-@pytest.mark.parametrize(
-    ("spot", "strike", "expiry", "rate", "div", "sigma", "n_steps", "expected"),
-    [row[1:] for row in _DP_PRE_REFACTOR],
-    ids=[row[0] for row in _DP_PRE_REFACTOR],
-)
-def test_american_put_dp_is_unchanged_by_the_shared_lattice(
-    spot: float,
-    strike: float,
-    expiry: float,
-    rate: float,
-    div: float,
-    sigma: float,
-    n_steps: int,
-    expected: float,
-) -> None:
-    """Evidence class: EXACT_IDENTITY (a pinned refactoring invariant).
-
-    Moving the CRR parameter computation and the spot-lattice builder out of
-    `qpl.engines.dp` and into `qpl.engines.tree.lattice` must be a pure
-    refactor. The tolerance is zero: the arithmetic is unchanged expression by
-    expression, so anything but bit equality means the lattice moved.
-    """
-    value = price_american_put_binomial(
-        strike=strike,
-        expiry=expiry,
-        market=_market(spot, rate, div),
-        model=BlackScholesModel(sigma=sigma),
-        cfg=BinomialDPConfig(n_steps=n_steps),
-    ).value
-    assert value == expected
 
 
 # --------------------------------------------------------------------------

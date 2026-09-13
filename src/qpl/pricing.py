@@ -34,12 +34,13 @@ from .engines.registry import (
     resolve_greeks,
     resolve_price,
 )
+from .engines.tree.american import price_american as price_american_tree
 from .engines.tree.pricers import (
     TREE_METHOD_SPEC,
     greeks_european as greeks_european_tree,
     price_european as price_european_tree,
 )
-from .instruments.options import EuropeanOption
+from .instruments.options import AmericanOption, EuropeanOption
 from .models.black_scholes import BlackScholesModel
 
 Method = Literal["analytic", "mc", "pde", "tree"]
@@ -77,6 +78,17 @@ def _register_builtin_engines() -> None:
         price=price_european_tree,
         greeks=greeks_european_tree,
     )
+    # Exercise style is an instrument property (see `qpl.instruments.options`),
+    # so the American entry is another key on the same method, not another
+    # method. Nothing registers the analytic, MC or PDE engines for
+    # `AmericanOption`: asking for one raises `NotSupportedError` through the
+    # ordinary lookup, which is the point of keying on the instrument type.
+    register(
+        instrument_type=AmericanOption,
+        model_type=BlackScholesModel,
+        spec=TREE_METHOD_SPEC,
+        price=price_american_tree,
+    )
 
 
 _register_builtin_engines()
@@ -95,7 +107,8 @@ def price(
     Parameters
     ----------
     instrument
-        Instrument instance. Currently `EuropeanOption` is supported.
+        Instrument instance. `EuropeanOption` is supported by every method;
+        `AmericanOption` only by `method="tree"`.
     model
         Model instance. Currently `BlackScholesModel` is supported.
     market
