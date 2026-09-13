@@ -83,9 +83,19 @@ fit, so the slope is the temporal order and not the floor.
 Crank-Nicolson damps high-frequency modes only marginally, so a non-smooth
 terminal condition still produces oscillations in the Greeks near the strike
 even on an aligned grid. The prices above are fine; Delta and especially Gamma
-are not the same question. The remedies are Rannacher time stepping (two or
-four fully implicit half-steps before switching to CN) and non-uniform grids
-concentrated at the strike. Neither is implemented here; both are Phase 2.
+are not the same question.
+
+Slice 4 implemented the first remedy, `PDEConfig(time_stepping="rannacher")`,
+and measured what alignment does and does not buy: on `T = 0.05`,
+`n_s = 80 n_t`, alignment improves the plain-Crank-Nicolson gamma error by a
+factor of about nine but leaves its fitted order *negative* (-0.915 aligned
+against -1.043 unaligned) - refinement still makes it worse. Rannacher restores
+order two on both grids (1.888 aligned, 1.933 unaligned). Alignment fixes where
+the kink sits; it does nothing about what the scheme does to it. Full tables:
+`docs/notes/pde_greeks_and_rannacher.md`.
+
+The second remedy, a non-uniform grid concentrated at the strike, is still not
+implemented; it remains a Phase 2 item.
 
 ## Reproducing
 

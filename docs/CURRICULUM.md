@@ -141,15 +141,36 @@ unknowns stay unknown.
   Slice 1**; ADR-0005 accepted.
 
 ### Phase 2 — PDE rigor
-- Rannacher start-up, with Greeks read from the grid at measured order.
+- ~~Rannacher start-up, with Greeks read from the grid at measured order.~~
+  **Delivered in Slice 4** (see below): `PDEConfig(time_stepping="rannacher")`
+  and `greeks_method="grid"`, with delta, gamma and theta measured at order
+  ~2 and the plain-Crank-Nicolson gamma divergence pinned as a negative
+  finding and confirmed independently in QuantLib.
 - A non-uniform grid concentrated at the strike, as the second standard
   remedy for the strike-kink pathology documented in
-  `docs/notes/pde_strike_alignment.md`.
-- PSOR for American exercise, cross-checked against the Phase 1 trees.
+  `docs/notes/pde_strike_alignment.md`. Still open, and Slice 4 sharpened the
+  motivation: strike alignment improves the undamped gamma error by a factor
+  of nine but leaves its fitted order negative, so the two remedies address
+  different halves of the problem and a grid concentrated at the strike is not
+  a substitute for damping either.
+- PSOR for American exercise, cross-checked against the Phase 1 trees. Still
+  open. `qpl.engines.pde` now solves its tridiagonal step with
+  `scipy.linalg.solve_banded` (Slice 4), which PSOR cannot use -- the
+  projection is applied inside the sweep -- so that slice will need its own
+  iteration and is the natural place for the `qpl.numerics.linear_systems`
+  question below to be answered.
 - A digital (discontinuous-payoff) option, showing the pathology and the
-  remedies rather than only the smooth-payoff case.
+  remedies rather than only the smooth-payoff case. Still open, and now better
+  motivated: Slice 4 measured the kink's damage on gamma; a jump is one
+  derivative worse, so the same experiment on a digital should show the
+  pathology in the *price*.
 - `qpl.numerics.linear_systems` used where it earns its place, or a recorded
-  reason why not.
+  reason why not. **Recorded reason so far**: the European theta scheme needs
+  a direct tridiagonal solve, and Slice 4 measured LAPACK's banded solver to be
+  7.4x-28.7x faster than the in-repo Python loop at round-off-equal results, so
+  an iterative solver would be strictly worse here. The open question moves to
+  the PSOR slice, where projection forces an iteration and `sor_solve` is the
+  obvious starting point.
 
 ### Phase 3 — Monte Carlo (Glasserman)
 - Explicit stderr/CI discipline throughout.
@@ -435,6 +456,89 @@ unknowns stay unknown.
   `(script, args, keys)` triples so one example can have several curated
   invocations.
 - Full tables and the derivation: `docs/notes/leisen_reimer.md`.
+
+### Slice 4
+- `PDEConfig(time_stepping="rannacher")` replaces the first **two** nominal
+  time steps by **four fully implicit steps of `dt/2`** and then continues with
+  `theta`. Halving is exact in binary floating point, so the four half steps
+  cover `2 dt` to the last bit and total time stays `n_t dt`; `n_t + 2` steps
+  are taken and `n_t >= 2` is required. Default `"theta"` was bit-for-bit the
+  previous engine when it landed (288 configurations diffed).
+- `PDEConfig(greeks_method="grid")`, the new default, returns **all five**
+  Greeks from `qpl.pricing.greeks(..., method="pde")`: delta and gamma from
+  second-order central stencils on the finished grid, theta from the PDE
+  identity `V_t = -(1/2 sigma^2 S^2 V_SS + (r-q) S V_S - r V)`, vega and rho by
+  bump-and-revalue on the same grid. `meta` names the source of each. The old
+  path is kept as `greeks_method="bump"`, NaN vega/theta/rho included.
+- The spot is usually **not** a node -- with `strike_alignment="midpoint"` and
+  `S = K` it sits exactly halfway between two, the worst case -- so the
+  *Greeks* are interpolated between the two nearest nodes, not the price.
+  Linear interpolation of a smooth function adds `O(ds^2)`, so second order
+  survives; interpolating the price and differencing there would divide that
+  error by `ds^2`.
+- **Measured**, `S = K = 100, r = 5%, q = 0, sigma = 20%, T = 1`, aligned,
+  `n_s = n_t = n` over `(50 ... 800)`: delta **2.001**, gamma **2.064**,
+  theta **2.024** with plain Crank-Nicolson, and 2.001 / 2.067 / 2.024 with
+  Rannacher (log-space residuals 0.018-0.036). Price order 1.9972 and 1.9973;
+  Rannacher costs a flat **5.4%** on the price error constant (`n^2 |err|`
+  19.61 -> 20.66 at `n = 800`) and nothing on the order.
+- **Four contradicted expectations, all encoded:**
+  1. The slice expected the gamma pathology to show at `n_s = n_t = n` and
+     Rannacher to repair it there. **It does not appear on that path at all**:
+     `dt` shrinks as fast as `ds`, `lambda dt` at the strike stays near one,
+     and Crank-Nicolson damps the stiff modes fine. It needs `dt` large
+     relative to `ds^2`. On `n_s = 80 n_t`, `T = 0.05`, unaligned, plain
+     Crank-Nicolson fits gamma at order **-1.043** (residual 0.018) --
+     refinement makes it *worse* -- with relative errors -25.9%, +55.7%,
+     +113.4%, +227.7%; Rannacher fits **1.933**. Aligned: -0.915 against
+     1.888, so alignment buys a factor of nine and not the order.
+  2. **QuantLib's `FdBlackScholesVanillaEngine` does not use Rannacher damping
+     by default.** The slice said it did. Its default is
+     `FdmSchemeDesc.Douglas()` with `dampingSteps = 0`, bit-for-bit, and on the
+     same stressed grids its gamma is wrong by factors of 180 to **1353** --
+     two to three orders of magnitude worse than this package's undamped
+     result, because its log-spot mesher packs more nodes near the strike and
+     is therefore stiffer. `dampingSteps = 2` fixes it. Both undamped engines
+     diverging is what proves the pathology is the scheme's and not ours.
+  3. **Theta from the last two time levels is first order**, measured 1.054
+     (residual 0.0020) with the spatial grid held fixed, 20x-200x worse than
+     the identity at every level. The identity is what is reported; the
+     difference is kept in `meta["theta_backward_difference"]`.
+  4. "Replace the first time step by four steps of `dt/2`" does not add up:
+     four half steps cover `2 dt`, i.e. the first *two* steps. That is the
+     standard construction and what Giles and Carter call two half steps twice.
+- **The old bump path stalls.** Delta error -8.248e-05, -8.509e-05, -8.574e-05
+  at `n = 400, 800, 1600` against the grid path's -1.430e-04, -3.594e-05,
+  -9.007e-06; fitted orders **0.418** (residual 0.563) against **2.001**
+  (0.021). Two causes, not one: the fixed `O(h^2)` bias of the 1% bump, and the
+  fact that `s_max = multiplier * spot` puts the three solves on three
+  differently-aligned grids -- which is why its gamma sequence is not a power
+  law at all (residual 0.73 against 0.04, three sign changes).
+- **The price does not warn you.** At `n_s = 1600, n_t = 20, T = 0.05`
+  unaligned, plain Crank-Nicolson's price is 0.12% out while its gamma is 113%
+  out, a factor of ~900; theta, built from gamma through the identity, is 99%
+  out.
+- `qpl.cases`: ten `CLOSED_FORM` rows, five Greeks at the reference ATM call
+  and put, on one fixed grid (Rannacher, aligned, `n_s = n_t = 400`), each
+  tolerance derived from a measured error with a factor of 3.5-4.1 of headroom.
+  Plus `test_pde_grid_greeks_beat_the_bump_path_on_delta`, which pins the
+  *crossing*: at `n = 400` the bump path is ahead, by `n = 1600` it is 9.5x
+  behind.
+- Oracle: `tests/oracle/test_pde_vs_quantlib.py` (13 tests, 3.0 s). Agreement
+  at `n = 800` over three points and both kinds within 6e-04 on price, 1.5e-04
+  on delta and 4e-06 on gamma -- tolerances derived from both engines' measured
+  errors, with each engine's own residual against the closed form asserted
+  separately. Both fit order two on price and delta. Gamma is deliberately not
+  fitted off the money: this package's error there is already 5.7e-09 with sign
+  changes, and a slope through that measures nothing.
+- `perf(pde)`: the Thomas solve moved from a Python loop to
+  `scipy.linalg.solve_banded`. 7.4x to 28.7x on a price call, `pytest -q`
+  109.1 s -> 60.6 s, worst price difference **7.2e-13** over 160
+  configurations. Round-off, not zero: prices moved in the last bits.
+- `examples/pde_greeks_demo.py` was a legacy printout; it now prints the two
+  tables above with fitted orders, `--case smooth` and `--case startup`, both
+  under a second and both in the curated smoke list.
+- Full tables and the derivation: `docs/notes/pde_greeks_and_rannacher.md`.
 
 ## Reconciled old roadmap
 

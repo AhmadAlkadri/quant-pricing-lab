@@ -1,5 +1,108 @@
 # Steering Brief
 
+What changed in Slice 4 (files + bullets)
+
+Phase 2's first item: Rannacher start-up and Greeks read off the
+finite-difference grid, with the Crank-Nicolson gamma pathology pinned,
+repaired, and confirmed in a second engine. Still on `dev/curriculum`; not
+pushed.
+
+- `src/qpl/engines/pde/pricers.py`:
+  - `PDEConfig` gains `time_stepping: Literal["theta", "rannacher"] = "theta"`
+    and `greeks_method: Literal["grid", "bump"] = "grid"`. `"theta"` marches
+    `n_t` steps of `dt` exactly as before and was **bit-for-bit** the previous
+    engine when it landed (288 configurations diffed, 0 mismatches).
+  - `"rannacher"` replaces the first **two** nominal steps by **four fully
+    implicit steps of `dt/2`** and then continues with `theta`. Halving is
+    exact in binary floating point, so the four half steps cover `2 dt` to the
+    last bit, total time stays `n_t dt`, and `n_t + 2` steps are taken.
+    `n_t >= 2` is required. Rannacher (1984), Numerische Mathematik 43;
+    Giles & Carter (2006), JCF 9(4) -- their "two half steps, twice" is the
+    same four steps counted as two pairs.
+  - `greeks_european` now returns **all five** Greeks. Delta and gamma from
+    second-order central stencils; theta from the PDE identity
+    `V_t = -(1/2 sigma^2 S^2 V_SS + (r-q) S V_S - r V)`; vega and rho by
+    bump-and-revalue on the same grid (`h = 1e-2` and `1e-4`, both re-measured
+    here). `meta` names the source of each and carries
+    `theta_backward_difference` as the cross-check.
+  - The spot is usually **not a node** -- with `strike_alignment="midpoint"`
+    and `S = K` it sits exactly halfway between two -- so the *Greeks* are
+    interpolated between the two nearest nodes, which keeps `O(ds^2)`.
+    Interpolating the price and differencing there would divide that error by
+    `ds^2`.
+  - `_solve_tridiagonal` moved from a Python Thomas loop to
+    `scipy.linalg.solve_banded` in its own commit: **7.4x-28.7x** on a price
+    call, `pytest -q` 109.1 s -> 60.6 s, worst price difference **7.2e-13**
+    over 160 configurations. Round-off, not zero -- the earlier bit-identity
+    claims are against the Thomas loop and stop holding at the 13th decimal.
+- `tests/test_pde_greeks.py` (rewritten, 21 tests), `tests/test_pde_ch4.py`,
+  `tests/test_pde_pricing.py`, `tests/cases/test_european_black_scholes_cases.py`,
+  `tests/oracle/test_pde_vs_quantlib.py` (new, 13 tests, 3.0 s),
+  `docs/notes/pde_greeks_and_rannacher.md`:
+  - **Smooth case** (`S=K=100, r=5%, q=0, sigma=20%, T=1`, aligned,
+    `n_s=n_t=n` over 50...800): delta **2.001**, gamma **2.064**, theta
+    **2.024** with plain CN; 2.001 / 2.067 / 2.024 with Rannacher. Price order
+    1.9972 and 1.9973, with Rannacher costing a flat **5.4%** on the constant
+    (`n^2|err|` 19.61 -> 20.66) and nothing on the order.
+  - **Pathology** (`T=0.05`, `n_s = 80 n_t`, unaligned): plain CN fits gamma at
+    **-1.043** (residual 0.018) -- refinement makes it *worse* -- with relative
+    errors -25.9%, +55.7%, +113.4%, +227.7%. Rannacher fits **1.933**. Aligned:
+    **-0.915** against **1.888**, i.e. alignment buys a factor of nine and not
+    the order.
+  - **The price does not warn you**: at `n_s=1600, n_t=20` the CN price is
+    0.12% out while its gamma is 113% out and its theta 99% out.
+  - **Oracle**: agreement with QuantLib at `n=800` over three points and both
+    kinds within 6e-04 (price), 1.5e-04 (delta), 4e-06 (gamma) -- tolerances
+    derived from both engines' measured errors, each engine's own residual
+    asserted separately. Both order two on price and delta.
+  - `qpl.cases` gains ten `CLOSED_FORM` PDE-Greek rows at the reference ATM
+    call and put on one fixed grid, tolerances derived with 3.5x-4.1x headroom.
+- **Four contradicted expectations, all encoded rather than smoothed over:**
+  1. The slice expected the gamma pathology at `n_s = n_t = n`. **It is not
+     there.** On that path `dt` shrinks as fast as `ds`, `lambda dt` at the
+     strike stays near one, and CN damps the stiff modes fine -- the two time
+     steppings agree to three significant figures in all three Greeks. The
+     pathology needs `dt` large relative to `ds^2`, which that refinement hides.
+     It is pinned on `n_s = 80 n_t` instead.
+  2. **QuantLib's `FdBlackScholesVanillaEngine` does not damp by default.** The
+     slice said it used Rannacher. Its default is `FdmSchemeDesc.Douglas()`
+     with `dampingSteps = 0`, pinned bit-for-bit, and on the same stressed
+     grids its gamma is out by factors of 180 to **1353** -- two to three
+     orders worse than ours, because its log-spot mesher packs more nodes near
+     the strike and is stiffer there. `dampingSteps = 2` fixes it. Both
+     undamped engines diverging is what proves the pathology belongs to the
+     scheme and not to this package. (`FdmSchemeDesc.CrankNicolson()` is a
+     different scheme *type* that agrees with `Douglas()` to 1.8e-15: Douglas
+     splitting in 1D is the theta scheme, so the choice is not a choice.)
+  3. **Theta from the last two time levels is first order**: measured 1.054
+     (residual 0.0020) with the spatial grid fixed, 20x-200x worse than the
+     identity at every level. The identity is reported; the difference is the
+     cross-check.
+  4. "Replace the first time step by four steps of `dt/2`" does not add up --
+     four half steps cover `2 dt`, i.e. the first *two* steps. Implemented that
+     way and counted in a test.
+- **The old bump path stalls**, and for two reasons rather than one. Delta
+  error -8.248e-05, -8.509e-05, -8.574e-05 at `n = 400, 800, 1600` against the
+  grid path's -1.430e-04, -3.594e-05, -9.007e-06; orders **0.418**
+  (residual 0.563) against **2.001** (0.021). The fixed `O(h^2)` bias of the 1%
+  bump is the obvious cause; the one that was not anticipated is that
+  `s_max = multiplier * spot`, so the three solves sit on three
+  *differently-aligned* grids and their errors do not cancel -- which is why
+  its gamma sequence is not a power law at all (residual 0.73 against 0.04).
+- One thing the example surfaced that no test had asserted: **delta is not
+  polluted by the ripple**, because the CN oscillation alternates in sign
+  between neighbouring nodes and a first central difference cancels it while a
+  second difference doubles it. Theta tracks gamma exactly, because it is built
+  from gamma through the identity.
+- `examples/pde_greeks_demo.py` rewritten from a legacy printout into two
+  measured error tables with fitted orders (`--case smooth`, `--case startup`),
+  both under a second, both in the curated smoke list with
+  `startup_order theta_gamma=-1.` as a required key.
+- Remaining in Phase 2: a non-uniform grid at the strike, PSOR for American
+  exercise, and a digital option. The `qpl.numerics.linear_systems` question
+  now has a recorded answer for the European solve (a direct banded solve wins)
+  and moves to the PSOR slice, where projection forces an iteration.
+
 What changed in Slice 3 (files + bullets)
 
 Phase 1's last scheduled item: the Leisen-Reimer lattice, order 2 for European

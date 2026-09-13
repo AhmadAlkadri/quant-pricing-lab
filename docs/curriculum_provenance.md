@@ -157,6 +157,39 @@ no book prose, only provenance: lab notebook -> `src/qpl` changes -> test covera
     construction, and every number in the note was measured in this
     repository.
 
+### Phase 2 Slice 4 - Rannacher start-up and Greeks from the grid
+
+- Driven by: the Chapter 4 follow-up's own closing paragraph, which recorded
+  that strike alignment fixes the price but not the Greeks and named Rannacher
+  time stepping as the missing remedy.
+- New/modified `src/` modules:
+  - `src/qpl/engines/pde/pricers.py` (`PDEConfig.time_stepping`,
+    `PDEConfig.greeks_method`, `_time_levels`, `_solve_grid`, a rewritten
+    `greeks_european`, and the tridiagonal solve moved to
+    `scipy.linalg.solve_banded`)
+  - `src/qpl/cases/european_black_scholes.py` (`PDE_GREEK_CASES` and the grid
+    constants; `REFERENCE_ATM_CALL` / `REFERENCE_ATM_PUT` exported)
+- Key functions/classes added:
+  - `RANNACHER_STARTUP_STEPS`, `GRID_VEGA_BUMP`, `GRID_RHO_BUMP`,
+    `BUMP_SPOT_FRACTION`
+  - `PDE_GREEK_CASES`, `PDE_GREEKS_N`, `PDE_GREEKS_TIME_STEPPING`,
+    `PDE_GREEKS_STRIKE_ALIGNMENT`
+- New tests added:
+  - `tests/test_pde_greeks.py` (rewritten from the ground up),
+    `tests/oracle/test_pde_vs_quantlib.py`, and new cases in
+    `tests/test_pde_ch4.py`, `tests/test_pde_pricing.py`,
+    `tests/cases/test_european_black_scholes_cases.py`
+- Example rewritten:
+  - `examples/pde_greeks_demo.py` (`--case smooth`, `--case startup`), added to
+    the curated smoke list
+- Derivation note (own words, citations only):
+  - `docs/notes/pde_greeks_and_rannacher.md` (Rannacher 1984 for the
+    construction; Giles & Carter 2006 for the damping/accuracy trade-off;
+    Pooley-Forsyth-Vetzal 2003 and Tavella & Randall 2000 for the
+    non-smooth-payoff context and the stencils). The amplification-factor
+    argument is restated from `R(z) = (1 + (1-theta)z)/(1 - theta z)`, and
+    every number in the note was measured in this repository.
+
 ## Chapter 5 - Numerical Solution Of Linear Systems
 
 - Lab notebook:
