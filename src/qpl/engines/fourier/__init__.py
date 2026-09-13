@@ -1,5 +1,16 @@
 """Transform pricing engines: the terminal law through its characteristic function."""
 
+from .carr_madan import (
+    FFT_WEIGHTS,
+    ON_GRID_FRACTION,
+    QUADRATURE_RULES,
+    U_MAX_STANDARD_DEVIATIONS,
+    CarrMadanGrid,
+    carr_madan_fft,
+    carr_madan_quadrature,
+    damped_call_transform,
+    default_u_max,
+)
 from .charfn import (
     BlackScholesCharacteristicFunction,
     CharacteristicFunctionModel,
@@ -19,6 +30,7 @@ from .cos import (
 )
 from .digital import DIGITAL_METHODS, greeks_digital, price_digital
 from .pricers import (
+    CARR_MADAN_TRANSFORMS,
     FOURIER_METHOD_SPEC,
     FOURIER_METHODS,
     GREEKS_METHODS,
@@ -30,12 +42,18 @@ from .pricers import (
 )
 
 __all__ = [
+    "CARR_MADAN_TRANSFORMS",
     "COS_PAYOFFS",
     "DIGITAL_METHODS",
+    "FFT_WEIGHTS",
     "FOURIER_METHODS",
     "FOURIER_METHOD_SPEC",
     "GREEKS_METHODS",
+    "ON_GRID_FRACTION",
+    "QUADRATURE_RULES",
+    "U_MAX_STANDARD_DEVIATIONS",
     "BlackScholesCharacteristicFunction",
+    "CarrMadanGrid",
     "CharacteristicFunctionModel",
     "CosResult",
     "FourierConfig",
@@ -43,10 +61,14 @@ __all__ = [
     "LogReturnCumulants",
     "black_scholes_characteristic_function",
     "black_scholes_log_return_cumulants",
+    "carr_madan_fft",
+    "carr_madan_quadrature",
     "characteristic_function_model",
     "chi_coefficients",
     "cos_price",
     "cos_truncation_range",
+    "damped_call_transform",
+    "default_u_max",
     "fourier_inputs",
     "greeks_digital",
     "greeks_european",

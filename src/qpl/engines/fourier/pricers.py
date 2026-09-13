@@ -39,10 +39,19 @@ from ...instruments.options import EuropeanOption
 from ...market.market import Market
 from ..base import GreeksResult, PriceResult
 from ..registry import MethodSpec
+from .carr_madan import (
+    FFT_WEIGHTS,
+    ON_GRID_FRACTION,
+    QUADRATURE_RULES,
+    carr_madan_fft,
+    carr_madan_quadrature,
+    default_u_max,
+)
 from .charfn import CharacteristicFunctionModel, characteristic_function_model
 from .cos import cos_price
 
 __all__ = [
+    "CARR_MADAN_TRANSFORMS",
     "FOURIER_METHODS",
     "FOURIER_METHOD_SPEC",
     "FourierConfig",
@@ -52,8 +61,11 @@ __all__ = [
     "price_european",
 ]
 
-FOURIER_METHODS: tuple[str, ...] = ("cos",)
+FOURIER_METHODS: tuple[str, ...] = ("carr_madan", "cos")
 """Transform methods this package implements, as data for validation."""
+
+CARR_MADAN_TRANSFORMS: tuple[str, ...] = ("fft", "quadrature")
+"""How the Carr-Madan integral is evaluated: one FFT, or one strike at a time."""
 
 GREEKS_METHODS: tuple[str, ...] = ("cos",)
 """The subset whose Greeks are closed forms rather than bumps."""
@@ -108,23 +120,66 @@ quotient at short maturities.
 class FourierConfig:
     """Configuration for `method="fourier"`.
 
+    One dataclass covers every transform method, and each method reads the
+    fields that belong to it and ignores the rest. The alternative -- a config
+    class per method -- was rejected because `MethodSpec` binds exactly one
+    ``cfg=`` type per method string, and ``method="fourier"`` is one method
+    whose *variant* is a field, in the same way `PDEConfig.time_stepping` is a
+    field rather than a second method.
+
     Parameters
     ----------
     method
-        Which transform method to use. ``"cos"`` is the Fourier-cosine
-        expansion of Fang and Oosterlee.
+        Which transform method. ``"cos"`` is the Fourier-cosine expansion of
+        Fang and Oosterlee; ``"carr_madan"`` is the damped call transform.
     n_terms
-        Number of cosine terms ``N`` for ``method="cos"``. The error decays
-        exponentially in ``N`` until it reaches the floating-point floor.
+        Cosine terms ``N`` for ``"cos"``. The error decays like
+        ``exp(-pi^2 N^2 / (8 L^2))`` until it reaches the floating-point floor.
     truncation_l
-        ``L`` in the COS truncation range ``[c1 - L w, c1 + L w]``. Fang and
-        Oosterlee recommend 10 for Black-Scholes-like models; the cost of
-        smaller values is measured in `tests/test_fourier_cos.py`.
+        ``L`` in the COS range ``[c1 - L w, c1 + L w]``. Fang and Oosterlee
+        recommend 10; `tests/test_fourier_cos.py` measures the valley around it.
+    alpha
+        Carr-Madan damping. Must be > 0 and leave ``E[S_T^{alpha+1}]`` finite.
+    carr_madan_transform
+        ``"fft"`` for the one-FFT strike grid plus linear interpolation, or
+        ``"quadrature"`` to integrate at the requested strike with no grid.
+    n_grid
+        FFT length ``N``. With ``eta`` it fixes the log-strike spacing
+        ``2 pi / (N eta)`` and the grid half-width ``pi / eta``.
+    eta
+        FFT spacing in the transform variable. It is the one knob that trades
+        the two FFT errors against each other at fixed ``N``: a smaller ``eta``
+        resolves the integral better and the strike grid worse.
+    fft_weights
+        ``"simpson"`` is Carr and Madan's own weighting and the default;
+        ``"trapezoid"`` is measured to be up to 8.4e+06 times more accurate on
+        this integrand at the same ``eta``, which is a finding about the
+        integrand rather than about the rules.
+    quadrature
+        Which rule from `qpl.numerics.quadrature` drives the direct variant.
+        The default is ``"trapezoid"`` and that is a measured choice, not a
+        conservative one: on this integrand the trapezoid rule is spectrally
+        accurate and Simpson's rule is three decimal orders of magnitude worse
+        at the same node count (`tests/test_fourier_carr_madan.py`).
+    n_quad
+        Node or interval count for the direct variant.
+    u_max
+        Where the ``v`` integral is truncated. ``None`` derives it from the
+        model's own variance as ``12 / sqrt(c2)``; a fixed number would be
+        wrong by orders of magnitude across maturities and volatilities.
     """
 
-    method: Literal["cos"] = "cos"
+    method: Literal["cos", "carr_madan"] = "cos"
     n_terms: int = 256
     truncation_l: float = 10.0
+    alpha: float = 1.5
+    carr_madan_transform: Literal["fft", "quadrature"] = "fft"
+    n_grid: int = 4096
+    eta: float = 0.25
+    fft_weights: Literal["simpson", "trapezoid"] = "simpson"
+    quadrature: Literal["trapezoid", "simpson", "gauss_legendre"] = "trapezoid"
+    n_quad: int = 512
+    u_max: float | None = None
 
     def __post_init__(self) -> None:
         if self.method not in FOURIER_METHODS:
@@ -133,6 +188,28 @@ class FourierConfig:
             raise InvalidInputError("n_terms must be an integer >= 2")
         if not math.isfinite(self.truncation_l) or self.truncation_l <= 0.0:
             raise InvalidInputError("truncation_l must be finite and > 0")
+        if not math.isfinite(self.alpha) or self.alpha <= 0.0:
+            raise InvalidInputError("alpha must be finite and > 0")
+        if self.carr_madan_transform not in CARR_MADAN_TRANSFORMS:
+            raise InvalidInputError(
+                f"carr_madan_transform must be one of {CARR_MADAN_TRANSFORMS}"
+            )
+        if not isinstance(self.n_grid, int) or self.n_grid < 4 or self.n_grid % 2 != 0:
+            raise InvalidInputError("n_grid must be an even integer >= 4")
+        if not math.isfinite(self.eta) or self.eta <= 0.0:
+            raise InvalidInputError("eta must be finite and > 0")
+        if self.fft_weights not in FFT_WEIGHTS:
+            raise InvalidInputError(f"fft_weights must be one of {FFT_WEIGHTS}")
+        if self.quadrature not in QUADRATURE_RULES:
+            raise InvalidInputError(f"quadrature must be one of {QUADRATURE_RULES}")
+        if not isinstance(self.n_quad, int) or self.n_quad < 2:
+            raise InvalidInputError("n_quad must be an integer >= 2")
+        if self.quadrature == "simpson" and self.n_quad % 2 != 0:
+            raise InvalidInputError("n_quad must be even for quadrature='simpson'")
+        if self.u_max is not None and (
+            not math.isfinite(self.u_max) or self.u_max <= 0.0
+        ):
+            raise InvalidInputError("u_max must be None or finite and > 0")
 
 
 FOURIER_METHOD_SPEC = MethodSpec(method="fourier", cfg_type=FourierConfig)
@@ -236,7 +313,114 @@ def transform_value(
             "truncation_range": (result.lower, result.upper),
         }
         return result.value, meta
+
+    if cfg.method == "carr_madan":
+        return _carr_madan_value(
+            inputs,
+            cfg,
+            strike=strike,
+            kind=kind,
+            cf=cf,
+            s0=s0,
+            expiry=expiry,
+            rate=rate,
+        )
     raise NotSupportedError(f"method '{cfg.method}' is not implemented")
+
+
+def _parity_put(call: float, *, s0: float, strike: float, expiry: float, rate: float,
+                dividend: float) -> float:
+    """``P = C - S e^{-qT} + K e^{-rT}``.
+
+    Every method here except COS transforms the *call*, so its put is this line.
+    That makes put-call parity an identity of the implementation rather than a
+    check on it, which the parity tests say out loud.
+    """
+    return call - s0 * math.exp(-dividend * expiry) + strike * math.exp(-rate * expiry)
+
+
+def _carr_madan_value(
+    inputs: FourierInputs,
+    cfg: FourierConfig,
+    *,
+    strike: float,
+    kind: str,
+    cf: CharacteristicFunctionModel | None,
+    s0: float | None,
+    expiry: float | None,
+    rate: float | None,
+) -> tuple[float, dict[str, Any]]:
+    transform = cf if cf is not None else inputs.cf
+    spot = s0 if s0 is not None else inputs.s0
+    maturity = expiry if expiry is not None else inputs.expiry
+    discount_rate = rate if rate is not None else inputs.rate
+    common = {
+        "s0": spot,
+        "expiry": maturity,
+        "rate": discount_rate,
+        "dividend": inputs.dividend,
+        "alpha": cfg.alpha,
+    }
+    meta: dict[str, Any] = {"fourier_method": "carr_madan", "alpha": cfg.alpha}
+
+    if cfg.carr_madan_transform == "fft":
+        grid = carr_madan_fft(
+            transform,
+            **common,
+            n_grid=cfg.n_grid,
+            eta=cfg.eta,
+            weights=cfg.fft_weights,
+        )
+        call, weight, node = grid.interpolate(math.log(strike))
+        meta.update(
+            {
+                "carr_madan_transform": "fft",
+                "n_grid": cfg.n_grid,
+                "eta": cfg.eta,
+                "fft_weights": cfg.fft_weights,
+                "log_strike_spacing": grid.spacing,
+                "interpolation_weight": weight,
+                "on_grid": min(weight, 1.0 - weight) <= ON_GRID_FRACTION,
+                "grid_node": node,
+                "integration_reach": grid.reach(),
+            }
+        )
+    else:
+        u_max = cfg.u_max
+        if u_max is None:
+            u_max = default_u_max(
+                transform, maturity, rate=discount_rate, dividend=inputs.dividend
+            )
+        call = carr_madan_quadrature(
+            transform,
+            strike=strike,
+            **common,
+            rule=cfg.quadrature,
+            n_quad=cfg.n_quad,
+            u_max=u_max,
+        )
+        meta.update(
+            {
+                "carr_madan_transform": "quadrature",
+                "quadrature": cfg.quadrature,
+                "n_quad": cfg.n_quad,
+                "u_max": u_max,
+            }
+        )
+
+    if kind == "call":
+        return call, meta
+    return (
+        _parity_put(
+            call,
+            s0=spot,
+            strike=strike,
+            expiry=maturity,
+            rate=discount_rate,
+            dividend=inputs.dividend,
+        ),
+        meta,
+    )
 
 
 def _meta(cfg: FourierConfig, extra: dict[str, Any], instrument: str) -> dict[str, Any]:

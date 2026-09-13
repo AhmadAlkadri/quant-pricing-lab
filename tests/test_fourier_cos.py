@@ -39,11 +39,11 @@ Source for the method: Fang and Oosterlee (2008), SIAM J. Sci. Comput. 31(2),
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 from itertools import pairwise
 
 import numpy as np
 import pytest
+from fourier_points import KINDS, PAYOFFS, POINTS, Point
 
 from qpl.engines.fourier import (
     FourierConfig,
@@ -54,54 +54,10 @@ from qpl.engines.fourier import (
     cos_truncation_range,
 )
 from qpl.exceptions import InvalidInputError, NotSupportedError
-from qpl.instruments.options import DigitalOption, EuropeanOption
-from qpl.market.curves import FlatDividendCurve, FlatRateCurve
-from qpl.market.market import Market
+from qpl.instruments.options import EuropeanOption
 from qpl.models.black_scholes import BlackScholesModel
 from qpl.pricing import greeks, price
 from qpl.validation import EvidenceClass, fit_convergence_order
-
-
-@dataclass(frozen=True)
-class Point:
-    """One pricing point, as scalars."""
-
-    name: str
-    spot: float
-    strike: float
-    expiry: float
-    rate: float
-    dividend: float
-    sigma: float
-
-    def market(self) -> Market:
-        return Market(
-            spot=self.spot,
-            rate_curve=FlatRateCurve(self.rate),
-            dividend_curve=FlatDividendCurve(self.dividend),
-        )
-
-    def model(self) -> BlackScholesModel:
-        return BlackScholesModel(sigma=self.sigma)
-
-    def instrument(self, kind: str, payoff: str):
-        if payoff == "digital":
-            return DigitalOption(
-                kind=kind, strike=self.strike, expiry=self.expiry, cash=1.0
-            )
-        return EuropeanOption(kind=kind, strike=self.strike, expiry=self.expiry)
-
-
-POINTS: tuple[Point, ...] = (
-    Point("atm_1y", 100.0, 100.0, 1.0, 0.05, 0.00, 0.20),
-    Point("otm_9m_div", 100.0, 110.0, 0.75, 0.03, 0.01, 0.25),
-    Point("itm_1y_div", 120.0, 90.0, 1.0, 0.03, 0.05, 0.35),
-    Point("short_atm", 100.0, 100.0, 0.05, 0.01, 0.00, 0.30),
-    Point("long_high_vol", 80.0, 120.0, 2.0, 0.02, 0.03, 0.40),
-)
-
-KINDS = ("call", "put")
-PAYOFFS = ("vanilla", "digital")
 
 PRICE_TOLERANCE = 1e-11
 """Worst measured |COS - closed form| over the 20 (point, kind, payoff) cells at
