@@ -18,6 +18,11 @@ from qpl.cases import (
     LIMIT_CASES,
     MONOTONICITY_CASES,
     PARITY_CASES,
+    PDE_GREEK_CASES,
+    PDE_GREEKS_N,
+    PDE_GREEKS_STRIKE_ALIGNMENT,
+    PDE_GREEKS_TIME_STEPPING,
+    REFERENCE_ATM_CALL,
     TREE_EVEN_LEVELS,
     TREE_KNOWN_VALUE_TOLERANCE,
     TREE_LR_KNOWN_VALUE_TOLERANCE,
@@ -32,7 +37,7 @@ from qpl.cases import (
 from qpl.engines.mc.pricers import MCConfig
 from qpl.engines.pde.pricers import PDEConfig
 from qpl.engines.tree import TreeConfig
-from qpl.pricing import price
+from qpl.pricing import greeks, price
 from qpl.validation import EvidenceClass, fit_convergence_order
 
 
@@ -279,3 +284,94 @@ def test_leisen_reimer_convergence_order_rows(case: EuropeanBSCase) -> None:
     assert all(e > 0.0 for e in signed) or all(e < 0.0 for e in signed), signed
     magnitudes = [abs(e) for e in signed]
     assert all(a > b for a, b in pairwise(magnitudes)), magnitudes
+
+
+def _pde_greeks_cfg() -> PDEConfig:
+    """The one grid every PDE Greek row is evaluated on."""
+    return PDEConfig(
+        n_s=PDE_GREEKS_N,
+        n_t=PDE_GREEKS_N,
+        theta=0.5,
+        s_max_multiplier=4.0,
+        strike_alignment=PDE_GREEKS_STRIKE_ALIGNMENT,  # type: ignore[arg-type]
+        time_stepping=PDE_GREEKS_TIME_STEPPING,  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize("case", PDE_GREEK_CASES, ids=_ids(PDE_GREEK_CASES))
+def test_pde_grid_greek_rows(case: EuropeanBSCase) -> None:
+    """Every Greek off the PDE grid, against the closed form.
+
+    Evidence class: CLOSED_FORM. The reference is this repository's own
+    analytic engine, so what this checks is that a completely different
+    numerical route -- march a grid, difference it -- lands on the same five
+    numbers to a tolerance derived from a measurement rather than chosen.
+
+    Each row's tolerance keeps a factor of 3.5 to 4.1 over the error measured
+    at this grid, which is roughly one refinement level of the order-2
+    sequences in `tests/test_pde_greeks.py`; `row.notes` carries the
+    measurement. The five tolerances span four orders of magnitude
+    (7e-06 for gamma to 2e-02 for rho) because the Greeks themselves do: in
+    relative terms they are all between 2.1e-05 and 3.9e-04.
+
+    Delta and gamma come from second-order central stencils on the grid,
+    theta from the PDE identity, vega and rho from bump-and-revalue on the
+    same grid -- so the last two are no better than the price and are the
+    loosest rows relative to their own size.
+    """
+    assert case.row.evidence is EvidenceClass.CLOSED_FORM
+    assert "derived in-repo" in case.row.source
+    assert case.row.expected == 0.0
+
+    spec = case.spec
+    option, model, market = spec.option(), spec.model(), spec.market()
+    greek = case.row.id.split("_")[2]
+
+    analytic = greeks(option, model, market, method="analytic")
+    pde = greeks(option, model, market, method="pde", cfg=_pde_greeks_cfg())
+
+    residual = getattr(pde, greek) - getattr(analytic, greek)
+    assert abs(residual) <= case.row.tolerance, (case.row.id, residual, case.row.notes)
+    # Not vacuous: the row would also pass if the engine returned the analytic
+    # value, so pin that it is genuinely a discretisation and not a passthrough.
+    assert residual != 0.0
+
+
+def test_pde_grid_greeks_beat_the_bump_path_on_delta() -> None:
+    """The cases layer carries the Slice 4 replacement as an assertion.
+
+    Evidence class: NEGATIVE_FINDING for the bump leg. At the grid these rows
+    use, the bump path's delta error is already sitting on its `O(h**2)` floor
+    (measured -8.248e-05 at n = 400 and still -8.574e-05 at n = 1600) while
+    the grid path's is -1.430e-04 and falling at order 2. At n = 400 the bump
+    path is therefore *ahead*; by n = 800 it is behind, and by n = 1600 it is
+    9.5x behind. This test pins the crossing rather than the endpoint, because
+    the endpoint alone would read as "the old path was fine".
+    """
+    spec = REFERENCE_ATM_CALL
+    option, model, market = spec.option(), spec.model(), spec.market()
+    analytic = greeks(option, model, market, method="analytic").delta
+
+    def _delta(n: int, greeks_method: str) -> float:
+        cfg = PDEConfig(
+            n_s=n,
+            n_t=n,
+            theta=0.5,
+            s_max_multiplier=4.0,
+            strike_alignment=PDE_GREEKS_STRIKE_ALIGNMENT,  # type: ignore[arg-type]
+            time_stepping=PDE_GREEKS_TIME_STEPPING,  # type: ignore[arg-type]
+            greeks_method=greeks_method,  # type: ignore[arg-type]
+        )
+        return greeks(option, model, market, method="pde", cfg=cfg).delta
+
+    grid_400 = abs(_delta(400, "grid") - analytic)
+    grid_1600 = abs(_delta(1600, "grid") - analytic)
+    bump_400 = abs(_delta(400, "bump") - analytic)
+    bump_1600 = abs(_delta(1600, "bump") - analytic)
+
+    # The grid path converges; the bump path does not.
+    assert grid_400 / grid_1600 > 10.0, (grid_400, grid_1600)
+    assert 0.9 < bump_400 / bump_1600 < 1.1, (bump_400, bump_1600)
+    # Which is why the crossing happens between the two levels.
+    assert bump_400 < grid_400
+    assert bump_1600 > 5.0 * grid_1600

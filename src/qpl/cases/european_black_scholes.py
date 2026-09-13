@@ -30,6 +30,12 @@ __all__ = [
     "LIMIT_CASES",
     "MONOTONICITY_CASES",
     "PARITY_CASES",
+    "PDE_GREEKS_N",
+    "PDE_GREEKS_STRIKE_ALIGNMENT",
+    "PDE_GREEKS_TIME_STEPPING",
+    "PDE_GREEK_CASES",
+    "REFERENCE_ATM_CALL",
+    "REFERENCE_ATM_PUT",
     "TREE_EVEN_LEVELS",
     "TREE_KNOWN_VALUE_TOLERANCE",
     "TREE_LR_KNOWN_VALUE_TOLERANCE",
@@ -479,6 +485,115 @@ TREE_LR_ORDER_CASES: tuple[EuropeanBSCase, ...] = tuple(
 
 
 # --------------------------------------------------------------------------
+# (vii) Greeks read off the finite-difference grid.
+#
+# These rows are a different shape again: the quantity checked is a *residual*
+# against the closed-form Greek, so ``expected`` is 0 and ``tolerance`` is the
+# accuracy claim. Each tolerance below is derived from a measurement at the
+# stated grid, not chosen; the measurement is quoted in ``notes`` and can be
+# reproduced with `tests/test_pde_greeks.py`.
+#
+# The grid is fixed for every row: Crank-Nicolson with Rannacher start-up,
+# strike-aligned, n_s = n_t = 400. That combination is what Slice 4 measured
+# to be second order in delta, gamma and theta; plain Crank-Nicolson is second
+# order *here* too, but is not on grids where dt is large relative to ds**2,
+# and the cases layer should carry the configuration that is safe on both.
+# --------------------------------------------------------------------------
+
+PDE_GREEKS_N = 400
+"""`n_s = n_t` at which the cross-engine test reads the PDE Greeks."""
+
+PDE_GREEKS_TIME_STEPPING = "rannacher"
+"""Time stepping used for the PDE Greek rows; see `PDE_GREEK_CASES`."""
+
+PDE_GREEKS_STRIKE_ALIGNMENT = "midpoint"
+"""Strike placement used for the PDE Greek rows."""
+
+_PDE_GREEKS_SOURCE = (
+    "derived in-repo: residual of qpl.engines.pde grid Greeks against "
+    "qpl.engines.analytic closed-form Greeks at the reference ATM point; the "
+    "measured errors in `notes` come from tests/test_pde_greeks.py. The "
+    "second-order stencils are standard (any finite-difference text; Tavella "
+    "and Randall (2000), 'Pricing Financial Instruments: The Finite "
+    "Difference Method'), and the Rannacher start-up is Rannacher (1984), "
+    "Numerische Mathematik 43, 309-327, analysed in Giles and Carter (2006), "
+    "Journal of Computational Finance 9(4), 89-112. No number here is quoted "
+    "from any of those."
+)
+
+# (greek, tolerance, measured absolute error at n = 400, note)
+_PDE_GREEK_ROWS: tuple[tuple[str, float, str], ...] = (
+    (
+        "delta",
+        5.0e-4,
+        "Measured |error| 1.430e-04 for both the call and the put -- the two "
+        "are the same number, because the call and put grids differ only in "
+        "their boundary data and delta_C - delta_P = e^{-qT} is exact on the "
+        "grid. Second-order central stencil, linearly interpolated to the "
+        "spot, which at S = K on a midpoint-aligned grid sits exactly halfway "
+        "between two nodes. Tolerance keeps a factor of 3.5.",
+    ),
+    (
+        "gamma",
+        7.0e-6,
+        "Measured |error| 1.720e-06, call and put identical (gamma_C = gamma_P "
+        "exactly, by differentiating parity twice). Tolerance keeps a factor "
+        "of 4.1. This is the row that plain Crank-Nicolson would fail on a "
+        "grid with dt large relative to ds**2; see the NEGATIVE_FINDING in "
+        "tests/test_pde_greeks.py.",
+    ),
+    (
+        "vega",
+        3.0e-3,
+        "Measured |error| 7.887e-04, call and put identical (vega_C = vega_P). "
+        "Bump-and-revalue with h = 1e-2, so this inherits the grid's own error "
+        "rather than a stencil's -- it is no better than the price, whose "
+        "error at this grid is 1.285e-04 on a value of 10.45. Tolerance keeps "
+        "a factor of 3.8.",
+    ),
+    (
+        "theta",
+        4.0e-3,
+        "Measured |error| 1.053e-03 (call) and 1.053e-03 (put). Read from the "
+        "PDE identity, not from the last two time levels: the identity is "
+        "second order, the time difference is first order and 20x-200x worse. "
+        "Tolerance keeps a factor of 3.8.",
+    ),
+    (
+        "rho",
+        2.0e-2,
+        "Measured |error| 5.674e-03 (call) and 5.645e-03 (put). "
+        "Bump-and-revalue with h = 1e-4; like vega it inherits the grid's "
+        "error, and rho is the largest Greek here in absolute terms (53.2), "
+        "so its absolute residual is correspondingly the largest. Relative "
+        "residual 1.07e-04. Tolerance keeps a factor of 3.5.",
+    ),
+)
+
+PDE_GREEK_CASES: tuple[EuropeanBSCase, ...] = tuple(
+    EuropeanBSCase(
+        row=BenchmarkRow(
+            id=f"pde_grid_{greek}_{'call' if spec is REFERENCE_ATM_CALL else 'put'}",
+            description=(
+                f"PDE grid {greek} residual against the closed form at "
+                f"S=K=100, r=5%, q=0, sigma=20%, T=1 "
+                f"({'call' if spec is REFERENCE_ATM_CALL else 'put'}), "
+                f"Rannacher, aligned, n_s = n_t = {PDE_GREEKS_N}"
+            ),
+            expected=0.0,
+            tolerance=tolerance,
+            evidence=EvidenceClass.CLOSED_FORM,
+            source=_PDE_GREEKS_SOURCE,
+            notes=note,
+        ),
+        specs=(spec,),
+    )
+    for greek, tolerance, note in _PDE_GREEK_ROWS
+    for spec in (REFERENCE_ATM_CALL, REFERENCE_ATM_PUT)
+)
+
+
+# --------------------------------------------------------------------------
 # (iv) Comparative statics.
 #
 # A call is non-decreasing in spot (its payoff is), non-decreasing in
@@ -552,5 +667,6 @@ ALL_CASES: tuple[EuropeanBSCase, ...] = (
     + KNOWN_VALUE_CASES
     + TREE_ORDER_CASES
     + TREE_LR_ORDER_CASES
+    + PDE_GREEK_CASES
     + MONOTONICITY_CASES
 )
