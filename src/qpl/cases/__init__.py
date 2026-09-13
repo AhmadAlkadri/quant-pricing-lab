@@ -1,5 +1,21 @@
 """Benchmark case definitions: numerical claims as data, with their evidence."""
 
+from .american_black_scholes import (
+    ALL_AMERICAN_CASES,
+    AMERICAN_IDENTITY_CASES,
+    AMERICAN_PREMIUM_CASES,
+    AMERICAN_REFERENCE_CASES,
+    AMERICAN_REFERENCE_N_STEPS,
+    AMERICAN_REFERENCE_SPEC,
+    AMERICAN_REFERENCE_VALUE,
+    LS2001_BERMUDAN_EXERCISES_PER_YEAR,
+    LS2001_CASES,
+    LS2001_N_STEPS,
+    LS2001_ROW1,
+    PREMIUM_STRIKE_LADDER,
+    AmericanBSCase,
+    AmericanBSSpec,
+)
 from .european_black_scholes import (
     ALL_CASES,
     KNOWN_VALUE_CASES,
@@ -17,16 +33,30 @@ from .european_black_scholes import (
 )
 
 __all__ = [
+    "ALL_AMERICAN_CASES",
     "ALL_CASES",
+    "AMERICAN_IDENTITY_CASES",
+    "AMERICAN_PREMIUM_CASES",
+    "AMERICAN_REFERENCE_CASES",
+    "AMERICAN_REFERENCE_N_STEPS",
+    "AMERICAN_REFERENCE_SPEC",
+    "AMERICAN_REFERENCE_VALUE",
     "KNOWN_VALUE_CASES",
     "LIMIT_CASES",
+    "LS2001_BERMUDAN_EXERCISES_PER_YEAR",
+    "LS2001_CASES",
+    "LS2001_N_STEPS",
+    "LS2001_ROW1",
     "MONOTONICITY_CASES",
     "PARITY_CASES",
+    "PREMIUM_STRIKE_LADDER",
     "TREE_EVEN_LEVELS",
     "TREE_KNOWN_VALUE_TOLERANCE",
     "TREE_ODD_LEVELS",
     "TREE_ORDER_CASES",
     "TREE_REFERENCE_N_STEPS",
+    "AmericanBSCase",
+    "AmericanBSSpec",
     "EuropeanBSCase",
     "EuropeanBSSpec",
     "parity_residual",
