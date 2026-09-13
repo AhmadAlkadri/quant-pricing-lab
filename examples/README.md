@@ -10,7 +10,9 @@ fast, and designed to run without external data sources.
 - `pde_theta_scheme.py`
 - `pde_greeks_demo.py` (also `--case startup`)
 - `tree_convergence.py`
+- `american_put_cross_method.py`
 - `american_put_binomial_dp.py`
+- `digital_option_cross_method.py` (also `--case pde`)
 - `quadrature_demo.py`
 - `laplace_inversion_demo.py`
 - `copula_gaussian_demo.py`

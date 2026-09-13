@@ -107,6 +107,44 @@ _SMOKE_CASES = [
         ],
     ),
     (
+        # One digital, four engines. The curated keys are the ones a run that
+        # had lost the point of the example would not print: `tree_order
+        # leisen-reimer=+1.99` next to `pde_order plain_cn_unaligned=+1.0` is
+        # the whole slice in two lines -- the order-2 lattice on a jump and the
+        # order-1 grid -- and `sawtooth_sign_changes=2` pins that CRR's error
+        # off the money changes sign inside a single window of consecutive odd
+        # n. `mc_greeks=not_supported` pins the refusal.
+        "digital_option_cross_method.py",
+        [],
+        [
+            "example=digital_option_cross_method",
+            "analytic=0.5323248155",
+            "replication_residual=+0.000e+00",
+            "tree_order crr=+1.0",
+            "tree_order leisen-reimer=+1.99",
+            "tree_error_ratio_crr_over_lr_at_n801=4546.4",
+            "sawtooth_sign_changes=2",
+            "pde_order plain_cn_unaligned=+1.0",
+            "pde_order cn_unaligned_projected=+2.0",
+            "pde_order rannacher_aligned=+1.9",
+            "mc_stderr_order=+0.4999",
+            "mc_greeks=not_supported",
+        ],
+    ),
+    (
+        # The finite-difference table on its own, which is where the
+        # discontinuity pathology and its two repairs sit side by side.
+        "digital_option_cross_method.py",
+        ["--case", "pde"],
+        [
+            "case=pde",
+            "pde plain_cn_unaligned n=800 price=0.5276356328",
+            "pde rannacher_aligned n=800 price=0.5323250384",
+            "pde_order plain_cn_unaligned=+1.0",
+            "pde_order rannacher_unaligned_projected=+2.0",
+        ],
+    ),
+    (
         "american_put_binomial_dp.py",
         [],
         [
