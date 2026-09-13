@@ -44,11 +44,12 @@ def _option() -> EuropeanOption:
 
 
 def test_builtin_methods_are_registered_for_price_and_greeks() -> None:
-    assert set(known_methods()) >= {"analytic", "mc", "pde"}
+    assert set(known_methods()) >= {"analytic", "mc", "pde", "tree"}
 
     option, model, market = _option(), BlackScholesModel(sigma=0.2), _market()
-    for method in ("analytic", "mc", "pde"):
+    for method in ("analytic", "mc", "pde", "tree"):
         assert callable(resolve_price(option, model, market, method))
+    for method in ("analytic", "mc", "pde"):
         assert callable(resolve_greeks(option, model, market, method))
 
 
@@ -60,7 +61,7 @@ def test_unknown_method_is_not_supported() -> None:
         greeks(option, model, market, method="lsm")  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("method", ["analytic", "mc", "pde"])
+@pytest.mark.parametrize("method", ["analytic", "mc", "pde", "tree"])
 def test_unregistered_instrument_model_or_market_is_not_supported(method: str) -> None:
     """All three slots are checked; none of them silently falls through."""
     option, model, market = _option(), BlackScholesModel(sigma=0.2), _market()

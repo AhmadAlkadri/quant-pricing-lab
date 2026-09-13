@@ -9,6 +9,7 @@ from ...exceptions import InvalidInputError
 from ...market.market import Market
 from ...models.black_scholes import BlackScholesModel
 from ..base import PriceResult
+from ..tree.lattice import build_recombining_spot_tree, crr_parameters
 from .optimal_stopping import backward_induction_optimal_stopping
 
 
@@ -23,44 +24,6 @@ class BinomialDPConfig:
     """
 
     n_steps: int = 200
-
-
-def build_recombining_spot_tree(*, spot: float, up: float, down: float, n_steps: int) -> list[np.ndarray]:
-    """Build a recombining binomial spot lattice.
-
-    Parameters
-    ----------
-    spot
-        Initial spot value.
-    up
-        Up multiplier per time step.
-    down
-        Down multiplier per time step.
-    n_steps
-        Number of time steps.
-
-    Returns
-    -------
-    list[np.ndarray]
-        Lattice levels where level `j` has shape `(j + 1,)`.
-    """
-    if not math.isfinite(spot) or spot <= 0.0:
-        raise InvalidInputError("spot must be finite and > 0")
-    if not math.isfinite(up) or up <= 0.0:
-        raise InvalidInputError("up must be finite and > 0")
-    if not math.isfinite(down) or down <= 0.0:
-        raise InvalidInputError("down must be finite and > 0")
-    if n_steps < 1:
-        raise InvalidInputError("n_steps must be >= 1")
-
-    tree: list[np.ndarray] = []
-    for j in range(n_steps + 1):
-        up_counts = np.arange(j + 1, dtype=float)
-        down_counts = j - up_counts
-        spots = spot * (up**up_counts) * (down**down_counts)
-        tree.append(spots)
-
-    return tree
 
 
 def price_american_put_binomial(
@@ -129,27 +92,20 @@ def price_american_put_binomial(
         return PriceResult(value=float(intrinsic), meta=meta)
 
     n_steps = cfg.n_steps
-    dt = expiry / n_steps
     r = market.rate(expiry)
     q = market.dividend_yield(expiry)
-    growth = math.exp((r - q) * dt)
-    discount = math.exp(-r * dt)
 
-    if sigma == 0.0:
-        up = growth
-        down = growth
-        p = 0.5
-    else:
-        up = math.exp(sigma * math.sqrt(dt))
-        down = 1.0 / up
-        p = (growth - down) / (up - down)
-
-        tol = 1e-12
-        if p < -tol or p > 1.0 + tol:
-            raise InvalidInputError(
-                "No-arbitrage condition violated: risk-neutral probability p must be in [0, 1]"
-            )
-        p = min(1.0, max(0.0, p))
+    # Shared with the European tree engine: one definition of "the CRR
+    # lattice" for both. The arithmetic is unchanged from the inline version
+    # this replaced, so prices are bit-identical.
+    lattice = crr_parameters(
+        sigma=sigma, expiry=expiry, rate=r, dividend_yield=q, n_steps=n_steps
+    )
+    dt = lattice.dt
+    up = lattice.up
+    down = lattice.down
+    p = lattice.p
+    discount = lattice.discount
 
     spot_tree = build_recombining_spot_tree(spot=s0, up=up, down=down, n_steps=n_steps)
     exercise_values = [np.maximum(strike - level_spots, 0.0) for level_spots in spot_tree]

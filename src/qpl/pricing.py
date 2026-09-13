@@ -34,10 +34,14 @@ from .engines.registry import (
     resolve_greeks,
     resolve_price,
 )
+from .engines.tree.pricers import (
+    TREE_METHOD_SPEC,
+    price_european as price_european_tree,
+)
 from .instruments.options import EuropeanOption
 from .models.black_scholes import BlackScholesModel
 
-Method = Literal["analytic", "mc", "pde"]
+Method = Literal["analytic", "mc", "pde", "tree"]
 
 
 def _register_builtin_engines() -> None:
@@ -66,6 +70,11 @@ def _register_builtin_engines() -> None:
         price=price_european_pde,
         greeks=greeks_european_pde,
     )
+    register(
+        **common,
+        spec=TREE_METHOD_SPEC,
+        price=price_european_tree,
+    )
 
 
 _register_builtin_engines()
@@ -90,12 +99,13 @@ def price(
     market
         Market instance. Currently `Market` is supported.
     method
-        Pricing engine selector: `"analytic"`, `"mc"`, or `"pde"`.
+        Pricing engine selector: `"analytic"`, `"mc"`, `"pde"`, or `"tree"`.
     **kwargs
         Method-specific keyword arguments:
         - analytic: no extra kwargs
         - mc: `cfg=MCConfig`
         - pde: `cfg=PDEConfig`
+        - tree: `cfg=TreeConfig`
 
     Returns
     -------
@@ -133,12 +143,13 @@ def greeks(
     market
         Market instance. Currently `Market` is supported.
     method
-        Greeks engine selector: `"analytic"`, `"mc"`, or `"pde"`.
+        Greeks engine selector: `"analytic"`, `"mc"`, `"pde"`, or `"tree"`.
     **kwargs
         Method-specific keyword arguments:
         - analytic: no extra kwargs
         - mc: `cfg=MCConfig` and optional `bumps=dict[str, float]`
         - pde: `cfg=PDEConfig`
+        - tree: `cfg=TreeConfig`
 
     Returns
     -------
