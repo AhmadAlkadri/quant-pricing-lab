@@ -184,16 +184,30 @@ __all__ = [
     "numerical_log_return_cumulant",
 ]
 
-HESTON_TRUNCATION_L_FELLER_VIOLATED = 30.0
+HESTON_TRUNCATION_L_FELLER_VIOLATED = 28.0
 """`FourierConfig.truncation_l` that the COS method needs when `c4 = 0` lies.
 
-Measured, not chosen. At `v0 = 0.04, kappa = 0.5, theta = 0.04, xi = 1.0,
-rho = -0.9` (the repository's own Feller-violating CIR parameters, Feller
-number 0.08) and `T = 1`, the ATM call error against QuantLib is flat in `N`
-at 9.1e-04 for `L = 10`, 1.6e-04 for `L = 12`, 4.6e-06 for `L = 16`,
-1.3e-07 for `L = 20` and 2.3e-11 for `L = 30`. The predicted repair factor is
-`sqrt(1 + sqrt(c4)/c2) = 2.80`, i.e. `L = 28`, and 30 is the first tested value
-past it. See `tests/test_heston_fourier.py`."""
+Derived, then measured. The COS range is `[c1 - L w, c1 + L w]` with
+`w = sqrt(c2 + sqrt(c4))`; reporting `c4 = 0` shrinks `w` by the factor
+`sqrt(1 + sqrt(c4)/c2)`, so the repair is to grow `L` by the same factor. At
+`v0 = 0.04, kappa = 0.5, theta = 0.04, xi = 1.0, rho = -0.9` (the repository's
+own Feller-violating CIR variance parameters, Feller number 0.08) and `T = 1`
+that factor is **2.80**, i.e. `L = 28`, and the ATM call error against a Lewis
+integral of the same transform reads
+
+    L        N = 256     512      1024      2048      4096
+    10      8.03e-04  9.12e-04  9.13e-04  9.13e-04  9.13e-04
+    14      1.61e-03  4.33e-05  2.75e-05  2.75e-05  2.75e-05
+    20      1.77e-02  3.84e-04  1.32e-06  1.28e-07  1.28e-07
+    28      4.56e-01  2.42e-03  1.56e-04  1.30e-07  1.22e-10
+
+-- flat in `N` at every `L`, which is what identifies a *range* error rather
+than a series error, and seven decimal orders better at the derived `L` than at
+the default. The term count has to grow with `L` as well (the decay exponent is
+`N^2 / L^2`), which is why the row above needs `N = 4096`. On the
+Feller-satisfying Lewis set the default `L = 10` is already at 1.4e-12 and
+raising `L` only raises the round-off floor. See
+`tests/test_heston_fourier.py`."""
 
 
 def _variance_integrals(
