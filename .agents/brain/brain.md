@@ -24,7 +24,7 @@ Agent Contract
 - **Clean Working Tree**: Agents must not report completion unless `git status` is clean. When renaming files, always verify deletions are staged.
 
 0) Repo at a glance
-- Purpose: small Python lab for European option pricing with analytic Black-Scholes, Monte Carlo, and PDE engines. (source: README.md; src/qpl/engines/analytic/black_scholes.py; src/qpl/engines/mc/pricers.py; src/qpl/engines/pde/pricers.py)
+- Purpose: a numerical-methods lab built by Textbook-Driven Development (ADR-0004): textbook/literature results are re-derived, turned into cases, cross-checked, and backed by measured convergence or statistical evidence before becoming package capability. Covers analytic/MC/PDE European pricing under Black-Scholes, a DP/binomial American put engine, and supporting numerics/transforms/dependence modules. (source: docs/CURRICULUM.md; src/qpl/engines/analytic/black_scholes.py; src/qpl/engines/mc/pricers.py; src/qpl/engines/pde/pricers.py; src/qpl/engines/dp/american_put_binomial.py; src/qpl/numerics/__init__.py; src/qpl/transforms/__init__.py; src/qpl/dependence/__init__.py)
 - Primary language/toolchain: Python package `qpl`, Python >=3.10, numpy/scipy/matplotlib, pytest. (source: pyproject.toml)
 - Primary entry points: `qpl.pricing.price`/`qpl.pricing.greeks` and example scripts in `examples/`. (source: src/qpl/pricing.py; examples/bs_analytic.py; examples/bs_mc_vs_analytic.py)
 - How to run tests: `pytest`. (source: pyproject.toml; .github/workflows/ci.yml)
@@ -35,11 +35,11 @@ Agent Contract
   (source: README.md; examples/bs_analytic.py; pyproject.toml)
 
 1) Purpose and non-goals
-- Purpose: provide a compact, well-tested reference for European option pricing under Black-Scholes via analytic, MC, and PDE methods. (source: README.md; src/qpl/engines/analytic/black_scholes.py; src/qpl/engines/mc/pricers.py; src/qpl/engines/pde/pricers.py)
-- Non-goal: non-European or path-dependent instruments (only `EuropeanOption` and plain call/put payoffs exist). (source: src/qpl/instruments/options.py; src/qpl/instruments/payoffs.py)
-- Non-goal: models beyond Black-Scholes (only `BlackScholesModel` is implemented). (source: src/qpl/models/black_scholes.py; src/qpl/models/__init__.py)
-- Non-goal: multi-asset or stochastic rate/dividend frameworks (single-spot market with flat curves). (source: src/qpl/market/market.py; src/qpl/market/curves.py)
-- Non-goal: CLI or service interface (no console scripts defined). (source: pyproject.toml)
+- Purpose: provide a well-tested, evidence-backed reference for option pricing methods, growing along the phase plan in `docs/CURRICULUM.md` (foundations -> BS analytic -> trees/PDE/MC -> American exercise -> transforms/Heston/calibration -> exotics as method drivers -> multi-asset/rates/performance). (source: docs/CURRICULUM.md; README.md)
+- Non-goal: market-data expansion beyond the frozen `[data]` extra (D9); the market-data strand is done but out of curriculum scope. (source: docs/CURRICULUM.md; pyproject.toml)
+- Non-goal: a production trading framework or service/CLI interface. (source: docs/CURRICULUM.md; pyproject.toml)
+- Non-goal: a universal pricing ontology built ahead of the cases that justify it — instruments and models are added only when a phase-plan case needs them, not speculatively. (source: docs/CURRICULUM.md)
+- Non-goal: performance work before reference paths exist — profiling/vectorization/benchmark harness are Phase 5+, gated on having reference results to benchmark against. (source: docs/CURRICULUM.md)
 
 ## Notebook Hygiene
 - Notebooks live in `notebooks/` and follow a strict numbering scheme: `NN_description.ipynb`.
@@ -59,6 +59,13 @@ Agent Contract
 - Current exception exports: `qpl.exceptions` module and its error types (`QPLError`, `InvalidInputError`, `ModelAssumptionError`, `NotSupportedError`). (source: src/qpl/exceptions.py; src/qpl/__init__.py)
 - Current example-level interfaces: `qpl.engines.mc.pricers.MCConfig`, `price_european`, `greeks_european`. (source: src/qpl/engines/mc/pricers.py; examples/bs_mc_vs_analytic.py)
 - Current example-level interfaces: `qpl.engines.pde.pricers.PDEConfig`, `price_european`. (source: src/qpl/engines/pde/pricers.py)
+- `PDEConfig` has a `strike_alignment: Literal["none", "midpoint"]` field; `"midpoint"` nudges the grid spacing so the strike sits exactly between two nodes, restoring measured order-2 convergence (see `docs/notes/pde_strike_alignment.md`). Default `"none"` is bit-identical to pre-Slice-0 output. (source: src/qpl/engines/pde/pricers.py)
+- Current validation exports: `qpl.validation` exports `ConvergenceFit`, `fit_convergence_order`, `refinement_errors`, `BenchmarkRow`, `EvidenceClass`. (source: src/qpl/validation/__init__.py)
+- Current cases exports: `qpl.cases` exports `EuropeanBSSpec`, `EuropeanBSCase`, `PARITY_CASES`, `LIMIT_CASES`, `KNOWN_VALUE_CASES`, `MONOTONICITY_CASES`, `ALL_CASES`, `parity_residual`. (source: src/qpl/cases/__init__.py)
+- Current DP engine exports: `qpl.engines.dp` exports `BinomialDPConfig`, `build_recombining_spot_tree`, `price_american_put_binomial`, `backward_induction_optimal_stopping`; not yet wired into the `qpl.pricing` dispatcher. (source: src/qpl/engines/dp/__init__.py)
+- Current numerics exports: `qpl.numerics` exports `LinearSolveResult`, `jacobi_solve`, `gauss_seidel_solve`, `sor_solve`, `composite_trapezoid`, `composite_simpson`, `gauss_legendre`. (source: src/qpl/numerics/__init__.py)
+- Current transforms exports: `qpl.transforms` exports `stehfest_coefficients`, `inverse_laplace_stehfest`, `inverse_laplace_grid_stehfest`. (source: src/qpl/transforms/__init__.py)
+- Current dependence exports: `qpl.dependence` exports `gaussian_copula_sample`, `empirical_kendall_tau`, `empirical_spearman_rho`, `gaussian_copula_kendall_tau`, `gaussian_copula_spearman_rho`. (source: src/qpl/dependence/__init__.py)
 - Internal modules may be refactored freely when lab-driven and tested.
 
 3) Architecture (text-only diagram + bullets)
@@ -78,7 +85,8 @@ PriceResult / GreeksResult
 - Dispatcher: `qpl.pricing` validates types and routes by method to engine functions. (source: src/qpl/pricing.py)
 - Engines: analytic uses closed-form BS, MC uses GBM sampling (terminal or multi-step), PDE uses theta-scheme FD grid. (source: src/qpl/engines/analytic/black_scholes.py; src/qpl/engines/mc/pricers.py; src/qpl/engines/pde/pricers.py)
 - Results: `PriceResult` and `GreeksResult` normalize outputs across engines. (source: src/qpl/engines/base.py)
-- Key entry points (paths): `src/qpl/pricing.py`, `src/qpl/__init__.py`, `src/qpl/engines/base.py`, `src/qpl/engines/analytic/black_scholes.py`, `src/qpl/engines/mc/pricers.py`, `src/qpl/engines/pde/pricers.py`, `src/qpl/instruments/options.py`, `src/qpl/market/market.py`, `src/qpl/market/curves.py`, `src/qpl/models/black_scholes.py`, `examples/bs_analytic.py`, `examples/bs_mc_vs_analytic.py`, `tests/test_pricing_analytic.py`, `tests/test_mc_pricing.py`, `tests/test_pde_pricing.py`, `.github/workflows/ci.yml`, `pyproject.toml`, `docs/ROADMAP.md`.
+- Key entry points (paths): `src/qpl/pricing.py`, `src/qpl/__init__.py`, `src/qpl/engines/base.py`, `src/qpl/engines/analytic/black_scholes.py`, `src/qpl/engines/mc/pricers.py`, `src/qpl/engines/pde/pricers.py`, `src/qpl/instruments/options.py`, `src/qpl/market/market.py`, `src/qpl/market/curves.py`, `src/qpl/models/black_scholes.py`, `examples/bs_analytic.py`, `examples/bs_mc_vs_analytic.py`, `tests/test_pricing_analytic.py`, `tests/test_mc_pricing.py`, `tests/test_pde_pricing.py`, `.github/workflows/ci.yml`, `pyproject.toml`, `docs/CURRICULUM.md`.
+- The dispatcher's `isinstance` ladder in `qpl.pricing` is expected to be replaced by an engine registry keyed by `(instrument, model, method)` in Phase 1, once CRR trees add a second method per instrument/model pair; tracked as ADR-0005 (pending, not yet written). (source: src/qpl/pricing.py; docs/CURRICULUM.md)
 
 4) Key invariants and assumptions
 - `EuropeanOption` requires kind in {"call","put"}, strike > 0, expiry >= 0; enforced at init. (source: src/qpl/instruments/options.py)
@@ -116,9 +124,11 @@ Top 10 cheapest checks
 
 7) Testing & CI contract
 - Test runner: `pytest` with tests in `tests/`. (source: pyproject.toml)
-- CI: GitHub Actions runs on ubuntu-latest, sets up Python 3.11, installs `.[dev]`, then runs `pytest`. (source: .github/workflows/ci.yml)
+- CI runs two jobs on ubuntu-latest / Python 3.11: `tests-core` (`pip install -e ".[dev]"`) and `tests-full` (`pip install -e ".[dev,data,oracle]"`); both run `ruff check .` then `pytest -q`. (source: .github/workflows/ci.yml)
 - Example smoke: `examples/bs_mc_vs_analytic.py` must run successfully (tested via subprocess). (source: tests/test_examples_smoke.py)
 - Lab smoke: notebooks in `labs/` must execute headlessly via `jupyter nbconvert --execute` under deterministic env vars.
+- Evidence discipline: any numerical claim added to `tests/` or `docs/notes/` states which `qpl.validation.EvidenceClass` justifies it; numerical engines require measured convergence-order evidence (`qpl.validation.fit_convergence_order`) before being treated as delivered, not just a passing tolerance check. (source: src/qpl/validation/benchmark.py; src/qpl/validation/convergence.py; .agents/brain/adr/0004-textbook-driven-development.md)
+- `tests/oracle/` collects only when the optional `QuantLib` (`[oracle]` extra) is importable; otherwise it is skipped at collection time, including when targeted directly by path. (source: tests/oracle/conftest.py)
 
 8) Decisions log (index)
 - ADRs live in `.agents/brain/adr/` (see `.agents/brain/adr/0000-template.md`).
@@ -126,69 +136,14 @@ Top 10 cheapest checks
 - Historical/superseded ADRs: `.agents/brain/adr/0001-public-api-truth-source.md`.
 - ADR rules: one decision per ADR, keep under 1 page, include status and supersedes links. (source: .agents/brain/adr/0000-template.md)
 
-9) Roadmap: next 3 increments (vertical slices only)
-- [Done] Enable PDE Greeks (Delta/Gamma): `pricing.greeks(..., method='pde')`. Implemented in `src/qpl/engines/pde/pricers.py`.
-- [Done] Fix MC Theta: `greeks(..., method='mc')` returns non-zero Theta. Validated in `tests/test_mc_greeks.py`.
-- [Next] Binary/Digital Options (Analytic): new instrument `BinaryOption`.
-  - Criteria: `BinaryOption` class, analytic price formula ($e^{-rT} N(d_2)$ for Call), `pricing` dispatcher update (analytic only), tests, and `examples/binary_demo.py`.
-- [Queued] Benchmark Harness: standard perf tracking.
-- [Queued] MC Variance Reduction (Antithetic).
+9) Curriculum
+- Full curriculum map (TDD loop, identity decision, literature spine, method dependency graph, evidence classes, provenance rules, phase plan, Slice 0 delivered results, reconciled old roadmap): `docs/CURRICULUM.md`. (source: docs/CURRICULUM.md)
+- Next slice: Phase 1, discrete time. CRR binomial tree for the European call/put wired into the dispatcher, with measured order-1 convergence to the Black-Scholes closed form and the odd/even node-count oscillation documented rather than hidden. (source: docs/CURRICULUM.md)
 
-10) Next Thin Vertical Slices: Implied Volatility & Time-Series Grounding
+10) Open questions / risks
+- Version sync risk: `pyproject.toml` `[project].version` and `src/qpl/__init__.py:__version__` currently match (`0.1.0`, verified 2026-09-13), but no CI step enforces that they stay aligned — a future bump to one without the other would drift silently. Verify: compare the two values directly. (source: pyproject.toml; src/qpl/__init__.py)
 
-1) Implied Volatility Solver (Analytic, European)
-   - User story: As a quant, I want to compute implied volatility from an observed option price so I can invert the Black–Scholes model.
-   - Notes:
-     - Analytic Black–Scholes only.
-     - Robust root-finding.
-     - Deterministic tests and example script.
-   - Rationale: Core quant concept; small surface area; unlocks calibration workflows.
-
-2) Implied Volatility Teaching Notebook
-   - User story: As a learner, I want to understand what implied volatility means and how it behaves as option prices change.
-   - Notes:
-     - Demonstrate monotonicity of price vs σ.
-     - ATM vs ITM/OTM sensitivity.
-     - Repricing consistency (σ → price → implied σ).
-   - Rationale: High pedagogical value; pure vertical polish on the solver.
-
-3) Historical Volatility Estimation from Time Series
-   - User story: As a quant, I want to estimate σ from historical returns so I can compare realized vs implied volatility.
-   - Notes:
-     - Load historical prices.
-     - Compute log returns and annualized realized volatility.
-     - Minimal statistics, no option pricing yet.
-   - Rationale: Bridges theory to data; thin, self-contained slice.
-
-3a) Market Data Retrieval + Local Caching (v0)
-   - User story: As a developer, I want a robust way to fetch prices without flaky network calls breaking my analysis.
-   - Notes:
-     - Fetch historical data (e.g. from Stooq/Yahoo).
-     - Local caching (filesystem) for determinism.
-     - "Data plumbing" only; no analytics.
-   - Rationale: Infrastructure slice to support Slice 3 and 4; ensures tests/demos work offline.
-
-4) Implied vs Realized Volatility Comparison
-   - User story: As a practitioner, I want to compare implied volatility to realized volatility to see when Black–Scholes assumptions break down.
-   - Notes:
-     - Rolling realized volatility.
-     - Sample implied volatility.
-     - Visual comparison over time.
-   - Rationale: Ties together inversion + data; intuitive and compelling.
-
-5) Simple Time-Series Model Fit for Returns (μ, σ)
-   - User story: As a quant, I want to fit μ and σ from historical data and evaluate how well BS assumptions hold.
-   - Notes:
-     - Estimate drift and volatility.
-     - Compare empirical return distribution to Gaussian.
-   - Rationale: Explicitly introduces model-vs-reality pressure; prepares ground for richer models later.
-
-
-11) Open questions / risks
-- README Quickstart code block appears unclosed; verify and fix if needed. Verify: re-open `README.md` and confirm markdown renders cleanly. (source: README.md)
-- Version sync risk: `pyproject.toml` and `qpl.__version__` must stay aligned. Verify: compare values and define an update rule. (source: pyproject.toml; src/qpl/__init__.py)
-
-12) Execution Principle: Thin Vertical Slices
+11) Execution Principle: Thin Vertical Slices
 - We simply do not build "layers". We build **slices**.
 - A slice = Public API + Engine Logic + Test + Golden Path update.
 - See `.agents/brain/adr/0002-thin-vertical-slices.md`.
