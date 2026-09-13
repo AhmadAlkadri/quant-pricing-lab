@@ -210,7 +210,10 @@ def test_knock_in_plus_knock_out_is_the_vanilla(
     vanilla = bs_price(S=spot, K=strike, T=expiry, r=rate, sigma=sigma, q=div, kind=kind)
 
     assert knock_in + knock_out == pytest.approx(vanilla, abs=_PARITY_TOLERANCE)
-    assert knock_in >= 0.0 and knock_out >= 0.0
+    # Non-negativity up to round-off: the closed form assembles a worthless leg
+    # from cancelling building blocks, and Linux libm lands at -3.6e-15 where
+    # macOS lands at +0.0 (CI failure on the Slice 12 push).
+    assert knock_in >= -1e-12 and knock_out >= -1e-12
     assert vanilla > 1e-6
 
 
