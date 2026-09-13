@@ -2,9 +2,13 @@
 Statistical utilities for market data analysis.
 """
 
+from dataclasses import dataclass
 from typing import Sequence, Union
+
 import numpy as np
+
 from qpl.exceptions import InvalidInputError
+
 
 def log_returns(prices: Union[Sequence[float], np.ndarray]) -> np.ndarray:
     """
@@ -201,9 +205,6 @@ def rolling_realized_volatility(
 
     
     return result
-
-
-from dataclasses import dataclass
 
 @dataclass
 class NormalParams:

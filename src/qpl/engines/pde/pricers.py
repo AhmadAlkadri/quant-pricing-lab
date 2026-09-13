@@ -14,7 +14,24 @@ from ..base import GreeksResult, PriceResult
 
 @dataclass(frozen=True)
 class PDEConfig:
-    """Finite-difference grid configuration for Black–Scholes PDE."""
+    """Finite-difference grid configuration for the Black-Scholes PDE.
+
+    Parameters
+    ----------
+    n_s
+        Number of spatial intervals (spot grid has `n_s + 1` nodes).
+    n_t
+        Number of time steps.
+    theta
+        Theta-scheme parameter in `[0, 1]`:
+        - `0.0`: explicit
+        - `0.5`: Crank-Nicolson
+        - `1.0`: implicit
+    s_max
+        Optional maximum spot boundary. If `None`, `s_max_multiplier * spot` is used.
+    s_max_multiplier
+        Multiplier used when `s_max` is not explicitly provided.
+    """
 
     n_s: int = 200
     n_t: int = 200
@@ -29,6 +46,7 @@ def _solve_tridiagonal(
     upper: np.ndarray,
     rhs: np.ndarray,
 ) -> np.ndarray:
+    """Solve a tridiagonal linear system via Thomas algorithm."""
     n = len(diag)
     c_prime = np.empty(n, dtype=float)
     d_prime = np.empty(n, dtype=float)
@@ -58,10 +76,27 @@ def price_european(
 ) -> PriceResult:
     """Price a European option by solving the Black–Scholes PDE via a theta scheme.
 
-    Assumptions:
-    - Constant volatility (sigma from BlackScholesModel)
-    - Rates/dividend yields are implied from Market.df_r/df_q at each time step
-    - European call/put only, single-asset 1D spatial grid
+    Parameters
+    ----------
+    option
+        European option (`call` or `put`).
+    model
+        Black-Scholes model with constant volatility.
+    market
+        Market object providing spot and discount/dividend curves.
+    cfg
+        PDE grid and theta-scheme settings.
+
+    Returns
+    -------
+    PriceResult
+        PDE price estimate with metadata for method and grid settings.
+
+    Notes
+    -----
+    - Rates/dividend yields are read from `Market` at each time level.
+    - This implementation is single-asset and 1D in spot.
+    - Interpolation at spot uses cubic spline for smoother Greek estimates.
     """
     if cfg.n_s < 3:
         raise InvalidInputError("n_s must be >= 3")
@@ -184,7 +219,24 @@ def greeks_european(
     *,
     cfg: PDEConfig,
 ) -> GreeksResult:
-    """Compute Delta and Gamma via finite differences on PDE price."""
+    """Compute Delta and Gamma from PDE prices via central finite differences.
+
+    Parameters
+    ----------
+    option
+        European option (`call` or `put`).
+    model
+        Black-Scholes model.
+    market
+        Market object.
+    cfg
+        PDE grid and theta-scheme settings.
+
+    Returns
+    -------
+    GreeksResult
+        Delta and Gamma estimates. Vega/Theta/Rho are currently returned as NaN.
+    """
     from dataclasses import replace
 
     # Finite difference bump size

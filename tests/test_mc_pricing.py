@@ -3,7 +3,7 @@ import math
 import pytest
 
 from qpl.engines.mc.pricers import MCConfig
-from qpl.exceptions import InvalidInputError, NotSupportedError
+from qpl.exceptions import InvalidInputError
 from qpl.instruments.options import EuropeanOption
 from qpl.market.curves import FlatDividendCurve, FlatRateCurve
 from qpl.market.market import Market

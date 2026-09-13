@@ -10,6 +10,17 @@ from .curves import FlatDividendCurve, FlatRateCurve
 
 @dataclass(frozen=True)
 class Market:
+    """Market snapshot with spot and flat rate/dividend curves.
+
+    Parameters
+    ----------
+    spot
+        Positive spot value.
+    rate_curve
+        Discount-rate curve object.
+    dividend_curve
+        Dividend-yield curve object.
+    """
     spot: float
     rate_curve: FlatRateCurve
     dividend_curve: FlatDividendCurve
@@ -19,17 +30,21 @@ class Market:
             raise InvalidInputError("spot must be > 0")
 
     def df_r(self, t: float) -> float:
+        """Return risk-free discount factor at maturity `t`."""
         return self.rate_curve.df(t)
 
     def df_q(self, t: float) -> float:
+        """Return dividend discount factor at maturity `t`."""
         return self.dividend_curve.df(t)
 
     def rate(self, t: float) -> float:
+        """Return continuously compounded risk-free rate implied by `df_r(t)`."""
         if t == 0:
             return 0.0
         return -math.log(self.df_r(t)) / t
 
     def dividend_yield(self, t: float) -> float:
+        """Return continuously compounded dividend yield implied by `df_q(t)`."""
         if t == 0:
             return 0.0
         return -math.log(self.df_q(t)) / t

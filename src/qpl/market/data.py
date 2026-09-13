@@ -4,7 +4,6 @@ Market data retrieval with local caching.
 
 import os
 import hashlib
-from typing import Optional
 import pandas as pd
 import yfinance as yf
 

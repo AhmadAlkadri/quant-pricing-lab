@@ -32,6 +32,36 @@ def price(
     method: Literal["analytic", "mc", "pde"] = "analytic",
     **kwargs: Any,
 ) -> PriceResult:
+    """Dispatch option pricing to the selected engine.
+
+    Parameters
+    ----------
+    instrument
+        Instrument instance. Currently `EuropeanOption` is supported.
+    model
+        Model instance. Currently `BlackScholesModel` is supported.
+    market
+        Market instance. Currently `Market` is supported.
+    method
+        Pricing engine selector: `"analytic"`, `"mc"`, or `"pde"`.
+    **kwargs
+        Method-specific keyword arguments:
+        - analytic: no extra kwargs
+        - mc: `cfg=MCConfig`
+        - pde: `cfg=PDEConfig`
+
+    Returns
+    -------
+    PriceResult
+        Price estimate and optional metadata.
+
+    Raises
+    ------
+    InvalidInputError
+        If required kwargs are missing/invalid or unexpected kwargs are passed.
+    NotSupportedError
+        If the method is unknown or the instrument/model/market combination is unsupported.
+    """
     if method == "analytic":
         if kwargs:
             raise InvalidInputError("Unexpected keyword arguments for method 'analytic'")
@@ -94,6 +124,36 @@ def greeks(
     method: Literal["analytic", "mc", "pde"] = "analytic",
     **kwargs: Any,
 ) -> GreeksResult:
+    """Dispatch Greeks computation to the selected engine.
+
+    Parameters
+    ----------
+    instrument
+        Instrument instance. Currently `EuropeanOption` is supported.
+    model
+        Model instance. Currently `BlackScholesModel` is supported.
+    market
+        Market instance. Currently `Market` is supported.
+    method
+        Greeks engine selector: `"analytic"`, `"mc"`, or `"pde"`.
+    **kwargs
+        Method-specific keyword arguments:
+        - analytic: no extra kwargs
+        - mc: `cfg=MCConfig` and optional `bumps=dict[str, float]`
+        - pde: `cfg=PDEConfig`
+
+    Returns
+    -------
+    GreeksResult
+        Greeks values and optional metadata.
+
+    Raises
+    ------
+    InvalidInputError
+        If required kwargs are missing/invalid or unexpected kwargs are passed.
+    NotSupportedError
+        If the method is unknown or the instrument/model/market combination is unsupported.
+    """
     if method == "analytic":
         if kwargs:
             raise InvalidInputError("Unexpected keyword arguments for method 'analytic'")

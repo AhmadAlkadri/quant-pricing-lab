@@ -9,6 +9,17 @@ from ..exceptions import InvalidInputError
 
 @dataclass(frozen=True)
 class EuropeanOption:
+    """European vanilla option definition.
+
+    Parameters
+    ----------
+    kind
+        Option type: `"call"` or `"put"`.
+    strike
+        Positive strike price.
+    expiry
+        Time to expiry in years (`>= 0`).
+    """
     kind: Literal["call", "put"]
     strike: float
     expiry: float

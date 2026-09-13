@@ -1,4 +1,3 @@
-import pytest
 from qpl.engines.mc.pricers import MCConfig, greeks_european
 from qpl.engines.analytic.black_scholes import greeks_european as greeks_analytic
 from qpl.instruments.options import EuropeanOption

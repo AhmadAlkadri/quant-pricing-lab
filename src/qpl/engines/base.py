@@ -11,10 +11,16 @@ class PricingEngine(Protocol):
 
 @dataclass(frozen=True)
 class PriceResult:
-    """Pricing result.
+    """Container for pricing outputs.
 
-    stderr is None for deterministic/analytic methods; for Monte Carlo it is the
-    standard error of the estimator (0.0 for deterministic edge cases).
+    Parameters
+    ----------
+    value
+        Point estimate for the price.
+    stderr
+        Standard error for stochastic estimators. `None` for deterministic methods.
+    meta
+        Optional method-specific metadata.
     """
     value: float
     stderr: float | None = None
@@ -24,6 +30,15 @@ class PriceResult:
 
 @dataclass(frozen=True)
 class GreeksResult:
+    """Container for option Greeks outputs.
+
+    Parameters
+    ----------
+    delta, gamma, vega, theta, rho
+        Greek values in model units.
+    meta
+        Optional method-specific metadata.
+    """
     delta: float
     gamma: float
     vega: float

@@ -1,5 +1,4 @@
 import pytest
-import math
 from qpl.engines.analytic.black_scholes import implied_volatility, bs_price
 from qpl.instruments.options import EuropeanOption
 from qpl.market.curves import FlatRateCurve, FlatDividendCurve

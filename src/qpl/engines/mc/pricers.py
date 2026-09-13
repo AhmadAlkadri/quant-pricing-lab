@@ -3,21 +3,27 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-import numpy as np
-
 from ...exceptions import InvalidInputError
 from ...instruments.options import EuropeanOption
 from ...market.curves import FlatDividendCurve, FlatRateCurve
 from ...market.market import Market
 from ...models.black_scholes import BlackScholesModel
 from ..base import GreeksResult, PriceResult
+from .processes import price_european_from_terminal, simulate_gbm_exact
 
 
 @dataclass(frozen=True)
 class MCConfig:
     """Monte Carlo configuration.
 
-    n_steps controls time discretization; n_steps=1 uses terminal sampling.
+    Parameters
+    ----------
+    n_paths
+        Number of simulated paths.
+    n_steps
+        Number of time steps per path. `n_steps=1` corresponds to terminal sampling.
+    seed
+        Seed for reproducible random number generation.
     """
     n_paths: int = 50_000
     n_steps: int = 1
@@ -31,6 +37,24 @@ def price_european(
     *,
     cfg: MCConfig,
 ) -> PriceResult:
+    """Price a European option with Monte Carlo simulation.
+
+    Parameters
+    ----------
+    option
+        European option (`call` or `put`).
+    model
+        Black-Scholes model.
+    market
+        Market object.
+    cfg
+        Monte Carlo settings.
+
+    Returns
+    -------
+    PriceResult
+        Monte Carlo price estimate, stderr, and metadata.
+    """
     if cfg.n_paths < 2:
         raise InvalidInputError("n_paths must be >= 2 for MC stderr with ddof=1")
     if cfg.n_steps < 1:
@@ -67,30 +91,23 @@ def price_european(
             value = df_r * max(k - forward, 0.0)
         return PriceResult(value=float(value), stderr=0.0, meta=meta)
 
-    rng = np.random.default_rng(cfg.seed)
-    if cfg.n_steps == 1:
-        z = rng.normal(size=cfg.n_paths)
-        drift = (r - q - 0.5 * sigma * sigma) * t
-        vol = sigma * math.sqrt(t)
-        s_t = s0 * np.exp(drift + vol * z)
-    else:
-        dt = t / cfg.n_steps
-        drift_step = (r - q - 0.5 * sigma * sigma) * dt
-        vol_step = sigma * math.sqrt(dt)
-        z = rng.normal(size=(cfg.n_paths, cfg.n_steps))
-        log_s_t = math.log(s0) + drift_step * cfg.n_steps + vol_step * np.sum(z, axis=1)
-        s_t = np.exp(log_s_t)
+    paths = simulate_gbm_exact(
+        s0=s0,
+        mu=r - q,
+        sigma=sigma,
+        t=t,
+        n_steps=cfg.n_steps,
+        n_paths=cfg.n_paths,
+        seed=cfg.seed,
+    )
+    estimate = price_european_from_terminal(
+        paths[:, -1],
+        strike=k,
+        discount_factor=df_r,
+        kind=option.kind,
+    )
 
-    if option.kind == "call":
-        payoff = np.maximum(s_t - k, 0.0)
-    else:
-        payoff = np.maximum(k - s_t, 0.0)
-
-    pv = df_r * payoff
-    value = float(np.mean(pv))
-    stderr = float(np.std(pv, ddof=1) / math.sqrt(cfg.n_paths))
-
-    return PriceResult(value=value, stderr=stderr, meta=meta)
+    return PriceResult(value=estimate.value, stderr=estimate.stderr, meta=meta)
 
 
 def greeks_european(
@@ -101,6 +118,26 @@ def greeks_european(
     cfg: MCConfig,
     bumps: dict[str, float] | None = None,
 ) -> GreeksResult:
+    """Estimate European option Greeks via finite differences + Monte Carlo pricing.
+
+    Parameters
+    ----------
+    option
+        European option (`call` or `put`).
+    model
+        Black-Scholes model.
+    market
+        Market object.
+    cfg
+        Monte Carlo settings.
+    bumps
+        Optional finite-difference bump sizes keyed by `spot`, `sigma`, `r`, and `time`.
+
+    Returns
+    -------
+    GreeksResult
+        Greek estimates and metadata describing bump settings.
+    """
     if cfg.n_paths < 2:
         raise InvalidInputError("n_paths must be >= 2 for MC stderr with ddof=1")
     if cfg.n_steps < 1:
