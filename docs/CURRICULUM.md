@@ -162,13 +162,19 @@ unknowns stay unknown.
   SOR inside each time step, measured order 1.85 against the lattice-bracketed
   limit, and three-way agreement with the CRR and Leisen-Reimer lattices and
   with QuantLib's American finite differences.
-- A digital (discontinuous-payoff) option, showing the pathology and the
-  remedies rather than only the smooth-payoff case. Still open, and now better
-  motivated: Slice 4 measured the kink's damage on gamma; a jump is one
-  derivative worse, so the same experiment on a digital should show the
-  pathology in the *price*.
+- ~~A digital (discontinuous-payoff) option, showing the pathology and the
+  remedies rather than only the smooth-payoff case.~~ **Delivered in Slice 6**
+  (see below). The prediction held: a jump is one derivative worse than a kink
+  and the pathology does reach the *price* -- plain Crank-Nicolson on an
+  unaligned grid is order 1.0012 in the price, against order 2 for a vanilla on
+  the same grid. Four written expectations did not hold, and each is encoded
+  rather than quietly dropped.
 
-**Phase 2 has two items left**: the non-uniform grid and the digital.
+**Phase 2 has one item left**: the non-uniform grid. Slice 6 adds a third
+motivation for it -- the digital's price error on an unaligned grid is
+`O(cash * ds)` near the strike, so nodes concentrated there buy the constant
+back directly, and `payoff_projection="cell_average"` is the cheap substitute
+that a non-uniform grid would make unnecessary.
 - ~~`qpl.numerics.linear_systems` used where it earns its place, or a recorded
   reason why not.~~ **Answered, in two halves.** For the European theta scheme
   a direct tridiagonal solve is needed and Slice 4 measured LAPACK's banded
@@ -644,6 +650,104 @@ unknowns stay unknown.
 - Suite: 679 tests, 72.6 s (from 597 / 62.2 s).
 - Full tables and the derivation: `docs/notes/pde_american_psor.md`.
 
+### Slice 6
+- **A user can price a cash-or-nothing digital call or put** via
+  `DigitalOption(kind, strike, expiry, cash=1.0)` with `method` in
+  {`analytic`, `tree`, `pde`, `mc`}. `DigitalOption` is a new frozen dataclass
+  *outside* the `VanillaOption` hierarchy -- registry lookup walks the MRO, and
+  a step payoff must not resolve to the vanilla engines -- sharing validation
+  through a module-level helper rather than an inheritance edge. Payoff helper:
+  `qpl.instruments.payoffs.digital_payoff`, with **strict** inequalities on both
+  sides, matching QuantLib's `CashOrNothingPayoff`.
+- **Analytic**: `cash e^{-rT} N(+-d2)` derived from the risk-neutral probability
+  in the engine docstring, citing Reiner & Rubinstein (1991), *Unscrambling the
+  binary code*, Risk 4(9), with all five Greeks differentiated by hand. Evidence:
+  call + put = `cash e^{-rT}` to 1e-15 (EXACT_IDENTITY, stronger than parity --
+  no dependence on S, K or sigma); the digital equals `-dC/dK` of the vanilla by
+  central difference, residual **1.375e-08** at `h = 1e-2` against a 5e-08 budget;
+  the price equals the discounted lognormal probability from
+  `scipy.integrate.quad` (INDEPENDENT_ENGINE); every Greek against central
+  differences, worst relative residual 1.4e-06.
+- **Trees: both halves of the written expectation were wrong.**
+  Leisen-Reimer is **order 2** on a digital at all three points (1.9844, 1.9839,
+  1.9836), one-signed and monotone, and the mechanism is exact rather than
+  asymptotic: the strike always falls strictly between the two central terminal
+  nodes, so the lattice price **is** `cash e^{-rT} P(Bin(n, p) > n/2)` (asserted
+  to 1e-13 against `scipy.stats.binom.sf`), and Peizer-Pratt chose `p` to make
+  that `N(d2)`. A digital is the contract that construction is *best* at.
+  CRR is order 1 **only at the money on odd n** (1.0014, residual 0.0008), where
+  `u d = 1` freezes the strike at the geometric mean of the two central nodes;
+  off the money it is **order 1/2** (block-RMS fits 0.5020 and 0.5037 over every
+  odd n from 25 to 801) with a sawtooth error -- 10 and 19 sign changes, errors
+  spanning 5.11e-02 to 3.35e-06. Error ratio CRR/LR at n = 801: 4.55e+03 to
+  6.34e+05.
+- **PDE**: new `PDEConfig(payoff_projection="cell_average")`, read only by the
+  digital engine (the arrangement `psor` has with the American one); default
+  `"none"` and vanilla output bit-for-bit unchanged. `_solve_grid` gained
+  `payoff`/`dirichlet` hooks so the digital marches the same grid, operator and
+  banded solve. Measured at the reference ATM point, `n_s = n_t` in
+  (100, 200, 400, 800):
+
+  | configuration | price | delta | gamma |
+  |---|---:|---:|---:|
+  | plain CN, unaligned, no projection | 1.0012 | 0.8632 | 1.0153 |
+  | CN, unaligned, `cell_average` | 2.0153 | 2.0059 | 1.9979 |
+  | Rannacher, unaligned, `cell_average` | 2.0154 | 2.0061 | 1.9980 |
+  | plain CN, midpoint-aligned | 1.9291 | 2.0353 | 2.0313 |
+  | Rannacher, midpoint-aligned | 1.9248 | 2.0360 | 2.0315 |
+
+- **MC**: price only, and the one method the discontinuity does not hurt --
+  stderr order **0.49990** (residual 1.59e-04) over N in
+  (5k, 20k, 80k, 320k), agreement within 4 stderr at 200k (|z| = 1.218), the
+  reported stderr matching the closed-form Bernoulli one to 0.06%, and
+  call + put exact *path by path*. `greeks` raises `NotSupportedError` naming
+  the Phase 3 likelihood-ratio estimator.
+- **Four contradicted expectations, all encoded:**
+  1. Leisen-Reimer does **not** fail on a digital; it is the best method here,
+     for a reason that is an exact identity rather than a rate.
+  2. Midpoint alignment makes the cell-average projection a **no-op** (agreement
+     1e-16 at n = 100, bit-for-bit at 200/400/800): alignment already puts the
+     jump on a cell face, so the two are one remedy reached two ways and cannot
+     be stacked. The projection is for grids that cannot be aligned.
+  3. The two remedies that *do* stack are orthogonal ones. On `n_s = n_t`
+     Rannacher is nearly cosmetic (2.4e-06 correction against a 3.8e-02 error).
+     On `n_s = 80 n_t` plain Crank-Nicolson **diverges** whatever the jump
+     representation (delta order -1.00, gamma -2.00, gamma error reaching 52.19
+     against a true gamma of -3.283e-04), and only Rannacher **plus** a
+     consistent jump representation reaches 2.004 / 2.058 / 2.059.
+  4. On an unaligned, unprojected grid the call + put identity breaks by **3.8%**
+     of the riskless value, because a node sits exactly on the strike and the
+     strict convention pays nothing there in either leg. Cell averaging repairs
+     it exactly. The surviving residual is the time scheme's own discounting
+     error (-6.193e-10 for CN, +7.370e-08 for Rannacher's implicit half steps),
+     not round-off.
+- **Gamma, reported rather than claimed**: order 2.0315 at the money; at the
+  sign-change spot (`d1 = 0`, true gamma -2.97e-19) the absolute error still
+  falls at order 2.1226 but relative accuracy is undefined there. Both pinned.
+- **Cases**: `qpl.cases.digital_black_scholes` -- `DigitalBSSpec`,
+  `DigitalBSCase` and nineteen rows over three points, a third id space asserted
+  disjoint from the European and American ones. Cross-engine budgets, all
+  derived: Leisen-Reimer at n = 2001 within **2e-08** (worst 5.284e-09), PDE at
+  n = 800 aligned + Rannacher within **8e-05** (worst 2.331e-05), MC at 200k
+  within 4 stderr. The two order-2 deterministic engines are three decimal
+  orders apart, and that gap is asserted, not glossed.
+- **Oracle**: `tests/oracle/test_digital_vs_quantlib.py`, `T = 1.0` with
+  `Actual365Fixed`. `ql.CashOrNothingPayoff` through `AnalyticEuropeanEngine`
+  agrees to **2.220e-16** on the price and 3.5e-18 or better on all five
+  Greeks. QuantLib's FD engine agrees at n = 800 to 3.514e-05 / 1.056e-06 /
+  9.922e-08 on price/delta/gamma, but its error sequence is **not a power law**
+  (residual 0.85 against this engine's 0.023, with sign changes and a
+  meaningless fitted 4.85); it is *ahead* at the money at n = 800 (1.80e-07
+  against 2.23e-07) and 755x behind at n = 100. The claim asserted is
+  predictability under refinement, not accuracy.
+- `examples/digital_option_cross_method.py` (0.52 s, curated smoke, also
+  `--case pde`): all four engines, the PDE table with and without each remedy,
+  and the CRR sawtooth at consecutive odd `n` off the money.
+- Suite: 903 tests, 80.6 s (from 679 / 72.9 s); the six new digital files run in
+  5.7 s.
+- Full tables and the derivation:
+  `docs/notes/digital_options_discontinuous_payoffs.md`.
+
 ## Reconciled old roadmap
 
 `docs/ROADMAP.md` is superseded by this page. Mapping of the old roadmap
@@ -654,7 +758,7 @@ items to their actual status:
 | Implied-volatility solver | Done: `qpl.engines.analytic.black_scholes.implied_volatility`. |
 | Implied-vol teaching notebook | Exists as a legacy notebook (`notebooks/02_implied_vol_teaching.ipynb`). |
 | Historical vol / market data / implied-vs-realized / return-model fit | Done, but frozen behind the `[data]` extra (D9) — outside this curriculum. |
-| `BinaryOption` | Deferred to the Phase 2 discontinuous-payoff PDE/MC slice, where it drives a method rather than being added for its own sake. |
+| `BinaryOption` | **Delivered in Slice 6** as `DigitalOption` (cash-or-nothing, `kind`/`strike`/`expiry`/`cash`), registered for all four methods. It drove the method rather than being added for its own sake: it forced `PDEConfig(payoff_projection="cell_average")`, a payoff-callable hook in the tree and MC engines, and the first `NotSupportedError` raised for a *quantity* (MC Greeks) rather than for an instrument/method pair. |
 | Antithetic variates | Phase 3, first variance-reduction slice, measured by variance ratio. |
 | Benchmark harness | Phase 5, only after reference paths exist to benchmark against. |
 

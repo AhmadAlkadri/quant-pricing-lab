@@ -1,5 +1,124 @@
 # Steering Brief
 
+What changed in Slice 6 (files + bullets)
+
+Phase 2's fourth item: the cash-or-nothing digital as the discontinuous-payoff
+case. Still on `dev/curriculum`; not pushed.
+
+- `src/qpl/instruments/options.py`: `DigitalOption(kind, strike, expiry,
+  cash=1.0)`, a frozen dataclass **outside** the `VanillaOption` hierarchy --
+  registry lookup walks the MRO and a step payoff must not resolve to the
+  vanilla engines. Shared validation moved into a module-level
+  `_validated_kind` helper, so the rules and the messages have one copy without
+  an inheritance edge. `src/qpl/instruments/payoffs.py`: `digital_payoff`, with
+  **strict** inequalities on both sides (matching QuantLib's
+  `CashOrNothingPayoff`, which is what makes the oracle the same contract).
+- `src/qpl/engines/analytic/digital.py` (new): `cash e^{-rT} N(+-d2)`, derived
+  from the risk-neutral probability in the docstring, citing Reiner & Rubinstein
+  (1991), Risk 4(9). All five Greeks differentiated by hand. Note
+  `gamma = -A phi(d2) d1 / (S^2 sigma^2 T)` **changes sign** at `d1 = 0`; every
+  later gamma claim has to say where it is evaluated.
+- `src/qpl/engines/tree/digital.py`, `src/qpl/engines/pde/digital.py`,
+  `src/qpl/engines/mc/digital.py` (new), all registered for
+  `(DigitalOption, BlackScholesModel, method)`. Each reuses the existing engine
+  through a small hook rather than a copy: `_backward_induction` takes the
+  terminal payoff as a callable, `_solve_grid` takes `payoff`/`dirichlet`
+  callables, `price_european_from_terminal` takes a `payoff` callable. Vanilla
+  output is bit-for-bit unchanged on all three paths.
+- `src/qpl/engines/pde/pricers.py`: `PDEConfig.payoff_projection` in
+  {`"none"`, `"cell_average"`}, read **only** by the digital engine -- the same
+  arrangement `psor` has with the American one. `"cell_average"` puts the exact
+  cell mean of the indicator at each node.
+- **MC Greeks are refused, with a reason.** `greeks_digital` always raises
+  `NotSupportedError` naming the Phase 3 likelihood-ratio estimator. It is
+  registered (rather than left unregistered) so the caller gets that message
+  instead of "Unsupported instrument/model/market combination". This is the
+  first refusal in the package that is about a *quantity* rather than an
+  instrument/method pair.
+
+**Four contradicted expectations, all encoded.**
+
+1. **Leisen-Reimer does not fail on a digital -- it is the best method here.**
+   Measured order 2 at all three points (1.9844, 1.9839, 1.9836), one-signed and
+   monotone, 4.55e+03 to 6.34e+05 times closer than CRR at n = 801. The
+   mechanism is an exact identity, not a rate: the strike always falls strictly
+   between the two central terminal nodes, so the lattice price **is**
+   `cash e^{-rT} P(Bin(n, p) > n/2)` (asserted to 1e-13 against
+   `scipy.stats.binom.sf`), and Peizer-Pratt chose `p` to make that `N(d2)`.
+   CRR meanwhile is order 1 *only* at the money on odd n (1.0014, where `u d = 1`
+   freezes the strike at the geometric mean of the two central nodes) and is
+   **order 1/2** off it (block-RMS 0.5020 and 0.5037 over every odd n from 25 to
+   801) with a sawtooth: 10 and 19 sign changes, errors spanning 5.11e-02 to
+   3.35e-06.
+2. **Midpoint alignment makes the projection a no-op.** With
+   `K = (j + 1/2) ds` the strike lands on a *cell face*, so no cell straddles it
+   and the cell average equals the point sample. Agreement 1e-16 at n = 100,
+   bit-for-bit at 200/400/800. The two remedies are one remedy reached two ways;
+   the projection exists for grids that cannot be aligned.
+3. **The remedies that are orthogonal are the jump representation and
+   Rannacher, and on a stressed grid both are required.** On `n_s = n_t`,
+   Rannacher is nearly cosmetic (2.4e-06 correction against a 3.8e-02 error);
+   on `n_s = 80 n_t` plain Crank-Nicolson **diverges** whatever the jump
+   representation (delta order -1.00, gamma -2.00, gamma error reaching 52.19
+   against a true gamma of -3.283e-04), and only Rannacher **plus** alignment or
+   projection gives 2.004 / 2.058 / 2.059.
+4. **The call + put identity breaks by 3.8% on an unaligned grid**, because a
+   node sits exactly on the strike and the strict convention pays nothing there
+   in either leg. Cell averaging repairs it exactly. What survives is the time
+   scheme's own discounting error (-6.193e-10 for CN, +7.370e-08 for
+   Rannacher's four implicit half steps), not round-off -- Rannacher is *less*
+   exact on this identity and more accurate on everything else.
+
+**The pathology, which did behave as predicted.** A jump is one derivative
+worse than Slice 4's kink and the damage reaches the **price**: plain
+Crank-Nicolson, unaligned, `n_s = n_t` in (100 ... 800) fits price order
+**1.0012** (residual 0.0007), delta 0.8632, gamma 1.0153, with errors
+-3.761e-02, -1.876e-02, -9.377e-03, -4.689e-03. At n = 800 that is 0.88% of the
+value, against 2.229e-07 for the remedied grid. Remedied (Rannacher +
+alignment): 1.9248 / 2.0360 / 2.0315. Projection on an unaligned grid: 2.0154 /
+2.0061 / 1.9980.
+
+**Monte Carlo does not notice the discontinuity.** stderr order **0.49990**
+(residual 1.59e-04) over N in (5k, 20k, 80k, 320k) -- the cleanest power law in
+the repository -- the reported `ddof=1` stderr matching the closed-form
+Bernoulli one to 0.06%, |z| = 1.218 at 200k, and call + put exact *path by
+path*. The bump-Greek refusal is measured, not asserted: CRN bump delta sd over
+20 seeds at N = 40 000 is 0.00041 (h = 1), 0.00177 (0.1), 0.00474 (0.01),
+0.01585 (0.001) -- 84.5% of the true delta, growing like `h^-1/2`.
+
+**Gamma, reported rather than claimed.** Order 2.0315 at the money; at the
+sign-change spot (true gamma -2.97e-19) the absolute error still falls at order
+2.1226 but relative accuracy is undefined. Both pinned.
+
+**QuantLib.** `ql.CashOrNothingPayoff` through `AnalyticEuropeanEngine` agrees
+to 2.220e-16 on the price and 3.5e-18 or better on all five Greeks. Its FD
+engine agrees at n = 800 to 3.514e-05 / 1.056e-06 / 9.922e-08, but its error
+sequence is **not a power law** (residual 0.85 against 0.023 here, sign changes,
+a meaningless fitted 4.85), for the same reason CRR is not: the log-spot mesher
+places no node consistently relative to the jump. `dampingSteps = 2` does not
+change it, so it is the mesher, not the time scheme. Honest caveat: QuantLib is
+*ahead* at the money at n = 800 (1.80e-07 against 2.23e-07); what is asserted is
+predictability under refinement, and at n = 100 it is 755x behind.
+
+- `src/qpl/cases/digital_black_scholes.py` (new): nineteen rows over three
+  points, a third id space asserted disjoint from the European and American
+  ones. Cross-engine budgets, all derived -- Leisen-Reimer at n = 2001 within
+  2e-08 (worst 5.284e-09), PDE at n = 800 within 8e-05 (worst 2.331e-05), MC at
+  200k within 4 stderr. The two order-2 deterministic engines are three decimal
+  orders apart and that gap is asserted, not glossed.
+- `tests/test_digital_analytic.py`, `tests/test_digital_tree_convergence.py`,
+  `tests/test_digital_pde.py`, `tests/test_digital_mc.py`,
+  `tests/cases/test_digital_black_scholes_cases.py`,
+  `tests/oracle/test_digital_vs_quantlib.py` (all new; 220 tests, 5.7 s).
+- `examples/digital_option_cross_method.py` (new, 0.52 s, curated smoke, also
+  `--case pde`): all four engines, the PDE table with and without each remedy,
+  and the CRR sawtooth at consecutive odd `n` off the money.
+- `docs/notes/digital_options_discontinuous_payoffs.md` (new),
+  `docs/CURRICULUM.md`, `.agents/brain/brain.md`, `examples/README.md`.
+- Suite: 903 tests, 80.6 s (from 679 / 72.9 s).
+
+---
+
 What changed in Slice 5 (files + bullets)
 
 Phase 2's third item: American exercise by finite differences, the linear
