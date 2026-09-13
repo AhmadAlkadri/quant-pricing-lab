@@ -24,8 +24,17 @@ python examples/bs_analytic.py
 pytest
 ```
 
-Stability / Compatibility: v0.x — the public API may change; see
-`.agents/brain/adr/0001-public-api-truth-source.md` for the current stable surface.
+## What's New In v0.2.0
+
+`v0.2.0` is currently unreleased and summarized in `CHANGELOG.md` (see the `v0.2.0 (Unreleased)` section).
+It consolidates the lab-driven Chapters 1-8 buildout into new `qpl` modules for MC sampling/simulation,
+dynamic programming, numerical linear solvers, quadrature, Laplace inversion, and copulas.
+
+Labs are currently withheld from publication pending legal review; the code improvements are intended to ship.
+
+Development phase: exploratory pre-1.0. API churn is expected, labs are authoritative,
+and backward compatibility is not guaranteed. See `AGENTS.md` and
+`.agents/brain/adr/0003-pre-1-0-lab-authority-and-api-churn.md`.
 
 ## License
 MIT
@@ -43,3 +52,12 @@ After clone:
 python -m nbstripout --install --attributes .gitattributes
 ```
 
+## Documentation site (local)
+
+```bash
+cd docs-site
+npm install
+npm run docs:dev
+```
+
+Docs are published on GitHub Pages via GitHub Actions.

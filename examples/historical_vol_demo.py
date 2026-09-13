@@ -4,7 +4,6 @@ Demo: Historical Volatility Estimation from Market Data (Slice 3).
 import sys
 import numpy as np
 import pandas as pd
-from unittest.mock import MagicMock
 
 # --- MOCKING SETUP ---
 # Since this demo might be run in an environment without internet or valid yfinance,

@@ -3,7 +3,6 @@ Demo of Market Data Retrieval and Caching (Slice 3a).
 """
 import shutil
 import time
-import pandas as pd
 from qpl.market.data import get_prices
 
 def main():
