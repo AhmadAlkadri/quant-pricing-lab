@@ -908,13 +908,21 @@ AMERICAN_LSM_ATM_FINITE_SAMPLE_BIAS = 1.89e-2
 """The part that is neither the instrument nor the noise.
 
 Measured over ten seeds at `(250 dates, 100 000 antithetic paths)`: the mean
-out-of-sample estimate is 6.06911 against a lattice Bermudan of 6.087958. It is
-the low bias of a policy fitted on a finite sample, it decays like `N^{-1/2}`
-(3.29e-02 at 20 000 paths, 2.30e-02 at 50 000, 1.89e-02 at 100 000), and it is
-**point-dependent**: the same measurement at `LS2001_ROW1` gives -1.5e-03, an
-order of magnitude smaller at the same settings. QuantLib's `MCAmericanEngine`
-shows the same effect at the same point, so it is the method and not this
-implementation (`tests/oracle/test_lsm_vs_quantlib.py`).
+out-of-sample estimate is 6.069110 against the 250-date lattice Bermudan
+6.087917, a gap of -1.881e-02 with a standard error of the mean of 3.96e-03. It
+is the low bias of a policy fitted on a finite sample, it decays like
+`N^{-1/2}` (3.29e-02 at 20 000 paths, 2.30e-02 at 50 000, 1.88e-02 at 100 000),
+and it is strongly **point-dependent**: the same measurement at `LS2001_ROW1`
+gives -1.5e-03, an order of magnitude smaller at the same settings. An LSM
+tolerance is not transferable between specifications.
+
+QuantLib's `MCAmericanEngine` shows the same bias at the same point --
+-9.01e-03 +- 3.50e-03 over five seeds -- so the sign and the order of magnitude
+are confirmed by an independent implementation. The two do NOT agree on its
+size: they differ by 9.8e-03 +- 5.3e-03, 1.9 standard errors, and closing that
+would need calibration samples matched path for path. See
+`tests/oracle/test_lsm_vs_quantlib.py`, which asserts the sign and says exactly
+that about the size.
 
 The slice this row was written for expected the cross-method budget to be
 "the standard error plus the Bermudan gap". This term is larger than both and

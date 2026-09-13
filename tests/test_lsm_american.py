@@ -370,12 +370,13 @@ def test_atm_put_agrees_with_the_lattice_and_the_grid() -> None:
     The middle term is the out-of-sample estimator's residual low bias at a
     finite path count: the policy is fitted on 100 000 paths, so it is a noisy
     policy, and a noisy policy is a suboptimal policy. Measured over ten seeds
-    it is 1.89e-02 at this point and decays like `N^{-1/2}` -- 3.29e-02 at
-    20 000 paths, 2.30e-02 at 50 000, 1.89e-02 at 100 000. It is **not** a
-    property of this implementation: QuantLib's `MCAmericanEngine` at
-    comparable settings lands at 6.0782 +- 1.29e-02 against the same lattice
-    Bermudan of 6.0880, a bias of -9.8e-03 with a standard error that covers
-    ours (`tests/oracle/test_lsm_vs_quantlib.py`).
+    it is 1.88e-02 +- 3.96e-03 at this point and decays like `N^{-1/2}` --
+    3.29e-02 at 20 000 paths, 2.30e-02 at 50 000, 1.88e-02 at 100 000. It is
+    **not** a property of this implementation: QuantLib's `MCAmericanEngine`
+    over five seeds at comparable settings sits -9.01e-03 +- 3.50e-03 below the
+    same lattice Bermudan, the same sign and order of magnitude
+    (`tests/oracle/test_lsm_vs_quantlib.py`, which also records that the two do
+    not agree on its size).
 
     It is also strongly point-dependent, which is the part worth remembering:
     at the Longstaff-Schwartz point the same measurement gives -1.5e-03, an
