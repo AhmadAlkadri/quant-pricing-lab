@@ -26,6 +26,10 @@ from .engines.analytic.digital import (
     price_digital as price_digital_analytic,
 )
 from .engines.base import GreeksResult, PriceResult
+from .engines.mc.asian import (
+    greeks_asian as greeks_asian_mc,
+    price_asian as price_asian_mc,
+)
 from .engines.mc.digital import (
     greeks_digital as greeks_digital_mc,
     price_digital as price_digital_mc,
@@ -183,6 +187,12 @@ def _register_builtin_engines() -> None:
         spec=ANALYTIC_METHOD_SPEC,
         price=price_asian_analytic,
         greeks=greeks_asian_analytic,
+    )
+    register(
+        **asian,
+        spec=MC_METHOD_SPEC,
+        price=price_asian_mc,
+        greeks=greeks_asian_mc,
     )
 
 

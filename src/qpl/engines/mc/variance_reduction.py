@@ -234,6 +234,14 @@ class TerminalSample:
         `(n_paths / 2) * n_steps` antithetic.
     n_paths
         Paths evaluated (`2 * len(y)` for antithetic, `len(y)` otherwise).
+    control_name
+        Name of the control variable, reported in `meta["control_variate"]`.
+        Defaults to the discounted terminal spot, which is what
+        :func:`simulate_terminal_sample` builds. Slice 8's Asian engine builds
+        its own sample with the discounted **geometric-average payoff** as the
+        control (Kemna & Vorst 1990), so the name has to travel with the
+        sample: a reported correlation is uninterpretable without knowing what
+        it is a correlation *with*.
     """
 
     y: np.ndarray
@@ -243,6 +251,7 @@ class TerminalSample:
     n_strata: int
     n_normal_draws: int
     n_paths: int
+    control_name: str = "discounted_terminal_spot"
 
 
 @dataclass(frozen=True)
@@ -455,7 +464,7 @@ def estimate_from_sample(
             if sd_y > 0.0 and sd_x > 0.0
             else 0.0
         )
-        meta["control_variate"] = "discounted_terminal_spot"
+        meta["control_variate"] = sample.control_name
         meta["control_beta"] = beta
         meta["control_correlation"] = rho
         meta["control_mean"] = sample.x_mean
