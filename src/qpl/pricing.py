@@ -38,6 +38,10 @@ from .engines.mc.asian import (
     greeks_asian as greeks_asian_mc,
     price_asian as price_asian_mc,
 )
+from .engines.mc.barrier import (
+    greeks_barrier as greeks_barrier_mc,
+    price_barrier as price_barrier_mc,
+)
 from .engines.mc.digital import (
     greeks_digital as greeks_digital_mc,
     price_digital as price_digital_mc,
@@ -227,6 +231,19 @@ def _register_builtin_engines() -> None:
         spec=ANALYTIC_METHOD_SPEC,
         price=price_barrier_analytic,
         greeks=greeks_barrier_analytic,
+    )
+    # The Monte Carlo entry prices the DISCRETE contract on the schedule the
+    # instrument names, with `MCConfig.barrier_correction` selecting which of
+    # the two contracts the answer estimates. Its `greeks` callable is
+    # registered and always raises, for the same reason the MC digital's did
+    # before Slice 10: an unregistered key would report an unsupported
+    # combination, which is false when the price engine next to it prices
+    # exactly that combination.
+    register(
+        **barrier,
+        spec=MC_METHOD_SPEC,
+        price=price_barrier_mc,
+        greeks=greeks_barrier_mc,
     )
 
 

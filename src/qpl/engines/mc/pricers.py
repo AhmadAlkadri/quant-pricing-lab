@@ -83,6 +83,15 @@ class MCConfig:
         constant plus `lsm_degree` functions). The defaults reproduce the
         published basis: a constant plus the first three weighted Laguerre
         functions.
+    barrier_correction
+        How `qpl.engines.mc.barrier` treats the barrier, and read by that engine
+        alone: `"none"` (the default) observes it at the contract's monitoring
+        dates and is unbiased for the **discrete** contract; `"bgk"` shifts the
+        barrier toward the spot by `exp(-+ beta sigma sqrt(dt))` and
+        approximates the **continuous** one; `"brownian_bridge"` weights each
+        path by its conditional survival probability and is unbiased for the
+        continuous one at any number of dates. Every other engine ignores it,
+        so no existing behaviour changes whatever it is set to.
     lsm_in_sample
         Whether the exercise policy is fitted and applied on the **same**
         paths. `False` (the default) fits on one path set and values on an
@@ -103,6 +112,7 @@ class MCConfig:
     lsm_basis: Literal["laguerre", "polynomial"] = "laguerre"
     lsm_degree: int = 3
     lsm_in_sample: bool = False
+    barrier_correction: Literal["none", "bgk", "brownian_bridge"] = "none"
 
 
 def _validate_bumps(value: object) -> None:
