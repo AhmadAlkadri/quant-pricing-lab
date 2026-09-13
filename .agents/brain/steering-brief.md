@@ -1,5 +1,117 @@
 # Steering Brief
 
+What changed in Slice 7 (files + bullets)
+
+Phase 3's variance-reduction item: three estimators, each shipped with the
+standard error that belongs to it, each measured. Still on `dev/curriculum`;
+not pushed. Phase 2's last item (the non-uniform grid) was deferred by the
+orchestrator on 2026-09-13 until the barrier case forces it, and this slice
+went first.
+
+- `src/qpl/engines/mc/variance_reduction.py` (new): antithetic (Glasserman
+  4.2), control variate on the discounted terminal spot (4.1), stratified
+  sampling of the terminal normal with proportional allocation (4.3). One
+  entry point shared by the vanilla and digital MC engines; they differ only by
+  the payoff callable.
+- `MCConfig` gains `variance_reduction: str | tuple[str, ...] = "none"` and
+  `n_strata: int = 64`. `"none"` takes the pre-existing code path untouched and
+  is bit-for-bit what it was (four pinned `(value, stderr)` pairs asserted with
+  `==`).
+- **Each estimator's standard error is its own**, and each is recomputed from
+  the realised sample in the tests: `ddof=1` over antithetic *pairs* (the naive
+  all-paths version is over 1.4x larger), `ddof=2` regression residuals for the
+  control variate, `sqrt(sum_i s_i^2/(K^2 m))` strata-weighted. Coverage of the
+  reported 95% interval: 519/540 = 0.961 over 30 seeds x 5 120 draws, worst cell
+  26/30 against a binomial floor of 24.
+- **Refusals with reasons**: `stratified` with `n_steps > 1` raises
+  `NotSupportedError` naming Brownian-bridge stratification; `antithetic` with
+  `stratified` raises `InvalidInputError` (reflecting a stratified draw lands it
+  in the mirror stratum).
+
+**Measured variance factors** (50 seeds, 20 480 **normal draws**, K = 64;
+predictions in brackets from a 400 000-draw pilot):
+
+    point            antithetic   control      stratified  a+c     s+c
+    ATM call         4.59 (4.01)  7.58 (6.89)     110.40   90.80   577.80
+    OTM call K=120   3.04 (2.33)  2.71 (2.30)      42.41   92.35    84.61
+    ATM digital      9.32 (9.38)  2.11 (2.45)     101.26    9.73    82.32
+
+**Five contradicted expectations, all encoded.**
+
+1. **Antithetic is worth MOST on the digital** (9.32), not least. Not
+   convexity: with the in-the-money boundary at `z* = -0.15` the reflected pair
+   sums to exactly 1 unless `|Z| < 0.15`, so the pair average is constant on
+   88% of the sample and `rho_a = -0.7868`. The convexity story is right for
+   the two calls (4.59 at the money, 3.04 off it) and is the wrong lens for the
+   step payoff.
+2. **Stratification gains `O(K)`, not `O(K**2)`**, on a vanilla: fitted
+   exponents 1.0157 (ATM, residual 0.065) and 1.0384 (OTM, 0.058) over K in
+   8...256. The outermost equal-probability stratum is unbounded and so is the
+   payoff on it; its conditional variance does not shrink with K and sets the
+   floor. Optimal allocation is the standard repair and is not implemented.
+3. **For a digital the gain is `K p(1-p)/(f(1-f))`, `f = frac(K Phi(z*))`, and
+   is NOT monotone in K**: 16 -> 20 strata measures 108.82 -> 48.50 (predicted
+   89.64 -> 31.73) and 320 -> 512 measures 1014.18 -> 491.01 (predicted 1100.97
+   -> 505.91). Which K is good is a property of the contract, not of the method.
+4. **The combinations do not compose multiplicatively, in either direction.**
+   Antithetic+control on the OTM call is 92.35 against a product of 8.24, and
+   stratified+control on the digital is 82.32 -- *worse* than stratification
+   alone (101.26).
+5. **Variance reduction helps the CRN bump delta more than the price, except
+   where the fitted coefficient interferes.** sd(delta) over 20 seeds at 20 480
+   draws, h = 1e-2: none 0.004481, antithetic 0.001175, control 0.001639,
+   stratified 0.000254 (variance factor **311** against the price's 110),
+   anti+ctrl 0.001060, strat+ctrl 0.000367 -- worse than stratified alone,
+   because `b` is refitted on each bumped sample and `b_up - b_dn` is noise CRN
+   cannot cancel.
+
+**The bias that is real and measured rather than excused.** The control
+coefficient is fitted on the sample it corrects, so the estimator is biased.
+`|b_same - b_pilot|` falls 0.017186 -> 0.001061 from N = 1 000 to 256 000
+(fitted order 0.4952); the price gap it causes falls -4.830e-03 -> -5.848e-05
+from N = 2 000 to 128 000 (fitted order **1.06**), consistently negative, about
+1% of one standard error at the top end.
+
+**Two traps found while writing the tests, both now written down.**
+
+- `Market.rate(t)` recovers the rate from the curve's discount factor and
+  returns `0.049999999999999996`, not the `0.05` passed in. Rebuilding a sample
+  from the literal makes the terminal spots differ in the last bit and the
+  stderr by one ulp, which breaks an exact-identity test. Read the market back.
+- A 30-seed lag-1 autocorrelation of the stratified estimator reads +0.3274,
+  which is 1.7 sampling standard deviations of nothing (+0.0256 at 200 seeds,
+  -0.0069 at 1 000). The independence test uses 200 seeds for that reason.
+
+**One claim this slice got wrong and then corrected in-branch.** The digital's
+non-monotonicity was first pinned at `K = 16` beating `K = 64` (108.82 against
+101.26) -- a real measurement, but the *opposite* of what the law predicts there
+(89.64 against 104.84), i.e. a 50-seed sampling accident presented as a
+mechanism. Replaced by two pairs where prediction and measurement agree on the
+direction; the superseded reading is recorded in the test docstring rather than
+deleted.
+
+- `src/qpl/cases/mc_variance_reduction.py` (new): a **fourth id space**,
+  asserted disjoint from the other three, and the first keyed by an *estimator*
+  rather than an instrument. Fifteen `STATISTICAL` rows with `expected` and
+  `tolerance` in **log space**, because an absolute tolerance on a ratio
+  spanning 2.11 to 577.8 is either vacuous or impossible. `MC_VR_BAND = 1.7` is
+  derived from the [0.47, 2.11] 99% range of a ratio of two 49-df variance
+  estimates.
+- The European cross-engine MC leg is now **stratified at 12 800 paths** rather
+  than 200 000 plain ones: stderr 1.107e-02 against 3.283e-02, three times
+  tighter for one sixteenth of the work, same four-stderr tolerance.
+- `tests/test_mc_variance_reduction.py` (new, 71 tests, 0.83 s),
+  `tests/test_mc_variance_ratios.py` (new, 26 tests, 2.5 s),
+  `tests/cases/test_european_black_scholes_cases.py`,
+  `tests/test_examples_smoke.py`.
+- `examples/mc_variance_reduction.py` (new, 0.27 s, curated smoke, also
+  `--case digital`), `examples/README.md`.
+- `docs/notes/mc_variance_reduction.md` (new), `docs/CURRICULUM.md`,
+  `.agents/brain/brain.md`.
+- Suite: 1004 tests, 87.0 s (from 903 / 80.9 s).
+
+---
+
 What changed in Slice 6 (files + bullets)
 
 Phase 2's fourth item: the cash-or-nothing digital as the discontinuous-payoff

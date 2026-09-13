@@ -170,11 +170,25 @@ unknowns stay unknown.
   the same grid. Four written expectations did not hold, and each is encoded
   rather than quietly dropped.
 
-**Phase 2 has one item left**: the non-uniform grid. Slice 6 adds a third
-motivation for it -- the digital's price error on an unaligned grid is
-`O(cash * ds)` near the strike, so nodes concentrated there buy the constant
-back directly, and `payoff_projection="cell_average"` is the cheap substitute
-that a non-uniform grid would make unnecessary.
+**Phase 2 has one item left, and it is now deferred rather than next**: the
+non-uniform grid. Slice 6 added a third motivation for it -- the digital's
+price error on an unaligned grid is `O(cash * ds)` near the strike, so nodes
+concentrated there buy the constant back directly, and
+`payoff_projection="cell_average"` is the cheap substitute that a non-uniform
+grid would make unnecessary.
+
+**Deferred until the barrier case forces it** (decision by the orchestrator,
+2026-09-13). All three motivations so far are *accuracy constants* on problems
+that already have a working remedy: strike alignment, the cell-average
+projection and Rannacher between them cover every measured pathology, and a
+non-uniform grid would improve numbers that are already at the measured order.
+A barrier is different in kind -- the grid has to place a node on a boundary
+that is not the strike, and where the payoff is not merely kinked but cut off
+-- so it forces the mesh rather than merely rewarding it. Building the
+mesh-refinement machinery against a case that needs it produces a better
+design than building it against three cases that would only be a little more
+accurate with it. Slice 7 (Monte Carlo variance reduction) went first for the
+same reason: Phase 3 had a case waiting and Phase 2's last item did not.
 - ~~`qpl.numerics.linear_systems` used where it earns its place, or a recorded
   reason why not.~~ **Answered, in two halves.** For the European theta scheme
   a direct tridiagonal solve is needed and Slice 4 measured LAPACK's banded
@@ -191,9 +205,18 @@ that a non-uniform grid would make unnecessary.
 
 ### Phase 3 — Monte Carlo (Glasserman)
 - Explicit stderr/CI discipline throughout.
-- Variance reduction — antithetic variates, a control variate (Kemna-Vorst
-  geometric Asian as control for arithmetic Asian), and stratification — each
-  checked by a measured variance ratio.
+- ~~Variance reduction — antithetic variates, a control variate, and
+  stratification — each checked by a measured variance ratio.~~ **Delivered in
+  Slice 7** (see below) for European vanillas and digitals under Black-Scholes:
+  `MCConfig(variance_reduction=...)` over {`none`, `antithetic`,
+  `control_variate`, `stratified`} and the combinations that compose, each with
+  the standard error that belongs to it and each measured over 50 seeds at
+  equal normal draws. The control variate used is the discounted terminal spot,
+  a martingale with a known mean; the Kemna-Vorst geometric Asian control named
+  in the original plan waits for the arithmetic Asian, which is a later slice
+  and a different instrument. Stratified sampling is terminal-only;
+  Brownian-bridge stratification for multi-step paths is refused with a message
+  naming it.
 - Euler vs Milstein strong/weak order measured against exact GBM.
 - Pathwise and likelihood-ratio Greeks checked against the analytic engine.
 - Longstaff-Schwartz American put validated against Longstaff & Schwartz
@@ -748,6 +771,96 @@ that a non-uniform grid would make unnecessary.
 - Full tables and the derivation:
   `docs/notes/digital_options_discontinuous_payoffs.md`.
 
+### Slice 7
+- **A user can select an estimator.** `MCConfig(variance_reduction=...)` takes
+  `"none"` (default, and bit-for-bit the pre-slice engine), `"antithetic"`,
+  `"control_variate"`, `"stratified"`, or a tuple combining a sampler with the
+  control variate; `MCConfig(n_strata=64)` sets the strata. It works on
+  European vanillas and on digitals through one shared entry point
+  (`qpl.engines.mc.variance_reduction.price_with_variance_reduction`), the two
+  differing only by the payoff callable. `PriceResult.meta` records the
+  estimator, the **normal draws actually spent** (the cost axis every ratio is
+  measured on), the strata and paths per stratum, and for the control variate
+  the fitted beta, the sample correlation, the known mean and the predicted
+  `1/(1-rho^2)`.
+- **Each estimator ships with its own standard error**, recomputed from the
+  realised sample in the tests and compared with `==`: the `ddof=1` one over
+  antithetic *pairs* (the naive all-paths version is over 1.4x larger, so this
+  is not a rounding matter), the `ddof=2` regression-residual one for the
+  control variate, and the strata-weighted `sqrt(sum_i s_i^2/(K^2 m))`.
+  Coverage of the reported 95% interval over 30 seeds x 5 120 draws is 519/540
+  = 0.961 with a worst cell of 26/30, against a binomial floor of 24
+  (`P(X <= 23) = 5.7e-04`). `|z|` against the closed form at 200 000 draws runs
+  0.05 to 1.58 over all eighteen cells.
+- **Measured variance factors**, 50 seeds, 20 480 normal draws, `K = 64`
+  (predictions in brackets, computed from correlations measured on an
+  independent 400 000-draw pilot):
+
+  | point | antithetic | control | stratified | anti+ctrl | strat+ctrl |
+  |---|---:|---:|---:|---:|---:|
+  | ATM call | 4.59 (4.01) | 7.58 (6.89) | 110.40 | 90.80 | 577.80 |
+  | OTM call K=120 | 3.04 (2.33) | 2.71 (2.30) | 42.41 | 92.35 | 84.61 |
+  | ATM digital | 9.32 (9.38) | 2.11 (2.45) | 101.26 | 9.73 | 82.32 |
+
+- **The same-sample control coefficient is measured, not excused.**
+  `|b_same - b_pilot|` falls 0.017186 -> 0.001061 from N = 1 000 to 256 000,
+  fitted order **0.4952**; the price difference it causes falls -4.830e-03 ->
+  -5.848e-05 from N = 2 000 to 128 000, fitted order **1.06** -- the `O(1/N)`
+  bias against an `O(N^-1/2)` standard error, consistently negative, about 1%
+  of one standard error at N = 128 000.
+- **Refusals with reasons.** `stratified` with `n_steps > 1` raises
+  `NotSupportedError` naming Brownian-bridge stratification as the construction
+  that does it; `antithetic` with `stratified` raises `InvalidInputError`,
+  because reflecting a stratified draw lands it in the mirror stratum and the
+  two units partition the sample differently.
+- **Five contradicted expectations, all encoded:**
+  1. **Antithetic is worth most on the digital** (9.32), not least. The
+     mechanism is complementarity under reflection, not convexity: with the
+     in-the-money boundary at `z* = -0.15`, the reflected pair sums to exactly 1
+     unless `|Z| < 0.15`, so the pair average is constant on 88% of the sample
+     and `rho_a = -0.7868`.
+  2. **Stratification gains `O(K)`, not `O(K^2)`**, on a vanilla: fitted
+     exponents **1.0157** (ATM, residual 0.065) and **1.0384** (OTM, 0.058) over
+     K in 8...256. The outermost equal-probability stratum is unbounded, the
+     payoff is unbounded on it, and its conditional variance sets the floor --
+     the smooth-integrand argument does not apply.
+  3. **For a digital the gain is `K p(1-p)/(f(1-f))` with `f = frac(K Phi(z*))`
+     and is NOT monotone in `K`**: 16 strata -> 20 measures 108.82 -> 48.50
+     (predicted 89.64 -> 31.73), and 320 -> 512 measures 1014.18 -> 491.01
+     (predicted 1100.97 -> 505.91). More strata can buy less, and which `K` is
+     good is a property of the contract.
+  4. **The combinations do not compose multiplicatively, in either direction.**
+     Antithetic+control on the OTM call is 92.35 against a product of 8.24
+     (the control correlates +0.9643 with the pair average against +0.7522 with
+     the raw payoff); stratified+control on the digital is 82.32, *worse* than
+     stratification alone.
+  5. **Variance reduction helps the CRN bump Greek more than the price, except
+     where the fitted coefficient gets in the way.** sd of delta over 20 seeds
+     at 20 480 draws, `h = 1e-2`: none 0.004481, antithetic 0.001175, control
+     0.001639, stratified 0.000254 (a variance factor of **311** against the
+     price's 110), antithetic+control 0.001060, stratified+control 0.000367 --
+     *worse* than stratified alone, because `b` is refitted on every bumped
+     sample and `b_up - b_dn` is noise common random numbers cannot cancel.
+- **Cases**: `qpl.cases.mc_variance_reduction` -- a fourth id space, asserted
+  disjoint from the other three, and the first keyed by an **estimator** rather
+  than an instrument. Fifteen `STATISTICAL` rows whose `expected` and
+  `tolerance` are in **log space** (`log(factor)`, `log(1.7)`), because an
+  absolute tolerance on a quantity spanning 2.11 to 577.8 is either vacuous or
+  impossible. `expected` is the theoretical factor where one exists and the
+  measurement where none does, and `source` says which. The band 1.7 is derived
+  from the [0.47, 2.11] 99% range of a ratio of two 49-df variance estimates.
+- **The European cross-engine Monte Carlo leg is now stratified**: 12 800 paths
+  instead of 200 000 plain ones, a standard error of 1.107e-02 against
+  3.283e-02 -- three times tighter for one sixteenth of the work -- at the same
+  four-standard-error tolerance.
+- `examples/mc_variance_reduction.py` (0.27 s, curated smoke, also
+  `--case digital` at 0.32 s): six estimators, paths and normals side by side,
+  the stderr-based and seed-based readings of each factor, and the stratum scan
+  whose `strata_gain_monotone_in_K=False` is the digital finding in one line.
+- Suite: 1004 tests, 87.0 s (from 903 / 80.6 s); the two new test files run in
+  3.3 s.
+- Full tables and the derivation: `docs/notes/mc_variance_reduction.md`.
+
 ## Reconciled old roadmap
 
 `docs/ROADMAP.md` is superseded by this page. Mapping of the old roadmap
@@ -759,7 +872,7 @@ items to their actual status:
 | Implied-vol teaching notebook | Exists as a legacy notebook (`notebooks/02_implied_vol_teaching.ipynb`). |
 | Historical vol / market data / implied-vs-realized / return-model fit | Done, but frozen behind the `[data]` extra (D9) — outside this curriculum. |
 | `BinaryOption` | **Delivered in Slice 6** as `DigitalOption` (cash-or-nothing, `kind`/`strike`/`expiry`/`cash`), registered for all four methods. It drove the method rather than being added for its own sake: it forced `PDEConfig(payoff_projection="cell_average")`, a payoff-callable hook in the tree and MC engines, and the first `NotSupportedError` raised for a *quantity* (MC Greeks) rather than for an instrument/method pair. |
-| Antithetic variates | Phase 3, first variance-reduction slice, measured by variance ratio. |
+| Antithetic variates | **Delivered in Slice 7** as one of three estimators behind `MCConfig(variance_reduction=...)`, measured at equal normal draws over 50 seeds: factor 4.59 (ATM call), 3.04 (OTM call), 9.32 (digital), against the `2/(1+rho_a)` predictions 4.01, 2.33, 9.38. |
 | Benchmark harness | Phase 5, only after reference paths exist to benchmark against. |
 
 ## Out of scope for this campaign
