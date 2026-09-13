@@ -61,6 +61,25 @@ no book prose, only provenance: lab notebook -> `src/qpl` changes -> test covera
 - New tests added:
   - `tests/test_pde_ch4.py`
 
+### Chapter 4 follow-up - Measured convergence and strike alignment
+
+- Driven by: the Chapter 4 lab's refinement experiment, which showed a
+  non-monotone error sequence on the default grid.
+- New/modified `src/` modules:
+  - `src/qpl/validation/convergence.py`, `src/qpl/validation/benchmark.py`
+  - `src/qpl/cases/european_black_scholes.py`
+  - `src/qpl/engines/pde/pricers.py` (`PDEConfig.strike_alignment`)
+- Key functions/classes added:
+  - `fit_convergence_order`, `ConvergenceFit`, `refinement_errors`
+  - `EvidenceClass`, `BenchmarkRow`
+  - `EuropeanBSSpec`, `EuropeanBSCase` and the European Black-Scholes case lists
+- New tests added:
+  - `tests/test_validation_convergence.py`
+  - `tests/cases/test_european_black_scholes_cases.py`
+  - rewritten convergence tests in `tests/test_pde_ch4.py`
+- Derivation note (own words, citations only):
+  - `docs/notes/pde_strike_alignment.md`
+
 ## Chapter 5 - Numerical Solution Of Linear Systems
 
 - Lab notebook:
