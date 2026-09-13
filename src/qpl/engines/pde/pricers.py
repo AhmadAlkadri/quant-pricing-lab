@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 
@@ -31,6 +32,14 @@ class PDEConfig:
         Optional maximum spot boundary. If `None`, `s_max_multiplier * spot` is used.
     s_max_multiplier
         Multiplier used when `s_max` is not explicitly provided.
+    strike_alignment
+        Placement of the strike relative to the uniform spot grid.
+
+        - `"none"` (default): the grid is `linspace(0, s_max, n_s + 1)` and the
+          strike falls wherever it happens to fall.
+        - `"midpoint"`: the spacing is nudged so the strike sits exactly halfway
+          between two adjacent nodes. See `price_european` for the derivation and
+          for why this matters.
     """
 
     n_s: int = 200
@@ -38,6 +47,7 @@ class PDEConfig:
     theta: float = 0.5  # 1.0 = fully implicit, 0.5 = Crank–Nicolson
     s_max: float | None = None
     s_max_multiplier: float = 4.0
+    strike_alignment: Literal["none", "midpoint"] = "none"
 
 
 def _solve_tridiagonal(
@@ -97,6 +107,43 @@ def price_european(
     - Rates/dividend yields are read from `Market` at each time level.
     - This implementation is single-asset and 1D in spot.
     - Interpolation at spot uses cubic spline for smoother Greek estimates.
+
+    Strike alignment (`cfg.strike_alignment`)
+    -----------------------------------------
+    The terminal condition for a vanilla option has a kink at `S = K`: the
+    payoff is continuous but its first derivative jumps and its second
+    derivative is a delta at the strike. A finite-difference operator is only
+    second-order accurate where the function it differentiates is smooth
+    enough for the Taylor expansion behind the stencil to be valid. Near the
+    kink that expansion breaks down, so the local truncation error there is
+    much larger than the formal `O(ds**2)` and it pollutes the global error
+    constant. The effect is worst when the kink lands *exactly on a node*,
+    because the node then carries the full one-sided discrepancy between the
+    payoff and any smooth function through the neighbouring values.
+
+    Placing the strike midway between two nodes instead makes the two
+    neighbouring payoff values symmetric about the kink, so the leading part of
+    the payoff-induced error cancels between them, and the observed order
+    returns to the formal second order of the scheme. This is the cheapest of
+    the standard remedies for non-smooth payoffs; see Pooley, Forsyth and
+    Vetzal (2003), "Convergence remedies for non-smooth payoffs in option
+    pricing", Journal of Computational Finance 6(4), and the grid-construction
+    discussion in Tavella and Randall (2000), "Pricing Financial Instruments:
+    The Finite Difference Method".
+
+    The construction here preserves `n_s` and moves `s_max` slightly instead.
+    Starting from the nominal spacing `ds0 = s_max / n_s`, the strike sits at
+    `K / ds0` grid spacings from the origin. The nearest *half-integer*
+    position is `j + 1/2` with `j = round(K / ds0 - 1/2)` (clamped at 0), and
+    demanding `K = (j + 1/2) * ds` fixes the spacing as `ds = K / (j + 1/2)`.
+    The grid is then `linspace(0, ds * n_s, n_s + 1)`, so `s_max` shifts by at
+    most about half a spacing. The realised `s_max`, `ds` and alignment mode
+    are reported in `PriceResult.meta`.
+
+    What this does not fix: Crank-Nicolson still produces oscillatory Greeks
+    near a non-smooth terminal condition because the scheme damps
+    high-frequency modes only marginally. That needs Rannacher time stepping
+    or a non-uniform grid, neither of which is implemented here.
     """
     if cfg.n_s < 3:
         raise InvalidInputError("n_s must be >= 3")
@@ -108,6 +155,8 @@ def price_european(
         raise InvalidInputError("s_max must be > 0")
     if cfg.s_max_multiplier <= 0:
         raise InvalidInputError("s_max_multiplier must be > 0")
+    if cfg.strike_alignment not in {"none", "midpoint"}:
+        raise InvalidInputError("strike_alignment must be 'none' or 'midpoint'")
 
     s0 = market.spot
     k = option.strike
@@ -137,9 +186,25 @@ def price_european(
     n_s = cfg.n_s
     n_t = cfg.n_t
     ds = s_max / n_s
+
+    if cfg.strike_alignment == "midpoint":
+        # Nearest half-integer node position for the strike; see the docstring.
+        j = max(int(round(k / ds - 0.5)), 0)
+        ds = k / (j + 0.5)
+        s_max = ds * n_s
+
+    if not (0.0 < k < s_max):
+        raise InvalidInputError(
+            f"strike {k} must lie strictly inside the spot grid (0, {s_max})"
+        )
+
     dt = t / n_t
 
-    s_grid = np.linspace(0.0, s_max, n_s + 1)
+    if cfg.strike_alignment == "midpoint":
+        # Build from ds directly so the half-integer node position is exact.
+        s_grid = ds * np.arange(n_s + 1, dtype=float)
+    else:
+        s_grid = np.linspace(0.0, s_max, n_s + 1)
     if option.kind == "call":
         v = np.maximum(s_grid - k, 0.0)
     else:
@@ -208,6 +273,8 @@ def price_european(
         "n_s": n_s,
         "n_t": n_t,
         "s_max": s_max,
+        "ds": ds,
+        "strike_alignment": cfg.strike_alignment,
     }
     return PriceResult(value=price, meta=meta)
 
