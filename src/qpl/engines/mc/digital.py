@@ -49,6 +49,11 @@ from ...models.black_scholes import BlackScholesModel
 from ..base import GreeksResult, PriceResult
 from .pricers import MCConfig
 from .processes import price_european_from_terminal, simulate_gbm_exact
+from .variance_reduction import (
+    normalise_variance_reduction,
+    price_with_variance_reduction,
+    validate_sampler,
+)
 
 __all__ = ["greeks_digital", "price_digital"]
 
@@ -87,6 +92,13 @@ def price_digital(
         raise InvalidInputError("n_paths must be >= 2 for MC stderr with ddof=1")
     if cfg.n_steps < 1:
         raise InvalidInputError("n_steps must be >= 1")
+    methods = normalise_variance_reduction(cfg.variance_reduction)
+    validate_sampler(
+        methods=methods,
+        n_paths=cfg.n_paths,
+        n_steps=cfg.n_steps,
+        n_strata=cfg.n_strata,
+    )
 
     s0 = market.spot
     t = option.expiry
@@ -101,6 +113,8 @@ def price_digital(
         "n_paths": cfg.n_paths,
         "n_steps": cfg.n_steps,
         "seed": cfg.seed,
+        "variance_reduction": methods if methods else "none",
+        "n_normal_draws": cfg.n_paths * cfg.n_steps,
     }
 
     if t == 0.0:
@@ -113,6 +127,28 @@ def price_digital(
             digital_payoff(forward, option.strike, option.cash, option.kind)
         )
         return PriceResult(value=value, stderr=0.0, meta=meta)
+
+    def _payoff(s_t: np.ndarray) -> np.ndarray:
+        return np.asarray(
+            digital_payoff(s_t, option.strike, option.cash, option.kind), dtype=float
+        )
+
+    if methods:
+        reduced = price_with_variance_reduction(
+            payoff=_payoff,
+            s0=s0,
+            mu=r - q,
+            sigma=model.sigma,
+            t=t,
+            discount_factor=df_r,
+            n_paths=cfg.n_paths,
+            n_steps=cfg.n_steps,
+            seed=cfg.seed,
+            methods=methods,
+            n_strata=cfg.n_strata,
+        )
+        meta.update(reduced.meta)
+        return PriceResult(value=reduced.value, stderr=reduced.stderr, meta=meta)
 
     paths = simulate_gbm_exact(
         s0=s0,
@@ -128,9 +164,7 @@ def price_digital(
         strike=option.strike,
         discount_factor=df_r,
         kind=option.kind,
-        payoff=lambda s_t: np.asarray(
-            digital_payoff(s_t, option.strike, option.cash, option.kind), dtype=float
-        ),
+        payoff=_payoff,
     )
     return PriceResult(value=estimate.value, stderr=estimate.stderr, meta=meta)
 

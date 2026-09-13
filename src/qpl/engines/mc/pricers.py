@@ -5,12 +5,18 @@ from dataclasses import dataclass
 
 from ...exceptions import InvalidInputError
 from ...instruments.options import EuropeanOption
+from ...instruments.payoffs import call_payoff, put_payoff
 from ...market.curves import FlatDividendCurve, FlatRateCurve
 from ...market.market import Market
 from ...models.black_scholes import BlackScholesModel
 from ..base import GreeksResult, PriceResult
 from ..registry import MethodSpec
 from .processes import price_european_from_terminal, simulate_gbm_exact
+from .variance_reduction import (
+    normalise_variance_reduction,
+    price_with_variance_reduction,
+    validate_sampler,
+)
 
 
 @dataclass(frozen=True)
@@ -25,10 +31,24 @@ class MCConfig:
         Number of time steps per path. `n_steps=1` corresponds to terminal sampling.
     seed
         Seed for reproducible random number generation.
+    variance_reduction
+        Estimator selector: `"none"` (the default, and bit-for-bit what this
+        engine returned before variance reduction existed), `"antithetic"`,
+        `"control_variate"`, `"stratified"`, or a tuple combining a sampler
+        with the control variate, e.g. `("antithetic", "control_variate")`.
+        Validated at engine entry by
+        `qpl.engines.mc.variance_reduction.normalise_variance_reduction`, which
+        also states which combinations do not compose and why.
+    n_strata
+        Number of equal-probability strata, read only when
+        `variance_reduction` includes `"stratified"`. `n_paths` must be a
+        multiple of it, with at least two paths per stratum.
     """
     n_paths: int = 50_000
     n_steps: int = 1
     seed: int = 123
+    variance_reduction: str | tuple[str, ...] = "none"
+    n_strata: int = 64
 
 
 def _validate_bumps(value: object) -> None:
@@ -75,6 +95,13 @@ def price_european(
         raise InvalidInputError("n_paths must be >= 2 for MC stderr with ddof=1")
     if cfg.n_steps < 1:
         raise InvalidInputError("n_steps must be >= 1")
+    methods = normalise_variance_reduction(cfg.variance_reduction)
+    validate_sampler(
+        methods=methods,
+        n_paths=cfg.n_paths,
+        n_steps=cfg.n_steps,
+        n_strata=cfg.n_strata,
+    )
 
     s0 = market.spot
     k = option.strike
@@ -90,6 +117,8 @@ def price_european(
         "n_paths": cfg.n_paths,
         "n_steps": cfg.n_steps,
         "seed": cfg.seed,
+        "variance_reduction": methods if methods else "none",
+        "n_normal_draws": cfg.n_paths * cfg.n_steps,
     }
 
     if t == 0.0:
@@ -106,6 +135,28 @@ def price_european(
         else:
             value = df_r * max(k - forward, 0.0)
         return PriceResult(value=float(value), stderr=0.0, meta=meta)
+
+    if methods:
+        # Every reduced estimator is built on the terminal sample, so it shares
+        # one implementation with the digital engine; `variance_reduction` owns
+        # both the sampler and the standard error that belongs to it.
+        reduced = price_with_variance_reduction(
+            payoff=lambda s_t: (
+                call_payoff(s_t, k) if option.kind == "call" else put_payoff(s_t, k)
+            ),
+            s0=s0,
+            mu=r - q,
+            sigma=sigma,
+            t=t,
+            discount_factor=df_r,
+            n_paths=cfg.n_paths,
+            n_steps=cfg.n_steps,
+            seed=cfg.seed,
+            methods=methods,
+            n_strata=cfg.n_strata,
+        )
+        meta.update(reduced.meta)
+        return PriceResult(value=reduced.value, stderr=reduced.stderr, meta=meta)
 
     paths = simulate_gbm_exact(
         s0=s0,
@@ -187,6 +238,14 @@ def greeks_european(
         "seed": cfg.seed,
         "fd": "central",
         "bumps": {"spot": dS, "sigma": dsigma, "r": dr},
+        # Every bumped revaluation goes through `price_european` with the same
+        # `cfg`, hence the same seed, hence the same normals (or the same
+        # stratified uniforms): common random numbers survive variance
+        # reduction unchanged, and the reduced estimator's lower noise is
+        # inherited by the difference quotient. Measured in
+        # `tests/test_mc_variance_ratios.py`.
+        "variance_reduction": normalise_variance_reduction(cfg.variance_reduction)
+        or "none",
     }
 
     if t == 0.0:
