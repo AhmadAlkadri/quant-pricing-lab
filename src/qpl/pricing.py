@@ -46,6 +46,10 @@ from .engines.tree.american import (
     greeks_american as greeks_american_tree,
     price_american as price_american_tree,
 )
+from .engines.tree.digital import (
+    greeks_digital as greeks_digital_tree,
+    price_digital as price_digital_tree,
+)
 from .engines.tree.pricers import (
     TREE_METHOD_SPEC,
     greeks_european as greeks_european_tree,
@@ -119,6 +123,12 @@ def _register_builtin_engines() -> None:
         spec=ANALYTIC_METHOD_SPEC,
         price=price_digital_analytic,
         greeks=greeks_digital_analytic,
+    )
+    register(
+        **digital,
+        spec=TREE_METHOD_SPEC,
+        price=price_digital_tree,
+        greeks=greeks_digital_tree,
     )
 
 

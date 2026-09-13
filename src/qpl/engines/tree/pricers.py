@@ -39,6 +39,7 @@ Finance 3(4), 319-346.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -208,6 +209,7 @@ def _backward_induction(
     lattice: BinomialLattice,
     *,
     capture: tuple[int, ...],
+    payoff: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> dict[int, np.ndarray]:
     """Roll the terminal payoff back to the root, keeping the named levels.
 
@@ -215,12 +217,21 @@ def _backward_induction(
     expression, so the only Python-level loop is over time levels:
     ``V_j = e^{-r dt} (p V_{j+1}[1:] + (1 - p) V_{j+1}[:-1])``, where index
     ``j`` counts up moves.
+
+    ``payoff`` maps the terminal spot level to the terminal value and defaults
+    to the vanilla one built from ``option``. It exists so that
+    `qpl.engines.tree.digital` can reuse this induction: the roll-back knows
+    nothing about the payoff beyond its values at the terminal nodes, and a
+    discontinuous payoff changes those values and nothing else here.
     """
     n = lattice.n_steps
-    values = _payoff(
-        crr_spot_level(spot=market.spot, up=lattice.up, down=lattice.down, level=n),
-        kind=option.kind,
-        strike=option.strike,
+    terminal = crr_spot_level(
+        spot=market.spot, up=lattice.up, down=lattice.down, level=n
+    )
+    values = (
+        _payoff(terminal, kind=option.kind, strike=option.strike)
+        if payoff is None
+        else payoff(terminal)
     )
 
     kept: dict[int, np.ndarray] = {}

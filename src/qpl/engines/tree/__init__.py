@@ -1,6 +1,7 @@
 """Binomial lattice engines."""
 
 from .american import greeks_american, price_american
+from .digital import greeks_digital, price_digital
 from .lattice import (
     SCHEMES,
     BinomialLattice,
@@ -24,10 +25,12 @@ __all__ = [
     "crr_parameters",
     "crr_spot_level",
     "greeks_american",
+    "greeks_digital",
     "greeks_european",
     "lattice_parameters",
     "leisen_reimer_parameters",
     "peizer_pratt_inversion",
     "price_american",
+    "price_digital",
     "price_european",
 ]
