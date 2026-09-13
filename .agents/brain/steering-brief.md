@@ -1,5 +1,120 @@
 # Steering Brief
 
+What changed in Slice 14 (files + bullets)
+
+**Phase 4's first item, and the slice where the Chapter 6 quadrature toolkit
+finally reached the pricing core.** Four Fourier methods for European vanillas
+and cash-or-nothing digitals under Black-Scholes, behind a
+characteristic-function interface built so Heston can satisfy it without any
+pricer changing. Still on `dev/curriculum`; not pushed.
+
+- `src/qpl/engines/fourier/` (new package): `charfn.py`
+  (`CharacteristicFunctionModel`, `LogReturnCumulants`,
+  `characteristic_function_model`, `register_characteristic_function`, the
+  Black-Scholes transform and cumulants), `cos.py`, `carr_madan.py`,
+  `lewis.py`, `gil_pelaez.py`, `pricers.py` (`FourierConfig`,
+  `FOURIER_METHOD_SPEC`), `digital.py`.
+- `src/qpl/pricing.py`: `method="fourier"` registered for
+  `(EuropeanOption, BlackScholesModel)` and `(DigitalOption, BlackScholesModel)`,
+  price and Greeks. `Method` literal gains `"fourier"`.
+- `src/qpl/cases/{european,digital}_black_scholes.py`: transform legs on the two
+  cross-engine rows, labelled CLOSED_FORM and explicitly not INDEPENDENT_ENGINE.
+- `tests/fourier_points.py` (shared specs, not collected),
+  `tests/test_fourier_cos.py`, `tests/test_fourier_carr_madan.py`,
+  `tests/test_fourier_lewis_gil_pelaez.py`,
+  `tests/oracle/test_fourier_vs_quantlib.py`,
+  `examples/fourier_methods_bs.py`, `docs/notes/fourier_pricing_methods.md`.
+
+**The interface, in two sentences.** A model owes a transform engine exactly
+two things: `characteristic_function(u, expiry, *, rate, dividend)` for the
+**log return** `ln(S_T/S_0)` at possibly complex `u`, and
+`log_return_cumulants(...)` returning `c1`, `c2`, `c4`. Keeping the spot out of
+`phi` keeps the COS truncation range independent of `S_0`, which is precisely
+what makes the COS delta and gamma closed forms instead of bumps; `c4` is zero
+for Black-Scholes and is carried because it is the slot Heston fills.
+
+**COS converges like a Gaussian in the term count, and the rate is derived.**
+`|phi(u_k)| = exp(-sigma^2 T u_k^2/2)` on a range of width `2 L sigma sqrt(T)`
+damps the k-th coefficient by `exp(-k^2 pi^2 / (8 L^2))` -- no sigma, no T -- so
+
+    log10 err(N) ~ -pi^2 N^2 / (8 L^2 ln 10)
+
+    measured/predicted slope   1.085 (L=10)  1.071 (L=20)  1.037 (L=40)
+    err at N = 8..64, L=10     1.97e+00 3.49e-01 5.38e-02 6.34e-03
+                               5.41e-04 1.37e-06 1.23e-13 2.66e-14
+    L valley at N = 256        4.98e-01 (L=2)  6.25e-04 (4)  2.04e-08 (6)
+                               ~1e-14 (8/10/12)  7.90e-13 (14)  5.88e-13 (20)
+    round-off floor vs L       2.7e-14 / 5.9e-13 / 5.5e-11 at L = 10/20/40
+
+**Three things the slice statement predicted that did not happen.**
+
+1. *The COS fit window.* It asked for a fit over N in {16,32,64,128} and an
+   error below 1e-12 at N = 256. Both hold and neither is informative: the
+   error is at 1e-13 by N = 48 and the value at 256 is the **same double** as
+   at 64. The fit is done on {8..32}; the power-law fit there reports order
+   9.88 with a log-space residual of 1.41, i.e. it is not a power law.
+2. *The Carr-Madan alpha failure.* Over the named {0.5,1,1.5,3,10} every cell
+   is below 5.5e-10 at every moneyness. Under Black-Scholes `E[S^{alpha+1}]`
+   is finite for all alpha, so integrability never binds. The real failures are
+   outside: **small** alpha is a resolution failure (7.4e+00 at 0.05, 1.5e-04
+   at 0.25 -- the integrand grows a spike of width `~alpha` at `v = 0`), and
+   **large** alpha is cancellation bounded by
+   `(S_0/K)^alpha exp(alpha^2 c2/2) S_0/price x eps`, which is
+   moneyness-dependent: `S/K = 1.333` is unusable at alpha = 20 while the ATM
+   point is exact.
+3. *"QuantLib has no BS Fourier engine".* It does.
+   `AnalyticHestonEngine` on a degenerate Heston (`v0 = theta = sigma^2`,
+   vol-of-vol 1e-08) reproduces `AnalyticEuropeanEngine` to **0.0**, which
+   gives a real transform-against-transform oracle.
+
+**The Chapter 6 rules on a pricing integral** (alpha = 1.5, reach 60):
+
+    n                 8        16        32        64       128       256
+    trapezoid      2.64e+1   7.35e+0   6.39e-1   4.30e-3   1.85e-7   1.60e-14
+    simpson        1.41e+1   9.91e-1   1.60e+0   2.07e-1   1.43e-3   6.18e-08
+    gauss          9.34e-1   1.00e-1   8.59e-5   2.22e-11  2.90e-12  9.68e-13
+    fitted order     6.49      4.86      9.31    (residuals all > 2.4)
+
+The integrand is **even** (the damped call price is real), so every
+Euler-Maclaurin boundary term vanishes and trapezoid is spectral, not order 2.
+Composite Simpson is exactly `(4 T_n - T_{n/2})/3`, so once `T_n - I` is
+negligible its error is `-(T_{n/2} - I)/3`: it throws away the accurate rule and
+keeps a third of the inaccurate one. `quadrature` defaults to `"trapezoid"` on
+that measurement, and the same mechanism makes Carr and Madan's own
+Simpson-weighted FFT up to 8.4e+06 times worse than a trapezoid-weighted one.
+
+**The FFT's error is interpolation.** Same output, on a node 2.2e-07 and between
+two nodes 6.3e-04. `eta` trades integration against interpolation at fixed N and
+no setting makes both small; `meta["on_grid"]` says which the caller got.
+
+**Accuracy, all four:** COS 2.91e-12, Carr-Madan quadrature 1.93e-10,
+Carr-Madan FFT 6.3e-04, Lewis 2.13e-14, Gil-Pelaez 1.42e-14; digitals 2.78e-16
+(COS) and 1.11e-16 (Gil-Pelaez); COS delta/gamma 1.74e-14 / 9.54e-18. Lewis and
+Gil-Pelaez are three orders better than the `~1e-10` expected, and QUADPACK's
+*reported* bound is at least 1.19e+03 times their actual error.
+
+**The jump is free here.** Slice 6 measured a full order lost to the digital's
+discontinuity on a grid. A density expansion loses nothing: the digital
+converges 26x-54x **faster** than the vanilla at the same N.
+
+**Parity is evidence for exactly one of the four.** COS builds its put from its
+own payoff coefficients (residual 2.4e-14 to 2.9e-12); Carr-Madan, Lewis and
+Gil-Pelaez transform the call, so their put is parity by construction and the
+tests say so rather than claiming a check.
+
+**Next.** Heston, and the pricing side is already built: implement two methods
+on the model and add two `register(...)` lines. Slice 14's oracle left one
+concrete instruction for it -- QuantLib's `COSHestonEngine` **diverges** as
+vol-of-vol goes to zero (-3.8e-04 / -5.0e-08 / +7.1e-05 / +8.9e-02 at 1e-02 /
+1e-04 / 1e-06 / 1e-08) and 200, 1000 and 4000 terms give the same price to
+1e-15, so the failure is in the truncation range, not the series. A Heston COS
+engine must be tested at small vol-of-vol specifically. After that: Heston Monte
+Carlo with the QE scheme (Slice 9's SDE layer is the prerequisite and is done),
+implied-vol surface utilities, calibration, and the Fusai chapter 15 Laplace
+Asian -- the one remaining Part I building block that has never priced anything.
+
+---
+
 What changed in Slice 13 (files + bullets)
 
 **Phase 2's last item, closed by the case that forced it.** The single barrier

@@ -219,6 +219,49 @@ no book prose, only provenance: lab notebook -> `src/qpl` changes -> test covera
 - New tests added:
   - `tests/test_quadrature_ch6.py`
 
+### Chapter 6 follow-up - Phase 4 Slice 14: the quadrature toolkit reaches the pricing core
+
+- Driven by: Phase 4's first item. Chapter 6 §6.8 ("Pricing using characteristic
+  functions") is the map of what the private lab covered; the four methods below
+  are derived independently in `src/qpl/engines/fourier/*.py` and in
+  `docs/notes/fourier_pricing_methods.md`, from the sources cited there
+  (Carr & Madan 1999; Fang & Oosterlee 2008; Gil-Pelaez 1951; Heston 1993 for
+  the `Pi_1`/`Pi_2` form; Lewis 2001; Schmelzle 2010 as a survey).
+- **What closed the gap.** Until this slice the Chapter 6 rules
+  (`composite_trapezoid`, `composite_simpson`, `gauss_legendre`) had only ever
+  been measured on smooth finite-interval integrands, where they are order 2,
+  order 4 and spectrally accurate. The Carr-Madan direct-quadrature variant is
+  the first time they compute a price, and on that integrand -- real, even,
+  analytic, Gaussian-decaying -- none of the three converges at its nominal
+  order: the trapezoid rule is spectrally accurate because every
+  Euler-Maclaurin boundary term vanishes, and composite Simpson, being exactly
+  `(4 T_n - T_{n/2}) / 3`, is six decimal orders of magnitude *worse* than
+  trapezoid at the same evaluation count. The lab's own smooth-function test
+  could not have shown either.
+- New/modified `src/` modules:
+  - `src/qpl/engines/fourier/{__init__,charfn,cos,carr_madan,lewis,gil_pelaez,pricers,digital}.py`
+  - `src/qpl/pricing.py` (two `register(...)` calls, `method="fourier"`)
+  - `src/qpl/cases/european_black_scholes.py`,
+    `src/qpl/cases/digital_black_scholes.py` (transform legs)
+- Key functions/classes added:
+  - `CharacteristicFunctionModel`, `LogReturnCumulants`,
+    `characteristic_function_model`, `register_characteristic_function`,
+    `black_scholes_characteristic_function`,
+    `black_scholes_log_return_cumulants`, `BlackScholesCharacteristicFunction`
+  - `FourierConfig`, `FOURIER_METHOD_SPEC`, `price_european`, `greeks_european`,
+    `price_digital`, `greeks_digital`
+  - `cos_price`, `cos_truncation_range`, `chi_coefficients`, `psi_coefficients`
+  - `carr_madan_fft`, `carr_madan_quadrature`, `damped_call_transform`,
+    `default_u_max`, `CarrMadanGrid`
+  - `lewis_call`, `gil_pelaez_probabilities`, `GilPelaezProbabilities`
+- New tests added:
+  - `tests/test_fourier_cos.py`, `tests/test_fourier_carr_madan.py`,
+    `tests/test_fourier_lewis_gil_pelaez.py`,
+    `tests/oracle/test_fourier_vs_quantlib.py`, `tests/fourier_points.py`
+    (shared specification points, not a test module)
+- Derivation note (own words, citations only):
+  - `docs/notes/fourier_pricing_methods.md`
+
 ## Chapter 7 - Laplace Transform
 
 - Lab notebook:
@@ -232,6 +275,13 @@ no book prose, only provenance: lab notebook -> `src/qpl` changes -> test covera
   - `inverse_laplace_grid_stehfest`
 - New tests added:
   - `tests/test_laplace_ch7.py`
+- **Still not reached by the pricing core.** Chapter 6's quadrature rules met a
+  price in Slice 14; the Stehfest inversion has not. Its intended case is
+  Phase 4's last item, the Fusai & Roncoroni chapter 15 Laplace approach to
+  arithmetic Asians, where the transform of the average's law is known and the
+  price is an inversion rather than a simulation. Until that slice,
+  `qpl.transforms` remains a tested numerical building block with no instrument
+  behind it -- which is exactly the condition ADR-0004 was written about.
 
 ## Chapter 8 - Copula Functions
 

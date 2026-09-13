@@ -290,11 +290,26 @@ contract) that none of the three earlier motivations would have produced.
 - QMC only if a case motivates it. Still open; nothing has motivated it.
 
 ### Phase 4 — Transforms and volatility
-- Fourier pricing of Black-Scholes as a sanity check.
-- The Heston characteristic function in the branch-cut-safe (Lewis / Lord-Kahl)
-  form.
+- ~~Fourier pricing of Black-Scholes as a sanity check.~~ **Delivered in
+  Slice 14** (see below), and it was more than a sanity check: the Chapter 6
+  quadrature rules finally drove a pricing integral and turned out to behave
+  nothing like the smooth-function test they were built against (trapezoid
+  spectral rather than order 2; Simpson six decimal orders *worse* than
+  trapezoid at the same cost). See `docs/notes/fourier_pricing_methods.md`.
+- **Heston is next.** The characteristic function in the branch-cut-safe
+  (Lewis / Lord-Kahl) form, plus `log_return_cumulants` for the COS range. The
+  pricing side is already built: `qpl.engines.fourier` reads a model only
+  through `CharacteristicFunctionModel`, so Heston is a model implementing two
+  methods plus two `register(...)` lines and no change to any pricer. Slice
+  14's QuantLib oracle left one concrete instruction for it: QuantLib's
+  `COSHestonEngine` *diverges* as vol-of-vol goes to zero, and no term count
+  helps, because its truncation range comes from cumulant formulas with the
+  vol-of-vol in denominators. A Heston COS engine must be tested at small
+  vol-of-vol specifically.
 - Lewis and Carr-Madan pricing validated against published reference values
-  and, optionally, QuantLib.
+  and, optionally, QuantLib. **Half delivered in Slice 14**: both are
+  implemented and validated against QuantLib under Black-Scholes; the published
+  Heston reference values wait for the model.
 - Heston Monte Carlo with the QE scheme and a bias study. **Its prerequisite
   is delivered**: Slice 9 built the scalar-SDE layer, measured the Euler and
   Milstein orders, and implemented the CIR variance process with both an exact
@@ -1534,6 +1549,103 @@ the one thing neither Slice 12 discretisation could do.
   slice leaves the harness 5.6 s cheaper than it found it.
 - Suite: **1668 tests, 166-173 s** across repeated runs on this machine (from 1602 / 157 s). The growth is 66 tests for about 11 s net: the new core test files run in 15.2 s together (10.6 s barrier, 4.7 s grid), the cases file is unchanged at 1.4 s, the QuantLib oracle adds 3.8 s under the `[oracle]` extra only, and the example harness is **5.6 s cheaper** than before the slice despite three new curated invocations.
 - Full derivation and tables: `docs/notes/pde_nonuniform_grids_and_barriers.md`.
+
+### Slice 14
+**Phase 4's first item, and the slice where the Chapter 6 toolkit finally
+reached the pricing core.** Four Fourier methods for European vanillas and
+cash-or-nothing digitals under Black-Scholes, through a characteristic-function
+interface built so that Heston can satisfy it without touching a pricer.
+
+- `qpl.engines.fourier` (new package), registered as `method="fourier"` for
+  `(EuropeanOption, BlackScholesModel)` and `(DigitalOption, BlackScholesModel)`,
+  price **and** Greeks. `FourierConfig(method="cos"|"carr_madan"|"lewis"|
+  "gil_pelaez", ...)`.
+- **The interface is two functions**: `characteristic_function(u, expiry, *,
+  rate, dividend)` for the **log return** `ln(S_T/S_0)` at complex `u`, and
+  `log_return_cumulants(...)` returning `c1, c2, c4`. Keeping the spot out of
+  `phi` is what keeps the COS truncation range independent of `S_0`, and that is
+  what makes the COS delta and gamma closed forms rather than bumps. `c4` is
+  zero for Black-Scholes and is carried because it is the slot Heston fills.
+- **COS converges like `exp(-pi^2 N^2 / (8 L^2))`** -- a *Gaussian* decay in the
+  term count, derived from the coefficient damping and confirmed against the
+  measured slope at `L = 10 / 20 / 40` (ratios 1.085, 1.071, 1.037). The slice
+  statement's proposed fit window {16, 32, 64, 128} straddles the floating-point
+  floor (the error is 1e-13 by `N = 48`, and the value at 256 is the same double
+  as at 64); the fit is done on {8 ... 32} and the contradiction is recorded.
+- **The L valley**: 4.98e-01 / 6.25e-04 / 2.04e-08 / ~1e-14 / ~1e-14 / ~1e-14 /
+  7.90e-13 / 5.88e-13 at `L = 2 / 4 / 6 / 8 / 10 / 12 / 14 / 20`. Too narrow
+  floors in `N` (the same double for `N = 32 ... 1024` at `L = 4`); too wide
+  slows the decay by `L^2` and raises the round-off floor (2.7e-14 / 5.9e-13 /
+  5.5e-11 at `L = 10 / 20 / 40`).
+- **The jump costs a transform method nothing.** Slice 6 measured a full order
+  lost to the digital's discontinuity on a finite-difference grid. COS expands
+  the *density*, so the digital converges **26x to 54x faster** than the vanilla
+  at the same `N`, and its floor is 100x tighter.
+- **COS Greeks in closed form**: delta worst 1.74e-14 and gamma worst 9.54e-18
+  against the analytic Greeks, four orders inside the 1e-10 asked for. vega,
+  theta and rho are central differences at `h = 1e-05` (chosen from a scan whose
+  `h^2` regime and round-off floor cross there) and land at ~1e-08.
+- **Carr-Madan's FFT error is interpolation, not integration.** The same FFT
+  output read on a grid node is 2.2e-07 and interpolated between two nodes is
+  6.3e-04, a factor of 2900. `eta` trades the two at fixed `N` and no setting
+  makes both small. `meta["on_grid"]` tells the caller which they got.
+- **The predicted alpha failure does not happen.** Over the slice statement's
+  {0.5, 1, 1.5, 3, 10} every cell is below 5.5e-10 at every moneyness -- under
+  Black-Scholes `E[S^{alpha+1}]` is finite for all alpha, so integrability never
+  binds. The two real failures are outside that range and are different
+  failures: *small* alpha is a resolution failure (7.4e+00 at 0.05, 1.5e-04 at
+  0.25) because the integrand grows a spike of width `~alpha` at `v = 0`, and
+  *large* alpha is catastrophic cancellation bounded by
+  `(S_0/K)^alpha exp(alpha^2 c2/2) S_0/price x eps` -- moneyness-dependent, so
+  the `S/K = 1.333` point is unusable at alpha = 20 while the ATM one is exact.
+- **The Chapter 6 rules on a pricing integral.** The integrand is *even* (the
+  damped price is real), so every Euler-Maclaurin boundary term vanishes and the
+  trapezoid rule is spectrally accurate rather than order 2. Composite Simpson
+  is exactly `(4 T_n - T_{n/2}) / 3`, so with the trapezoid error already
+  negligible its own error is `-(T_{n/2} - I)/3`: it throws away the accurate
+  rule and keeps a third of the inaccurate one. At `n = 256`: trapezoid
+  1.60e-14, Simpson 6.18e-08, Gauss-Legendre 9.68e-13, at identical evaluation
+  counts. Fitted "orders" 6.49 / 4.86 / 9.31, every one with a log-space
+  residual above 2.4. `quadrature` defaults to `"trapezoid"` on that evidence,
+  and the same mechanism explains why Carr and Madan's own Simpson-weighted FFT
+  is up to 8.4e+06 times worse than a trapezoid-weighted one.
+- **Lewis and Gil-Pelaez** land at the floating-point floor: worst 2.13e-14 and
+  1.42e-14 on vanillas, 1.11e-16 on the Gil-Pelaez digital, with `Pi_1`/`Pi_2`
+  reproducing `N(d1)`/`N(d2)` to 1.67e-16 -- three orders better than the
+  `~1e-10` expected. QUADPACK's *reported* error bound is at least 1.19e+03
+  times the error actually made, and is carried as `reported_abserr` rather than
+  as an accuracy claim.
+- **Parity is evidence for exactly one of the four.** COS computes its put from
+  its own payoff coefficients (residual 2.4e-14 to 2.9e-12); the other three
+  transform the call, so their put is parity by construction and the tests say
+  so instead of claiming a check.
+- **Oracle**: `AnalyticEuropeanEngine` for prices, digitals and all five Greeks.
+  And the slice statement's "QuantLib has no BS Fourier engine" is wrong:
+  `AnalyticHestonEngine` on a degenerate Heston (`v0 = theta = sigma^2`,
+  vol-of-vol 1e-08) reproduces it to **0.0**, giving a real
+  transform-against-transform oracle. `COSHestonEngine` cannot: pushed to the
+  same limit it *diverges* (-3.8e-04 / -5.0e-08 / +7.1e-05 / +8.9e-02 at
+  vol-of-vol 1e-02 / 1e-04 / 1e-06 / 1e-08) and 200, 1000 and 4000 terms give
+  the same price to 1e-15 -- a range error, not a series error.
+- **Cases**: the vanilla and digital cross-engine rows grow a transform leg,
+  labelled **CLOSED_FORM and not INDEPENDENT_ENGINE** (the transform reads the
+  same law the closed form integrates), with the ratio against the lattice and
+  the grid asserted rather than left to two tolerances.
+- `examples/fourier_methods_bs.py` (`--case methods | cos | alpha | fft |
+  quadrature`), four invocations curated in the example smoke list.
+- **Refused / out of scope**: Heston, Levy models, Fourier-based
+  American/Bermudan pricing, and the saddlepoint / Lord-Kahl optimal-alpha
+  machinery (the alpha study measures the failure modes instead of automating
+  around them).
+- Suite: **1958 tests, 179.1 s** (from 1749 / 171.9 s), with the `[oracle]`
+  extra installed. 209 new tests for 7.2 s, and essentially all of that time is
+  the example harness: the three new core test files run in **1.0 s** together
+  (0.25 s COS, 0.23 s Carr-Madan, 0.44 s Lewis/Gil-Pelaez), the 97 QuantLib
+  oracle tests add 0.5 s, the cases files are unchanged, and the example smoke
+  goes from 36.6 s to 42.3 s for four curated invocations run twice each.
+  Transform methods are cheap: 200 cosine terms is 200 evaluations of a closed
+  form.
+- Full derivation and tables: `docs/notes/fourier_pricing_methods.md`.
 
 ## Reconciled old roadmap
 
