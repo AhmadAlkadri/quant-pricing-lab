@@ -25,3 +25,13 @@ venv/
 # IDE
 .vscode/
 .market_cache/
+
+# docs site (vitepress)
+docs-site/node_modules/
+docs-site/docs/.vitepress/dist/
+
+# ignore personal textbooks
+textbooks/
+
+# private textbook-driven labs (drivers, never cargo)
+labs/

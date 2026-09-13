@@ -1,37 +1,53 @@
 # Steering Brief
 
-What changed since last brief (files + bullets)
-- `src/qpl/engines/mc/pricers.py`: Implemented MC Theta via finite difference.
-- `tests/test_mc_greeks.py`: Added verification for MC vs Analytic Theta.
-- `examples/bs_mc_vs_analytic.py`: Updated to display Theta.
+What changed in Slice 3 (files + bullets)
+- `examples/README.md`:
+  - Established the public v0.2.0 example set and de-emphasized legacy scripts.
+- `examples/bs_analytic_greeks.py`:
+  - Added deterministic analytic pricing/Greeks sanity script.
+- `examples/mc_pricing_and_stderr.py`:
+  - Added deterministic MC pricing + stderr + z-score script.
+- `examples/pde_theta_scheme.py`:
+  - Added compact theta-comparison script against analytic baseline.
+- `examples/american_put_binomial_dp.py`:
+  - Added American put DP script with early-exercise premium diagnostics.
+- `examples/quadrature_demo.py`:
+  - Added rule-comparison script for smooth-function integration error.
+- `examples/laplace_inversion_demo.py`:
+  - Added Stehfest inversion sanity script with max/mean error output.
+- `examples/copula_gaussian_demo.py`:
+  - Added Gaussian copula dependence/tail script with empirical vs theoretical metrics.
+- `tests/test_examples_smoke.py`:
+  - Reworked smoke harness to execute only curated public scripts and assert deterministic outputs.
+- `notebooks/README.md`:
+  - Marked three new notebooks as public v0.2.0 and existing ones as legacy.
+- `notebooks/01_pricing_overview.ipynb`:
+  - Added cross-method pricing notebook (analytic/MC/PDE) with deterministic setup.
+- `notebooks/02_numerical_toolkit.ipynb`:
+  - Added quadrature + linear-solver + Laplace inversion notebook.
+- `notebooks/03_dependence_and_copulas.ipynb`:
+  - Added copula/dependence notebook with tail-risk mini metric.
+- `tests/test_notebooks_smoke.py`:
+  - Added headless smoke execution for the three public notebooks.
+- `src/qpl/pricing.py`, `src/qpl/engines/pde/pricers.py`, `src/qpl/engines/dp/american_put_binomial.py`, `src/qpl/engines/mc/pricers.py`, `src/qpl/utils/labs.py`, `src/qpl/engines/base.py`, `src/qpl/instruments/options.py`, `src/qpl/market/market.py`:
+  - Upgraded core public-facing docstrings with consistent NumPy-style structure.
+- `docs-site/package.json` + `docs-site/docs/**` + `README.md` + `.gitignore`:
+  - Added minimal pinned VitePress skeleton and local run instructions.
 
-Current architecture (8-12 lines)
-- Core: Dispatcher `pricing.price`/`greeks` routes to {Analytic, MC, PDE} engines.
-- Domain: `EuropeanOption`, `BlackScholesModel`, `Market` (flat curves).
-- Engines: 
-  - Analytic: Closed-form BS.
-  - MC: GBM (terminal/multi-step) with Greeks via bumps.
-  - PDE: Theta-scheme FD (Call/Put only).
-- Status: European vanilla pricing/greeks complete across all 3 engines.
+What got better
+- Public learning surface no longer depends on internal `labs/` content.
+- Public examples and notebooks are deterministic, smoke-friendly, and data-source independent.
+- Examples/notebooks now cover pricing, numerics, transforms, DP, and dependence in a compact way.
+- Public API ergonomics improved via clearer docstrings at key entry points.
+- Docs-site bootstrapping is in place for iterative documentation expansion.
 
-Public API status (stable vs experimental)
-- Stable: `qpl.pricing` dispatcher, `EuropeanOption`, `Market`, `BlackScholesModel`.
-- Experimental: Engine config classes (`MCConfig`, `PDEConfig`) and their direct entry points.
-
-Risks / unknowns
-- Dispatcher complexity might grow with new Instrument types (Binary Options).
-
-Next 3 recommended actions
-- Implement `BinaryOption` (Analytic engine only).
-- Add `Benchmark Harness` to track regression.
-- Explore MC Variance Reduction (Antithetic).
-
-One simplification / deletion candidate
-- None currently (clean state).
-
-Assumptions I'm making
-- Binary Options will only support Analytic engine initially (as per roadmap).
+Deferred (intentional)
+- Automatic API reference generation (manual conceptual reference only for now).
+- Docs-site deployment and CI integration for Node build checks.
+- Broader migration/cleanup of legacy notebooks and legacy market-data examples.
 
 How to validate quickly
-- Run `pytest` for regressions.
-- Run `examples/bs_mc_vs_analytic.py` to see MC Theta in action.
+- `ruff check .`
+- `pytest -q`
+- `QPL_LAB_SMOKE=1 MPLBACKEND=Agg pytest -q tests/test_labs_smoke.py`
+- `PYTHONPATH=src MPLBACKEND=Agg QPL_LAB_SMOKE=1 pytest -q tests/test_notebooks_smoke.py`

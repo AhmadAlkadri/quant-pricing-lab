@@ -8,13 +8,13 @@ description: Use when implementing or modifying code in Quant Pricing Lab, espec
 ## Inputs and assumptions
 - Work from the repository root.
 - Treat `.agents/brain/brain.md` as the architectural and invariants source of truth.
-- Treat `.agents/brain/adr/0001-public-api-truth-source.md` as the public API contract.
+- Pre-1.0 API churn is acceptable when lab-driven and tested.
 - Use Python >= 3.10 and project tooling from `pyproject.toml`.
 
 ## Procedure
 
 1. Frame the change before editing.
-- Read `README.md`, `AGENT.md`, and `.agents/brain/brain.md`.
+- Read `README.md`, `AGENTS.md`, and `.agents/brain/brain.md`.
 - If the change can affect API or architecture, read relevant ADRs in `.agents/brain/adr/`.
 - Define one thin vertical slice with clear non-goals.
 
@@ -25,8 +25,8 @@ description: Use when implementing or modifying code in Quant Pricing Lab, espec
 
 3. Implement minimally.
 - Change only the files needed for the requested slice.
-- Prefer the stable entry points (`qpl.pricing.price`, `qpl.pricing.greeks`) when wiring behavior.
-- Avoid broad refactors unless they are required to ship the slice.
+- Prefer entry points that keep the current lab slice coherent.
+- Refactor freely when clarity improves, while keeping the slice thin and fully tested.
 
 4. Update tests with the behavior.
 - Add or adjust focused tests in `tests/` for the new behavior.
@@ -48,7 +48,7 @@ python examples/bs_mc_vs_analytic.py
 6. Update project brain and docs when required.
 - Update `.agents/brain/steering-brief.md` for meaningful code changes.
 - Update `.agents/brain/brain.md` only when architecture/invariants or key workflows changed.
-- Add or update an ADR if public API or architecture changed.
+- Add or update an ADR when process/architecture policy changes need to be recorded.
 
 7. Prepare delivery.
 - Summarize what changed, why, and how it was validated.

@@ -1,4 +1,4 @@
-# Project Brain (AGENT)
+# Project Brain (.agents)
 
 How to use this document
 - Read the Agent Contract before changing behavior or APIs.
@@ -6,17 +6,21 @@ How to use this document
 - Keep updates short; link existing docs instead of duplicating.
 
 Agent Contract
-- Read-first files: `AGENT/brain.md`, `AGENT/steering-brief.md`, and relevant ADRs in `AGENT/adr/`.
-- Do-not-touch without ADR + review: public API boundaries (ADR-0001), CI contract, Python compatibility, and numerical invariants in tests.
-- Definition of done: tests pass, docs updated, Golden Path still runs, and no TODOs in the critical path.
+- Read-first files: `.agents/brain/brain.md`, `.agents/brain/steering-brief.md`, and relevant ADRs in `.agents/brain/adr/`.
+- Pre-1.0 API churn acceptable when lab-driven and tested.
+- Do-not-break invariants: CI contract, Python compatibility, numerical invariants in tests, determinism, and clean-tree hygiene.
+- Definition of done: `ruff check .` passes, `pytest -q` passes, docs are updated, and no TODOs remain in the critical path.
 - If >3 plausible causes exist, write a quick experiment or add instrumentation before changing code.
 - If still uncertain after 2 iterations, produce a minimal repro and stop.
 - Complexity receipts: any new abstraction must state why it exists, the bug it prevents, its cost, and what happens if omitted.
 - Numerical engines must be accompanied by *empirical convergence evidence*. (Examples/notebooks must be reproducibility and interpretable).
-- Public API or architectural changes require a new ADR (or update + supersede).
+- Use ADRs for major architecture/process decisions and policy shifts.
 - Preserve determinism expectations (MC seed, PDE determinism) unless an ADR says otherwise.
 - Keep error types consistent (`InvalidInputError`, `NotSupportedError`) and validate at boundaries.
-- Prefer minimal disruption: avoid refactors unless they unlock the task.
+- Refactors are encouraged when they improve clarity and still ship a thin, green slice.
+- **Lab-first slices**: for educational work, ship one runnable lab notebook plus the minimum `src/` and tests needed to support it.
+- **Thin vertical scope**: each slice should include behavior, deterministic verification, and proof-of-run evidence in one commit chain.
+- **Proof of run**: after each commit, record local results for `ruff check .`, `pytest -q`, and notebook smoke execution whenever notebooks change.
 - **Clean Working Tree**: Agents must not report completion unless `git status` is clean. When renaming files, always verify deletions are staged.
 
 0) Repo at a glance
@@ -40,19 +44,20 @@ Agent Contract
 ## Notebook Hygiene
 - Notebooks live in `notebooks/` and follow a strict numbering scheme: `NN_description.ipynb`.
 - Numbers increase monotonically (`00`, `01`, `02`, ...).
+- Fusai teaching labs live in `labs/` and follow the same naming convention (`NN_description.ipynb`).
 - Output is stripped via `nbstripout` (enforced by `.gitattributes`).
 - Dependencies: Must use repo environment; no cells should fail.
 
-2) Public API surface (current) - truth source: ADR-0001
-- Stable: `qpl.pricing.price` and `qpl.pricing.greeks` dispatcher APIs. (source: src/qpl/pricing.py)
-- Stable: `qpl.instruments` exports `EuropeanOption`, `call_payoff`, `put_payoff`. (source: src/qpl/instruments/__init__.py)
-- Stable: `qpl.market` exports `Market`, `FlatRateCurve`, `FlatDividendCurve`. (source: src/qpl/market/__init__.py)
-- Stable: `qpl.models` exports `BlackScholesModel`, `bs_price`. (source: src/qpl/models/__init__.py)
-- Stable: `qpl.engines` exports `PriceResult`, `GreeksResult`; `qpl.engines.analytic` exports `price_european`, `greeks_european`. (source: src/qpl/engines/__init__.py; src/qpl/engines/analytic/__init__.py)
-- Stable: `qpl.exceptions` module and its error types (`QPLError`, `InvalidInputError`, `ModelAssumptionError`, `NotSupportedError`). (source: src/qpl/exceptions.py; src/qpl/__init__.py)
-- Experimental (public by example usage): `qpl.engines.mc.pricers.MCConfig`, `price_european`, `greeks_european`. (source: src/qpl/engines/mc/pricers.py; examples/bs_mc_vs_analytic.py)
-- Experimental (public by example usage): `qpl.engines.pde.pricers.PDEConfig`, `price_european`. (source: src/qpl/engines/pde/pricers.py)
-- Internal: anything else under `src/qpl/` may change without notice. (source: AGENT/adr/0001-public-api-truth-source.md)
+2) Current API map (pre-1.0; subject to change)
+- Current dispatcher interfaces: `qpl.pricing.price` and `qpl.pricing.greeks`. (source: src/qpl/pricing.py)
+- Current instrument exports: `qpl.instruments` exports `EuropeanOption`, `call_payoff`, `put_payoff`. (source: src/qpl/instruments/__init__.py)
+- Current market exports: `qpl.market` exports `Market`, `FlatRateCurve`, `FlatDividendCurve`. (source: src/qpl/market/__init__.py)
+- Current model exports: `qpl.models` exports `BlackScholesModel`, `bs_price`. (source: src/qpl/models/__init__.py)
+- Current engine exports: `qpl.engines` exports `PriceResult`, `GreeksResult`; `qpl.engines.analytic` exports `price_european`, `greeks_european`. (source: src/qpl/engines/__init__.py; src/qpl/engines/analytic/__init__.py)
+- Current exception exports: `qpl.exceptions` module and its error types (`QPLError`, `InvalidInputError`, `ModelAssumptionError`, `NotSupportedError`). (source: src/qpl/exceptions.py; src/qpl/__init__.py)
+- Current example-level interfaces: `qpl.engines.mc.pricers.MCConfig`, `price_european`, `greeks_european`. (source: src/qpl/engines/mc/pricers.py; examples/bs_mc_vs_analytic.py)
+- Current example-level interfaces: `qpl.engines.pde.pricers.PDEConfig`, `price_european`. (source: src/qpl/engines/pde/pricers.py)
+- Internal modules may be refactored freely when lab-driven and tested.
 
 3) Architecture (text-only diagram + bullets)
 
@@ -111,11 +116,13 @@ Top 10 cheapest checks
 - Test runner: `pytest` with tests in `tests/`. (source: pyproject.toml)
 - CI: GitHub Actions runs on ubuntu-latest, sets up Python 3.11, installs `.[dev]`, then runs `pytest`. (source: .github/workflows/ci.yml)
 - Example smoke: `examples/bs_mc_vs_analytic.py` must run successfully (tested via subprocess). (source: tests/test_examples_smoke.py)
+- Lab smoke: notebooks in `labs/` must execute headlessly via `jupyter nbconvert --execute` under deterministic env vars.
 
 8) Decisions log (index)
-- ADRs live in `AGENT/adr/` (see `AGENT/adr/0000-template.md`).
-- Accepted ADRs: `AGENT/adr/0001-public-api-truth-source.md`.
-- ADR rules: one decision per ADR, keep under 1 page, include status and supersedes links. (source: AGENT/adr/0000-template.md)
+- ADRs live in `.agents/brain/adr/` (see `.agents/brain/adr/0000-template.md`).
+- Active ADRs: `.agents/brain/adr/0002-thin-vertical-slices.md`, `.agents/brain/adr/0003-pre-1-0-lab-authority-and-api-churn.md`.
+- Historical/superseded ADRs: `.agents/brain/adr/0001-public-api-truth-source.md`.
+- ADR rules: one decision per ADR, keep under 1 page, include status and supersedes links. (source: .agents/brain/adr/0000-template.md)
 
 9) Roadmap: next 3 increments (vertical slices only)
 - [Done] Enable PDE Greeks (Delta/Gamma): `pricing.greeks(..., method='pde')`. Implemented in `src/qpl/engines/pde/pricers.py`.
@@ -182,4 +189,4 @@ Top 10 cheapest checks
 12) Execution Principle: Thin Vertical Slices
 - We simply do not build "layers". We build **slices**.
 - A slice = Public API + Engine Logic + Test + Golden Path update.
-- See `AGENT/adr/0002-thin-vertical-slices.md`.
+- See `.agents/brain/adr/0002-thin-vertical-slices.md`.

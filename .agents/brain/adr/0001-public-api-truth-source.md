@@ -1,7 +1,8 @@
 # ADR-0001: Public API truth source
 
-Status: accepted
+Status: Superseded
 Date: 2026-02-03
+Superseded-by: ADR-0003
 
 Context
 - Agents and contributors need a clear, stable definition of what counts as "public API".
@@ -22,7 +23,7 @@ Alternatives considered
 - "Only top-level qpl exports are public": rejected, examples import submodules directly.
 
 Consequences
-- Any change to public API requires a new ADR (or an update that supersedes this one) and an update to `AGENT/brain.md`.
+- Any change to public API requires a new ADR (or an update that supersedes this one) and an update to `.agents/brain/brain.md`.
 - Examples must be updated alongside any public API change.
 - Internal refactors outside the defined public API do not require an ADR.
 
