@@ -26,6 +26,7 @@ from qpl.cases import (
     ALL_SDE_CASES,
     BARRIER_BOYLE_LAU_ENVELOPE,
     BARRIER_CROSS_ENGINE_CASES,
+    BARRIER_DISCRETE_CROSS_ENGINE_CASES,
     BARRIER_HAUG_CASES,
     BARRIER_IDENTITY_CASES,
     BARRIER_LIMIT_CASES,
@@ -35,11 +36,20 @@ from qpl.cases import (
     BARRIER_MC_SEED,
     BARRIER_MC_STDERR_MULTIPLE,
     BARRIER_MC_VARIANCE_REDUCTION,
+    BARRIER_PDE_CONCENTRATION,
+    BARRIER_PDE_DISCRETE_STDERR_MULTIPLE,
+    BARRIER_PDE_GRID,
+    BARRIER_PDE_N,
+    BARRIER_PDE_ORDER_CASES,
+    BARRIER_PDE_STRIKE_ALIGNMENT,
+    BARRIER_PDE_TIME_STEPPING,
+    BARRIER_PDE_TOLERANCE,
     BARRIER_TREE_ORDER_CASES,
     MC_VARIANCE_REDUCTION_CASES,
     BarrierBSCase,
 )
 from qpl.engines.mc.pricers import MCConfig
+from qpl.engines.pde.pricers import PDEConfig
 from qpl.engines.tree import TreeConfig, boyle_lau_steps
 from qpl.instruments.options import EuropeanOption
 from qpl.models.black_scholes import bs_price
@@ -138,11 +148,12 @@ def test_barrier_limit_rows(case: BarrierBSCase) -> None:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "case",
-    BARRIER_MC_ORDER_CASES + BARRIER_TREE_ORDER_CASES,
-    ids=_ids(BARRIER_MC_ORDER_CASES + BARRIER_TREE_ORDER_CASES),
+_ORDER_CASES = (
+    BARRIER_MC_ORDER_CASES + BARRIER_TREE_ORDER_CASES + BARRIER_PDE_ORDER_CASES
 )
+
+
+@pytest.mark.parametrize("case", _ORDER_CASES, ids=_ids(_ORDER_CASES))
 def test_order_rows_state_a_measurable_claim(case: BarrierBSCase) -> None:
     """The rows are data; the measurements are in the two dedicated files.
 
@@ -166,8 +177,13 @@ def test_order_rows_state_a_measurable_claim(case: BarrierBSCase) -> None:
     assert "in-repo" in row.source or "derived" in row.source
     if row.evidence is EvidenceClass.CONVERGENCE_ORDER:
         # An order claim has to be tight enough to exclude the neighbouring
-        # integer/half-integer order, or it is not a claim.
-        assert row.tolerance < 0.25 + 1e-12
+        # integer/half-integer order, or it is not a claim. The mesh row is
+        # the exception the rule has to name: its `expected` is an error
+        # RATIO of 15 and not an order, so a 0.25 band would be absurd.
+        if "mesh" not in row.id:
+            assert row.tolerance < 0.25 + 1e-12
+        else:
+            assert row.tolerance < 0.5 * row.expected
 
 
 # --------------------------------------------------------------------------
@@ -230,9 +246,102 @@ def test_cross_engine_agreement(case: BarrierBSCase) -> None:
 
     # The row's own tolerance is the envelope constant; the realised gap is
     # recorded against the looser of the two legs, which bounds any pair.
+    # Slice 13's fourth leg: a finite-difference solve on a sinh grid whose
+    # domain is truncated at the barrier, so the barrier is node 0 exactly.
+    # Its budget is a flat constant rather than an envelope, because a
+    # boundary is not a node the scheme rounds to.
+    grid = price(
+        spec.option(),
+        model,
+        market,
+        method="pde",
+        cfg=PDEConfig(
+            n_s=BARRIER_PDE_N,
+            n_t=BARRIER_PDE_N,
+            grid=BARRIER_PDE_GRID,
+            concentration=BARRIER_PDE_CONCENTRATION,
+            strike_alignment=BARRIER_PDE_STRIKE_ALIGNMENT,
+            time_stepping=BARRIER_PDE_TIME_STEPPING,
+        ),
+    )
+    assert grid.meta["barrier_on_node"] is True
+    assert grid.meta["effective_barrier"] == spec.barrier
+    assert grid.value == pytest.approx(exact, abs=BARRIER_PDE_TOLERANCE)
+
+    # The row's own tolerance is the envelope constant; the realised gap is
+    # recorded against the looser of the two legs, which bounds any pair.
     gap = max(abs(lattice.value - exact), abs(simulation.value - exact))
     assert gap < max(lattice_budget, BARRIER_MC_STDERR_MULTIPLE * simulation.stderr)
-    assert exact > 0.1  # not three engines agreeing on nothing
+    assert exact > 0.1  # not four engines agreeing on nothing
+
+
+@pytest.mark.parametrize(
+    "case",
+    BARRIER_DISCRETE_CROSS_ENGINE_CASES,
+    ids=_ids(BARRIER_DISCRETE_CROSS_ENGINE_CASES),
+)
+def test_discrete_cross_engine_agreement(case: BarrierBSCase) -> None:
+    """Evidence class: INDEPENDENT_ENGINE, on the *other* contract.
+
+    The discretely monitored barrier is a different contract from the
+    continuous one -- worth O(1/sqrt(m)) more for a knock-out -- and until
+    Slice 13 only one engine in this package could price it. Now two can, by
+    routes with nothing in common: the grid projects the value function onto
+    the rebate at each monitoring date, and the simulation draws the path at
+    those dates and looks.
+
+    There is deliberately no lattice leg. `qpl.engines.tree.barrier` refuses a
+    discrete schedule, because knocking out only at the time levels that
+    coincide with monitoring dates needs `n` to be a multiple of `m` *and*
+    barrier-aligned at once -- two conditions on one integer. The grid has no
+    such conflict: its time levels are built to contain the monitoring dates,
+    and its node placement is a separate axis.
+    """
+    assert case.row.evidence is EvidenceClass.INDEPENDENT_ENGINE
+    spec = case.spec
+    model, market = spec.model(), spec.market()
+    option = spec.option(monitoring=BARRIER_MC_MONITORING)
+
+    grid = price(
+        option,
+        model,
+        market,
+        method="pde",
+        cfg=PDEConfig(
+            n_s=BARRIER_PDE_N,
+            n_t=BARRIER_PDE_N,
+            grid=BARRIER_PDE_GRID,
+            concentration=BARRIER_PDE_CONCENTRATION,
+            strike_alignment=BARRIER_PDE_STRIKE_ALIGNMENT,
+            time_stepping=BARRIER_PDE_TIME_STEPPING,
+        ),
+    )
+    assert grid.meta["monitoring"] == "discrete"
+    assert grid.meta["n_projections"] == BARRIER_MC_MONITORING
+
+    simulation = price(
+        option,
+        model,
+        market,
+        method="mc",
+        cfg=MCConfig(
+            n_paths=BARRIER_MC_PATHS,
+            seed=BARRIER_MC_SEED,
+            variance_reduction=BARRIER_MC_VARIANCE_REDUCTION,
+            barrier_correction="none",
+        ),
+    )
+    assert simulation.meta["estimates"] == "discrete"
+    assert grid.value == pytest.approx(
+        simulation.value,
+        abs=BARRIER_PDE_DISCRETE_STDERR_MULTIPLE * simulation.stderr,
+    )
+
+    # The lattice cannot be a third leg here, and says so rather than guessing.
+    from qpl.exceptions import NotSupportedError
+
+    with pytest.raises(NotSupportedError, match="method='mc'"):
+        price(option, model, market, method="tree", cfg=TreeConfig(n_steps=101))
 
 
 # --------------------------------------------------------------------------

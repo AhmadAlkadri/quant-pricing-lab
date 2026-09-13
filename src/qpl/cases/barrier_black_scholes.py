@@ -44,6 +44,7 @@ __all__ = [
     "ALL_BARRIER_CASES",
     "BARRIER_BOYLE_LAU_ENVELOPE",
     "BARRIER_CROSS_ENGINE_CASES",
+    "BARRIER_DISCRETE_CROSS_ENGINE_CASES",
     "BARRIER_HAUG_CASES",
     "BARRIER_HAUG_SPEC",
     "BARRIER_IDENTITY_CASES",
@@ -54,6 +55,14 @@ __all__ = [
     "BARRIER_MC_SEED",
     "BARRIER_MC_STDERR_MULTIPLE",
     "BARRIER_MC_VARIANCE_REDUCTION",
+    "BARRIER_PDE_CONCENTRATION",
+    "BARRIER_PDE_DISCRETE_STDERR_MULTIPLE",
+    "BARRIER_PDE_GRID",
+    "BARRIER_PDE_N",
+    "BARRIER_PDE_ORDER_CASES",
+    "BARRIER_PDE_STRIKE_ALIGNMENT",
+    "BARRIER_PDE_TIME_STEPPING",
+    "BARRIER_PDE_TOLERANCE",
     "BARRIER_TREE_ORDER_CASES",
     "BarrierBSCase",
     "BarrierBSSpec",
@@ -216,6 +225,49 @@ BARRIER_MC_STDERR_MULTIPLE = 4.0
 error, not an absolute accuracy claim. Four standard errors is a two-sided
 false-failure rate of about 6e-05 at a fixed seed; at 100 000 paths this seed
 lands at |z| of 0.008, 0.055 and 0.440 across the three points."""
+
+BARRIER_PDE_N = 400
+"""Spatial and temporal resolution of the finite-difference leg, `n_s = n_t`.
+
+Chosen so that the leg's worst error over the three cross-engine points is
+3.836e-05 -- an order of magnitude inside the lattice leg's budget at the same
+points -- at a cost of 0.02 s to 0.11 s per point.
+"""
+
+BARRIER_PDE_GRID = "sinh"
+BARRIER_PDE_CONCENTRATION = 0.05
+"""The `sinh` mesh concentrated at the strike and the barrier, and its strength.
+
+`concentration = 0.05` is the package default and is deliberately **not** the
+best value on these points: at `n = 100` on the Haug point the errors are
+2.114e-04, 2.594e-04, 4.355e-04 and 9.397e-04 at 0.02, 0.05, 0.10 and 0.20, so
+0.02 would be 1.2x better here -- and worse on a plain vanilla, where a mesh
+that starves the tails to feed the barrier pays for it. See
+`tests/test_pde_barrier.py`.
+"""
+
+BARRIER_PDE_STRIKE_ALIGNMENT = "midpoint"
+BARRIER_PDE_TIME_STEPPING = "rannacher"
+
+BARRIER_PDE_TOLERANCE = 2.0e-4
+"""Budget for the finite-difference leg, about 5x its measured worst error.
+
+Measured errors against the closed form at `BARRIER_PDE_N` on the `sinh` grid:
+-1.665e-05 (`atm_6m_down_out`), -3.588e-06 (`atm_1y_up_out`) and -3.836e-05
+(`otm_1y_down_in`). Unlike the lattice leg's, this constant is *not* erratic --
+the barrier is a boundary rather than a node the scheme rounds to -- so the
+budget can be read off the errors rather than off an envelope.
+"""
+
+BARRIER_PDE_DISCRETE_STDERR_MULTIPLE = 4.0
+"""The discrete cross-engine rows hold the grid to this many standard errors of
+the simulation it is compared with.
+
+The simulation is the plain estimator (`barrier_correction='none'`), which is
+unbiased for the **discrete** contract, so the two legs estimate the same
+number by genuinely different routes. Measured `z` at the study seed and
+100 000 paths: -0.287, +0.132, +0.347.
+"""
 
 BARRIER_BOYLE_LAU_ENVELOPE = 8.0
 """`max |error| * n` along the Boyle-Lau subsequence: the constant that sets the
@@ -617,9 +669,10 @@ BARRIER_TREE_ORDER_CASES: tuple[BarrierBSCase, ...] = (
 
 _CROSS_ENGINE_SOURCE = (
     "derived in-repo: qpl.engines.analytic.barrier, qpl.engines.tree.barrier "
-    "at a Boyle-Lau step count, and qpl.engines.mc.barrier with the "
-    "Brownian-bridge estimator, evaluated at this point; the per-engine "
-    "tolerances in `notes` are derived from the measured errors"
+    "at a Boyle-Lau step count, qpl.engines.mc.barrier with the "
+    "Brownian-bridge estimator, and (Slice 13) qpl.engines.pde.barrier on a "
+    "sinh grid truncated at the barrier, evaluated at this point; the "
+    "per-engine tolerances in `notes` are derived from the measured errors"
 )
 
 BARRIER_CROSS_ENGINE_CASES: tuple[BarrierBSCase, ...] = tuple(
@@ -627,8 +680,9 @@ BARRIER_CROSS_ENGINE_CASES: tuple[BarrierBSCase, ...] = tuple(
         row=BenchmarkRow(
             id=f"barrier_cross_engine_{name}",
             description=(
-                "closed form, Boyle-Lau lattice and Brownian-bridge Monte "
-                f"Carlo agree on the barrier price at {name}"
+                "closed form, Boyle-Lau lattice, Brownian-bridge Monte Carlo "
+                f"and the finite-difference grid agree on the barrier price "
+                f"at {name}"
             ),
             expected=0.0,
             tolerance=BARRIER_BOYLE_LAU_ENVELOPE,
@@ -647,7 +701,210 @@ BARRIER_CROSS_ENGINE_CASES: tuple[BarrierBSCase, ...] = tuple(
                 "continuous price the other two legs compute. Measured "
                 "lattice errors -1.075e-05, +1.730e-04 and +1.055e-04 against "
                 "budgets of 3.44e-03, 3.28e-03 and 3.86e-03, and Monte Carlo "
-                "|z| of 0.008, 0.055 and 0.440."
+                "|z| of 0.008, 0.055 and 0.440. Slice 13 adds the fourth leg, "
+                "a finite-difference solve on a sinh grid truncated at the "
+                "barrier: measured errors -1.665e-05, -3.588e-06 and "
+                "-3.836e-05 against a flat BARRIER_PDE_TOLERANCE of 2.0e-4. "
+                "Its budget is a plain constant rather than an envelope, "
+                "because the barrier is a boundary here and not a node the "
+                "scheme rounds to, so the constant is not erratic."
+            ),
+        ),
+        specs=(spec,),
+    )
+    for name, spec in _CROSS_ENGINE_POINTS
+)
+
+
+# --------------------------------------------------------------------------
+# (vi) The grid: what a node on the barrier is worth.
+# --------------------------------------------------------------------------
+
+_PDE_SOURCE = (
+    "derived in-repo: qpl.engines.pde.barrier against "
+    "qpl.engines.analytic.barrier; the fitted orders and ratios in `notes` "
+    "come from tests/test_pde_barrier.py. The barrier-on-a-node requirement is "
+    "Zvan, Vetzal & Forsyth (2000), Journal of Economic Dynamics and Control "
+    "24, 1563-1590; the non-uniform stencil's consistency order is Duffy "
+    "(2006), Finite Difference Methods in Financial Engineering, and the "
+    "coordinate-transformation view is Tavella & Randall (2000) chapter 5; the "
+    "sinh mesh formula is In 't Hout & Foulon (2010), IJNAM 7(2), section 3, "
+    "cited for the mesh alone. No number here is quoted from any of them"
+)
+
+BARRIER_PDE_ORDER_CASES: tuple[BarrierBSCase, ...] = (
+    BarrierBSCase(
+        row=BenchmarkRow(
+            id="barrier_pde_on_node_order_two",
+            description=(
+                "with the barrier as the domain boundary the finite-difference "
+                "knock-out is second order in n_s = n_t"
+            ),
+            expected=2.0,
+            tolerance=0.15,
+            evidence=EvidenceClass.CONVERGENCE_ORDER,
+            source=_PDE_SOURCE,
+            notes=(
+                "Measured 2.0668 (log-space residual 0.0883) over n = 100, "
+                "200, 400, 800 on the uniform grid, errors -4.676e-03, "
+                "-8.861e-04, -2.568e-04, -5.959e-05, all of one sign. This is "
+                "the order both Slice 12 discretisations could not reach: the "
+                "lattice and the simulation are each order ONE HALF on this "
+                "contract, because both displace the barrier by "
+                "O(sigma sqrt(dt)). A grid can put a node on the barrier for "
+                "every time step at once, which is why the mesh was deferred "
+                "until a barrier forced it."
+            ),
+        ),
+        specs=(_ATM_6M_DOWN_OUT,),
+    ),
+    BarrierBSCase(
+        row=BenchmarkRow(
+            id="barrier_pde_off_node_is_first_order",
+            description=(
+                "rounding the barrier to the nodes costs a full order and two "
+                "to three decimal orders of accuracy"
+            ),
+            expected=1.0,
+            tolerance=0.35,
+            evidence=EvidenceClass.NEGATIVE_FINDING,
+            source=_PDE_SOURCE,
+            notes=(
+                "Measured with PDEConfig(barrier_alignment='none'): errors "
+                "+8.515e-01, +1.182e+00, +3.924e-01, +2.396e-01 over n = 100, "
+                "200, 400, 800, a fit of 0.7079 with a log-space residual of "
+                "0.3068 -- not a power law at fixed n, because the constant is "
+                "set by the fractional part of H / ds. |error| * n stays in "
+                "[85.2, 245.7] through n = 1600, which is the assumption-free "
+                "form of the claim. Every error is POSITIVE: the scheme kills "
+                "at the largest node at or below H, so it prices a barrier "
+                "further from the spot, which is worth more. Against the "
+                "aligned grid at the same node count the errors are 182x to "
+                "4021x larger."
+            ),
+        ),
+        specs=(_ATM_6M_DOWN_OUT,),
+    ),
+    BarrierBSCase(
+        row=BenchmarkRow(
+            id="barrier_pde_sinh_mesh_shrinks_the_constant",
+            description=(
+                "the sinh mesh concentrated at the barrier and the strike has "
+                "a 13x-18x smaller error constant at equal node count"
+            ),
+            expected=15.0,
+            tolerance=7.0,
+            evidence=EvidenceClass.CONVERGENCE_ORDER,
+            source=_PDE_SOURCE,
+            notes=(
+                "`expected` is the uniform/sinh error ratio. Measured 18.0, "
+                "13.0, 15.4 and 14.5 at n = 100, 200, 400, 800, with the sinh "
+                "order 1.9981 (residual 0.0195) against the uniform grid's "
+                "2.0668 -- same order, smaller constant, which is all a mesh "
+                "can buy. The ratio is NOT monotone in n and is not expected "
+                "to be: both sequences carry their own pre-asymptotic wobble. "
+                "The concentration scan at n = 100 gives 22.1, 18.0, 10.7 and "
+                "5.0 at 0.02, 0.05, 0.10 and 0.20, reported rather than tuned: "
+                "the package default 0.05 is not the best cell here."
+            ),
+        ),
+        specs=(_ATM_6M_DOWN_OUT,),
+    ),
+    BarrierBSCase(
+        row=BenchmarkRow(
+            id="barrier_pde_discrete_gap_order_one_half",
+            description=(
+                "the grid's discrete-to-continuous gap decays like m**-1/2 and "
+                "agrees with the Broadie-Glasserman-Kou shift"
+            ),
+            expected=0.5,
+            tolerance=0.1,
+            evidence=EvidenceClass.CONVERGENCE_ORDER,
+            source=_PDE_SOURCE,
+            notes=(
+                "Measured 0.4431 (log-space residual 0.0101) over m = 10, 20, "
+                "40, 80, 160, gaps +1.625746, +1.213371, +0.900876, +0.658822, "
+                "+0.475119. Below 0.5 for a reason that is measured rather "
+                "than assumed: the BGK closed-form shift, on the same m "
+                "ladder, has fitted order 0.4361, so the deficit is the "
+                "correction's own o(1/sqrt(m)) at finite m and not the grid's "
+                "-- the same effect Slice 12 saw from the simulation side "
+                "(0.4603 +- 0.0125 paired). The gap/BGK-gap ratio is 1.0147, "
+                "0.9981, 0.9974, 0.9963, 0.9915, i.e. the continuity "
+                "correction predicts this engine's own gap to better than 1% "
+                "from m = 20 on, and nothing in the engine knows about "
+                "beta = -zeta(1/2)/sqrt(2 pi)."
+            ),
+        ),
+        specs=(_ATM_6M_DOWN_OUT,),
+    ),
+    BarrierBSCase(
+        row=BenchmarkRow(
+            id="barrier_pde_node_sampled_projection_is_first_order",
+            description=(
+                "sampling the monitoring projection at nodes costs a full "
+                "order and biases the price low"
+            ),
+            expected=1.0,
+            tolerance=0.15,
+            evidence=EvidenceClass.NEGATIVE_FINDING,
+            source=_PDE_SOURCE,
+            notes=(
+                "Not anticipated by the slice. Observing a barrier makes the "
+                "value function discontinuous, so each monitoring date repeats "
+                "the Slice 6 digital pathology; and on a grid where H IS a "
+                "node the node's cell is half alive while the node is set to "
+                "the rebate, so the scheme discards half a cell of value per "
+                "date. Measured on ONE grid (s_max = 380, so H = 95 is node "
+                "n/4 for every n) at m = 10: node-sampled errors -6.339e-01, "
+                "-3.365e-01, -1.711e-01, -8.604e-02, order 0.9619 (residual "
+                "0.0140), every sign negative; cell-weighted +3.639e-02, "
+                "+7.067e-03, +1.304e-03, +3.261e-04, order 2.2844. The "
+                "cell-weighted projection is the L2 one and needs no node "
+                "placement at all, which is why barrier_alignment stops "
+                "mattering for the discrete contract."
+            ),
+        ),
+        specs=(_ATM_6M_DOWN_OUT,),
+    ),
+)
+
+
+# --------------------------------------------------------------------------
+# (vii) Four engines on one number, and two on the other contract.
+# --------------------------------------------------------------------------
+
+_DISCRETE_CROSS_ENGINE_SOURCE = (
+    "derived in-repo: qpl.engines.pde.barrier (projection at the monitoring "
+    "dates) against qpl.engines.mc.barrier with barrier_correction='none' "
+    "(unbiased for the discrete contract); the measured z-scores in `notes` "
+    "come from tests/cases/test_barrier_black_scholes_cases.py"
+)
+
+BARRIER_DISCRETE_CROSS_ENGINE_CASES: tuple[BarrierBSCase, ...] = tuple(
+    BarrierBSCase(
+        row=BenchmarkRow(
+            id=f"barrier_discrete_cross_engine_{name}",
+            description=(
+                "the finite-difference grid and the plain Monte Carlo "
+                f"estimator agree on the DISCRETELY monitored contract at {name}"
+            ),
+            expected=0.0,
+            tolerance=BARRIER_PDE_DISCRETE_STDERR_MULTIPLE,
+            evidence=EvidenceClass.INDEPENDENT_ENGINE,
+            source=_DISCRETE_CROSS_ENGINE_SOURCE,
+            notes=(
+                "`tolerance` is a z-score on the simulation's own standard "
+                "error, so the row is INDEPENDENT_ENGINE resting on a "
+                "STATISTICAL leg. Measured z at the study seed and "
+                f"{BARRIER_MC_PATHS} paths: -0.287, +0.132, +0.347 across the "
+                "three points. There is deliberately no lattice leg: "
+                "qpl.engines.tree.barrier refuses a discrete schedule, because "
+                "knocking out only at the time levels that coincide with "
+                "monitoring dates needs n to be a multiple of m AND "
+                "barrier-aligned at once. The grid has no such conflict -- its "
+                "time levels are built to contain the monitoring dates -- "
+                "which is the whole reason this row exists."
             ),
         ),
         specs=(spec,),
@@ -662,5 +919,7 @@ ALL_BARRIER_CASES: tuple[BarrierBSCase, ...] = (
     + BARRIER_LIMIT_CASES
     + BARRIER_MC_ORDER_CASES
     + BARRIER_TREE_ORDER_CASES
+    + BARRIER_PDE_ORDER_CASES
     + BARRIER_CROSS_ENGINE_CASES
+    + BARRIER_DISCRETE_CROSS_ENGINE_CASES
 )
