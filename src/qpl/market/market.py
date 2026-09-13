@@ -7,7 +7,6 @@ from ..exceptions import InvalidInputError
 from .curves import FlatDividendCurve, FlatRateCurve
 
 
-
 @dataclass(frozen=True)
 class Market:
     """Market snapshot with spot and flat rate/dividend curves.

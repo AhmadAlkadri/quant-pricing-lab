@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from itertools import pairwise
 
 import numpy as np
 import pytest
@@ -90,15 +91,15 @@ def test_error_nonincreasing_with_refinement() -> None:
 
     trap_grid = [16, 32, 64, 128]
     trap_errs = [abs(composite_trapezoid(f, 0.0, 1.0, n) - exact) for n in trap_grid]
-    assert all(a + 1e-15 >= b for a, b in zip(trap_errs, trap_errs[1:]))
+    assert all(a + 1e-15 >= b for a, b in pairwise(trap_errs))
 
     simpson_grid = [16, 32, 64, 128]
     simpson_errs = [abs(composite_simpson(f, 0.0, 1.0, n) - exact) for n in simpson_grid]
-    assert all(a + 1e-15 >= b for a, b in zip(simpson_errs, simpson_errs[1:]))
+    assert all(a + 1e-15 >= b for a, b in pairwise(simpson_errs))
 
     gauss_grid = [4, 8, 16, 32]
     gauss_errs = [abs(gauss_legendre(f, 0.0, 1.0, n) - exact) for n in gauss_grid]
-    assert all(a + 1e-15 >= b for a, b in zip(gauss_errs, gauss_errs[1:]))
+    assert all(a + 1e-15 >= b for a, b in pairwise(gauss_errs))
 
 
 def test_quadrature_validation_errors() -> None:

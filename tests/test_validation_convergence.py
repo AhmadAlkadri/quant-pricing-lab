@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import numpy as np
@@ -113,7 +114,7 @@ def test_benchmark_row_is_frozen_and_labelled() -> None:
     )
     assert row.evidence is EvidenceClass.EXACT_IDENTITY
     assert row.notes == ""
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         row.expected = 1.0  # type: ignore[misc]
 
 

@@ -6,7 +6,6 @@ from typing import Literal
 from ..exceptions import InvalidInputError
 
 
-
 @dataclass(frozen=True)
 class EuropeanOption:
     """European vanilla option definition.

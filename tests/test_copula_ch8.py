@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from itertools import pairwise
+
 import numpy as np
 import pytest
 
@@ -93,5 +95,5 @@ def test_theoretical_dependence_is_monotone_in_rho() -> None:
     tau_vals = [gaussian_copula_kendall_tau(float(rho)) for rho in rho_grid]
     spearman_vals = [gaussian_copula_spearman_rho(float(rho)) for rho in rho_grid]
 
-    assert all(a < b for a, b in zip(tau_vals, tau_vals[1:]))
-    assert all(a < b for a, b in zip(spearman_vals, spearman_vals[1:]))
+    assert all(a < b for a, b in pairwise(tau_vals))
+    assert all(a < b for a, b in pairwise(spearman_vals))

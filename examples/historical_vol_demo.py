@@ -8,6 +8,7 @@ import sys
 try:
     import numpy as np
     import pandas as pd
+
     from qpl.market.data import get_prices
 except ImportError:
     print(
@@ -16,7 +17,9 @@ except ImportError:
     )
     sys.exit(1)
 
+from qpl.exceptions import InvalidInputError
 from qpl.market.stats import log_returns, realized_volatility
+
 
 def main():
     print("--- Historical Volatility from Time Series ---")
@@ -31,7 +34,7 @@ def main():
         df = get_prices(ticker, start, end)
         print(f"   Retrieved {len(df)} records.")
         print(f"   Head:\n{df.head(3)}")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- demo fallback: any fetch failure (network, yfinance, cache) falls back to synthetic data
         print(f"   Failed to fetch data: {e}")
         print("   -> Creating synthetic data for demonstration purposes.")
         dates = pd.date_range(start, end, freq="B") # Business days
@@ -46,7 +49,7 @@ def main():
         rets = log_returns(prices_arr)
         print(f"\n2. Computed {len(rets)} log returns.")
         print(f"   First 5 returns: {rets[:5]}")
-    except Exception as e:
+    except InvalidInputError as e:
         print(f"   Error computing returns: {e}")
         return
 

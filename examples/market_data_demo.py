@@ -36,7 +36,7 @@ def main():
         df1 = get_prices(ticker, start, end, cache_dir=CACHE_DIR)
         print(f"   Got {len(df1)} rows in {time.time() - start_t:.2f}s")
         print(f"   Head:\n{df1.head(2)}")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- demo: report any fetch failure (network or yfinance) and exit cleanly
         print(f"   Error fetching data: {e}. (This could be network or yfinance issue)")
         return
 

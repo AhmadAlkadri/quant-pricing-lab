@@ -1,7 +1,9 @@
 from qpl.engines.analytic.black_scholes import bs_price, implied_volatility
+from qpl.exceptions import InvalidInputError
 from qpl.instruments.options import EuropeanOption
 from qpl.market.curves import FlatDividendCurve, FlatRateCurve
 from qpl.market.market import Market
+
 
 def main():
     print("--- Implied Volatility Solver Demo ---")
@@ -37,7 +39,7 @@ def main():
         print(f"Implied Vol: {iv:.6f}")
         print(f"Error:       {iv - sigma_true:.2e}")
         
-    except Exception as e:
+    except (InvalidInputError, RuntimeError) as e:
         print(f"Solver failed: {e}")
         
     # 4. Demonstrate Sensitivity

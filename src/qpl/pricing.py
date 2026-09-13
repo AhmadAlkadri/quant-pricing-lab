@@ -17,7 +17,6 @@ from .engines.pde.pricers import (
     greeks_european as greeks_european_pde,
     price_european as price_european_pde,
 )
-
 from .exceptions import InvalidInputError, NotSupportedError
 from .instruments.options import EuropeanOption
 from .market.market import Market

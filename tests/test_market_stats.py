@@ -9,8 +9,10 @@ import pytest
 pytest.importorskip("pandas")
 
 import numpy as np
-from qpl.market.stats import log_returns, realized_volatility, rolling_realized_volatility
+
 from qpl.exceptions import InvalidInputError
+from qpl.market.stats import log_returns, realized_volatility, rolling_realized_volatility
+
 
 def test_log_returns_basic():
     """Test log returns calculation on simple inputs."""

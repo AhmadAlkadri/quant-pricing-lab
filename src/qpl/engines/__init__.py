@@ -1,3 +1,3 @@
-from .base import PriceResult, GreeksResult
+from .base import GreeksResult, PriceResult
 
-__all__ = ["PriceResult", "GreeksResult"]
+__all__ = ["GreeksResult", "PriceResult"]

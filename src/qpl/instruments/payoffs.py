@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Union
 import numpy as np
 
-ArrayLike = Union[float, int, np.ndarray]
+ArrayLike = float | int | np.ndarray
 
 
 def call_payoff(S: ArrayLike, K: float) -> ArrayLike:

@@ -1,9 +1,11 @@
 import pytest
-from qpl.engines.analytic.black_scholes import implied_volatility, bs_price
-from qpl.instruments.options import EuropeanOption
-from qpl.market.curves import FlatRateCurve, FlatDividendCurve
-from qpl.market.market import Market
+
+from qpl.engines.analytic.black_scholes import bs_price, implied_volatility
 from qpl.exceptions import InvalidInputError
+from qpl.instruments.options import EuropeanOption
+from qpl.market.curves import FlatDividendCurve, FlatRateCurve
+from qpl.market.market import Market
+
 
 def test_implied_vol_call_recovery():
     """Verify we can recover sigma for a Call."""

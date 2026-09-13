@@ -117,10 +117,10 @@ def get_prices(
 
             print(f"[MarketData] Loaded {ticker} from cache: {cache_path}")
             return df
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 -- any cache-read failure (corrupt/partial
+            # parquet file, schema drift) should fall through to a clean refetch below.
             print(f"[MarketData] Cache load failed, refetching. Error: {e}")
             # If cache is corrupted, proceed to fetch
-            pass
 
     # 2. Fetch from network
     print(f"[MarketData] Fetching {ticker} from {source}...")
@@ -137,7 +137,7 @@ def get_prices(
         )
 
         if df.empty:
-            raise IOError(f"No data found for {ticker} from {source}")
+            raise OSError(f"No data found for {ticker} from {source}")
 
         # Ensure we have a Close column
         if "Close" not in df.columns:
@@ -145,7 +145,7 @@ def get_prices(
             if "Adj Close" in df.columns:
                 df = df.rename(columns={"Adj Close": "Close"})
             elif "Close" not in df.columns:
-                 raise IOError(f"Data for {ticker} missing 'Close' column")
+                 raise OSError(f"Data for {ticker} missing 'Close' column")
 
         # 3. Save to cache
         # Use parquet for efficiency and type preservation
@@ -154,5 +154,6 @@ def get_prices(
 
         return df
 
-    except Exception as e:
-        raise IOError(f"Failed to fetch data for {ticker}: {e}")
+    except Exception as e:  # noqa: BLE001 -- deliberately translates any fetch failure
+        # (network, yfinance, parquet write) into the single documented OSError below.
+        raise OSError(f"Failed to fetch data for {ticker}: {e}")

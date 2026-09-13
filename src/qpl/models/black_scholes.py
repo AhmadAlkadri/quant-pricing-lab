@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Union
 
 import numpy as np
 from scipy.special import erf
 
 from ..exceptions import InvalidInputError
 
-ArrayLike = Union[float, int, np.ndarray]
+ArrayLike = float | int | np.ndarray
 
 
 @dataclass(frozen=True)

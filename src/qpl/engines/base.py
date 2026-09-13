@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 
-
 class PricingEngine(Protocol):
     def price(self, instrument: Any, model: Any) -> float: ...
 

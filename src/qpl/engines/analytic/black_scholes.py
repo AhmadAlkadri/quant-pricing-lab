@@ -9,7 +9,6 @@ from ...models.black_scholes import BlackScholesModel, bs_price
 from ..base import GreeksResult, PriceResult
 
 
-
 def _norm_cdf(x: float) -> float:
     # TODO(CDF-DUP): unify with qpl.models.black_scholes._norm_cdf (vectorized).
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
@@ -199,5 +198,7 @@ def implied_volatility(
     try:
         iv = brentq(objective, lower, upper, xtol=tol, maxiter=max_iter)
         return float(iv)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- deliberately translates any brentq failure
+        # mode into the single documented RuntimeError below, rather than leaking
+        # whichever exception type scipy happens to raise; not swallowed, re-raised.
         raise RuntimeError(f"Implied vol solver failed: {e}")

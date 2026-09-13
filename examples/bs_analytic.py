@@ -5,7 +5,6 @@ from qpl.models.black_scholes import BlackScholesModel
 from qpl.pricing import greeks, price
 
 
-
 def main() -> None:
     option = EuropeanOption(kind="call", strike=100.0, expiry=1.0)
     model = BlackScholesModel(sigma=0.2)

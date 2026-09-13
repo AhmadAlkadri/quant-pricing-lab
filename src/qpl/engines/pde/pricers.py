@@ -189,7 +189,7 @@ def price_european(
 
     if cfg.strike_alignment == "midpoint":
         # Nearest half-integer node position for the strike; see the docstring.
-        j = max(int(round(k / ds - 0.5)), 0)
+        j = max(round(k / ds - 0.5), 0)
         ds = k / (j + 0.5)
         s_max = ds * n_s
 

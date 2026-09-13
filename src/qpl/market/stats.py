@@ -8,15 +8,15 @@ so importing this module never requires the optional `data` extra; a clear
 without pandas installed.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence, Union
 
 import numpy as np
 
 from qpl.exceptions import InvalidInputError, NotSupportedError
 
 
-def log_returns(prices: Union[Sequence[float], np.ndarray]) -> np.ndarray:
+def log_returns(prices: Sequence[float] | np.ndarray) -> np.ndarray:
     """
     Compute logarithmic returns from a price series.
 
@@ -52,7 +52,7 @@ def log_returns(prices: Union[Sequence[float], np.ndarray]) -> np.ndarray:
 
 
 def realized_volatility(
-    returns: Union[Sequence[float], np.ndarray],
+    returns: Sequence[float] | np.ndarray,
     *,
     annualization: float = 252.0,
     demean: bool = True
@@ -86,15 +86,14 @@ def realized_volatility(
     if len(r) == 0:
         raise InvalidInputError("Returns array cannot be empty.")
     
-    if len(r) == 1:
-        # Std of 1 point is technically 0 (or undefined depending on ddof), 
-        # but let's return 0.0 for single return to be safe, or raise?
-        # Standard deviation of 1 point with ddof=1 is NaN.
-        # Let's enforce specific behavior: need at least 2 points for sample std?
-        # If demean=False, 1 point is fine.
-        if demean:
-             return 0.0 # Or raise? 0.0 seems safer for degenerate case
-        
+    if len(r) == 1 and demean:
+        # Std of 1 point is technically 0 (or undefined depending on ddof), but
+        # let's return 0.0 for single return to be safe, or raise? Standard
+        # deviation of 1 point with ddof=1 is NaN. Let's enforce specific
+        # behavior: need at least 2 points for sample std? If demean=False, 1
+        # point is fine.
+        return 0.0 # Or raise? 0.0 seems safer for degenerate case
+
     if demean:
         # std(ddof=1) is unbiased estimator for sample
         # If len=1, std yields nan.
@@ -119,7 +118,7 @@ def realized_volatility(
 
 
 def rolling_realized_volatility(
-    prices: Union[Sequence[float], np.ndarray],
+    prices: Sequence[float] | np.ndarray,
     window: int,
     *,
     annualization: float = 252.0,
@@ -226,7 +225,7 @@ class NormalParams:
     sigma_annual: float
 
 def fit_normal_returns(
-    returns: Union[Sequence[float], np.ndarray],
+    returns: Sequence[float] | np.ndarray,
     *,
     annualization: float = 252.0
 ) -> NormalParams:

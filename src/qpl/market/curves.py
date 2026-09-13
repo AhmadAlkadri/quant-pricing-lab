@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from ..exceptions import InvalidInputError
 
 
-
 @dataclass(frozen=True)
 class FlatRateCurve:
     rate: float

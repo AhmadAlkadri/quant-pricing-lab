@@ -1,9 +1,10 @@
-from qpl.engines.mc.pricers import MCConfig, greeks_european
 from qpl.engines.analytic.black_scholes import greeks_european as greeks_analytic
+from qpl.engines.mc.pricers import MCConfig, greeks_european
 from qpl.instruments.options import EuropeanOption
 from qpl.market.curves import FlatDividendCurve, FlatRateCurve
 from qpl.market.market import Market
 from qpl.models.black_scholes import BlackScholesModel
+
 
 def test_mc_theta_vs_analytic():
     """
