@@ -1,5 +1,109 @@
 # Steering Brief
 
+What changed in Slice 3 (files + bullets)
+
+Phase 1's last scheduled item: the Leisen-Reimer lattice, order 2 for European
+payoffs, and a careful account of the three places that order 2 does *not*
+reach. Still on `dev/curriculum`; not pushed.
+
+- `src/qpl/engines/tree/lattice.py`, `src/qpl/engines/tree/pricers.py`,
+  `src/qpl/engines/tree/american.py`, `src/qpl/engines/tree/__init__.py`:
+  - `TreeConfig(scheme="leisen-reimer")` prices European and American vanillas
+    and their Greeks through the existing `method="tree"` dispatch. The lattice
+    builder is the only place that knows the scheme -- every pricer, the
+    Bellman step and the Greek estimators read only `up`, `down`, `p`,
+    `discount`.
+  - New: `peizer_pratt_inversion` (**method 2**, the variant with the
+    `0.1/(n+1)` term), `leisen_reimer_parameters`, and
+    `lattice_parameters(scheme=...)`. `CRRLattice` -> `BinomialLattice`, plus a
+    `spot_centred` field.
+  - `p = h(d2, n)`, `p' = h(d1, n)`, `u = e^{(r-q)dt} p'/p`,
+    `d = (e^{(r-q)dt} - p u)/(1 - p)`. The second form (rather than the equal
+    `e^{(r-q)dt}(1-p')/(1-p)`) reprices the forward to round-off, which is what
+    makes parity exact on the lattice.
+  - No no-arbitrage check needed: `d1 > d2` and `h` increasing give `p' > p`,
+    which *is* `d < growth < u`.
+  - **CRR is bit-for-bit unchanged** -- 168 prices and Greek tuples diffed
+    against the previous commit.
+- **Even `n` is rejected**, not rounded up, and the reason is measured rather
+  than asserted. `P(Bin(n,p) > n/2)` counts a whole number of outcomes only for
+  odd `n`. QuantLib rounds up inside the tree but not inside the engine's time
+  grid, and its even-`n` price is an **order-1** approximation: ATM call error
+  -1.330e-02 at `n=800` against -5.518e-07 at `n=801`, a factor of 24 000. A
+  20-line mirror reproduces ~95% of that error, which identifies the mechanism.
+- `tests/test_tree_leisen_reimer.py` (123 tests, 0.5 s),
+  `tests/test_tree_lr_convergence.py` (20 tests, 0.3 s),
+  `tests/oracle/test_lr_vs_quantlib.py` (23 tests, 0.8 s),
+  `docs/notes/leisen_reimer.md`:
+  - **European order 1.9840** (residual 0.0087) at the money; **1.9842** and
+    **1.9709** at the two off-money points where CRR's fit was 1.21-1.48 with
+    residuals 0.37-1.52 in *both* engines. Errors 507x/35x/1137x smaller than
+    CRR's at `n=101` and 3966x/2673x/5229x at `n=801`.
+  - **No oscillation, measured**: over `n = 101..121` the CRR error changes
+    sign 20 times; the LR error on the odd counts there is one-signed and
+    monotone.
+  - **American order 1.0641** (residual 0.0176) against CRR's 0.9872 -- order
+    1, as expected, because the boundary error does not care about the terminal
+    grid. Constant 3.79x-4.97x better, and *opposite sign*: LR below the limit
+    at every `n`, CRR above, so the two schemes bracket it at a shared `n`.
+  - **Richardson still fails on American**: 1.3423 with residual 0.7187 and
+    non-monotone extrapolated errors. On European it works well (2.9577, error
+    1.465e-09 at the (401,801) pair), which is the contrast worth keeping.
+  - Oracle: European agreement with QuantLib's `leisenreimer` to **2.71e-11**,
+    American to **7.3e-12**, and 1.52e-04 against its FD engine (half Slice 2's
+    3.71e-04 for CRR at the same `n`). Two QuantLib quirks pinned: the even-`n`
+    behaviour, and isolated `n` (501, 1601, 8001) where its American LR leaves
+    its own convergence curve by up to 9.5e-03 while ours stays on it.
+- **Four contradicted expectations, all encoded rather than smoothed over:**
+  1. The slice expected lattice **delta at order ~2** at the money. Measured
+     **1.00**, and so are gamma and theta, at three points and both kinds. The
+     estimators read levels 1 and 2 and use the result at level 0; that `O(dt)`
+     substitution dominates the `O(1/n^2)` price error. No lattice fixes it --
+     an extended tree below the root would.
+  2. The fallback -- "at least the Greek constants improve" -- is false for
+     delta and gamma, whose LR errors sit **between** CRR's odd and even
+     errors. Theta improves 4x-14x, vega 3x-32x, rho 190x-5000x. A first draft
+     of this claim in a docstring said "twelve times better delta"; it was
+     wrong, was corrected in its own commit, and is now asserted by a test
+     rather than narrated.
+  3. The LR **vega error is flat** at 3.06e-03 across `n` in {101..801}: the
+     `O(h^2)` bias of `VEGA_BUMP=1e-2` is now the binding term, having been
+     invisible under CRR's oscillation. `VEGA_BUMP` should be re-measured per
+     scheme in a later slice.
+  4. The American order is 1.06, not 2 -- anticipated by the slice statement,
+     and confirmed rather than forced.
+- **One real bug, surfaced by `u d != 1`.** `lattice_delta_gamma_theta` read
+  theta as `(V(2,1) - V(0,0))/(2 dt)`, a pure time difference only when
+  `S(2,1) = S0`. On an LR lattice the offset is 4.6e-02 at `S=100, K=120,
+  n=801`; uncorrected the theta error is **5.235** at a fitted order of
+  **-0.002** (it does not converge) while looking plausible. Subtracting the
+  second-order Taylor expansion in spot restores order **1.000**. Applied only
+  when `spot_centred` is False, so CRR theta is untouched.
+- `src/qpl/cases/*`: three European order-2 rows, three American rows (order,
+  bracketing, Richardson negative finding), `AMERICAN_BRACKETED_LIMIT`,
+  `TREE_LR_REFERENCE_N_STEPS=2001`, `TREE_LR_KNOWN_VALUE_TOLERANCE=2.5e-7`.
+  The cross-engine test is now **five** legs and asserts the order gap: at 2001
+  steps against CRR's 2000, the LR error must be >= 1000x smaller (measured
+  11 000x).
+- `examples/tree_convergence.py --scheme {crr,leisen-reimer}`; default output
+  byte-for-byte unchanged. `tests/test_examples_smoke.py` now carries
+  `(script, args, keys)` triples so one example can have several curated
+  invocations.
+- Cross-platform hygiene (requested mid-slice): the Slice 1 pinned pre-refactor
+  American values compared with `==` and failed on Linux CI by 2 ULP. Relaxed
+  to `math.isclose(rel_tol=1e-12)`, and the `atm_1y_american_put_reference` row
+  tolerance from 1e-12 to 1e-10 -- measured with `math.nextafter`, a one-ULP
+  nudge to `u` moves the `n=8001` American put by 6.7e-13, so 1e-12 was inside
+  the platform noise. Genuinely same-process identities were left exact.
+
+## Phase 1 is complete
+
+Remaining Phase 1 items are **deferred, not scheduled**: a Bermudan instrument
+(no second case wants one) and trinomial trees (no case forces one -- LR gets
+order 2 with no extra machinery). Next is Phase 2, PDE rigor.
+
+---
+
 What changed in Slice 2 (files + bullets)
 
 The rest of Phase 1's American half: exercise style becomes an instrument

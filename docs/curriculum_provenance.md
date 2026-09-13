@@ -93,7 +93,8 @@ no book prose, only provenance: lab notebook -> `src/qpl` changes -> test covera
   - `src/qpl/cases/european_black_scholes.py` (tree convergence-order rows)
 - Key functions/classes added:
   - `MethodSpec`, `register`, `resolve_price`, `resolve_greeks`, `method_spec`
-  - `CRRLattice`, `crr_parameters`, `crr_spot_level`, `TreeConfig`,
+  - `CRRLattice` (Slice 3: renamed `BinomialLattice`, since it is no longer
+    CRR-only), `crr_parameters`, `crr_spot_level`, `TreeConfig`,
     `price_european`, `greeks_european`
   - `TREE_ORDER_CASES`, `TREE_REFERENCE_N_STEPS`, `TREE_KNOWN_VALUE_TOLERANCE`
 - New tests added:
@@ -126,6 +127,35 @@ no book prose, only provenance: lab notebook -> `src/qpl` changes -> test covera
   - `docs/notes/crr_tree_convergence.md` (Cox/Ross/Rubinstein 1979 for the
     lattice and the replication argument; Leisen & Reimer 1996 for the order-1
     result and the oscillation)
+
+### Phase 1 Slice 3 - Leisen-Reimer, and what order 2 does not buy
+
+- Driven by: the Phase 1 Leisen-Reimer slice, motivated by Slice 2's finding
+  that Richardson extrapolation does not restore order 2 for an American put.
+- New/modified `src/` modules:
+  - `src/qpl/engines/tree/lattice.py` (the Peizer-Pratt inversion, the
+    Leisen-Reimer parameters, the scheme dispatcher; `CRRLattice` renamed
+    `BinomialLattice` and given `spot_centred`)
+  - `src/qpl/engines/tree/pricers.py` (`TreeConfig.scheme` widened; odd-`n`
+    validation; the off-centre theta correction)
+  - `src/qpl/engines/tree/american.py`, `src/qpl/engines/tree/__init__.py`
+  - `src/qpl/cases/european_black_scholes.py`,
+    `src/qpl/cases/american_black_scholes.py`
+- Key functions/classes added:
+  - `peizer_pratt_inversion`, `leisen_reimer_parameters`, `lattice_parameters`
+  - `BinomialLattice`, `Scheme`, `SCHEMES`
+  - `TREE_LR_ORDER_CASES`, `TREE_LR_REFERENCE_N_STEPS`,
+    `TREE_LR_KNOWN_VALUE_TOLERANCE`, `AMERICAN_LR_CASES`,
+    `AMERICAN_LR_LEVELS`, `AMERICAN_BRACKETED_LIMIT`
+- New tests added:
+  - `tests/test_tree_leisen_reimer.py`, `tests/test_tree_lr_convergence.py`,
+    `tests/oracle/test_lr_vs_quantlib.py`
+- Derivation note (own words, citations only):
+  - `docs/notes/leisen_reimer.md` (Leisen & Reimer 1996 for the construction
+    and the odd-`n` requirement; Peizer & Pratt 1968 for the tail
+    approximation that is inverted). The formulas are restated from the
+    construction, and every number in the note was measured in this
+    repository.
 
 ## Chapter 5 - Numerical Solution Of Linear Systems
 

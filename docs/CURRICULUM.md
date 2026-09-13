@@ -119,14 +119,23 @@ unknowns stay unknown.
   European.~~ **Delivered in Slice 2** (see below).
 - ~~Tree Greeks are read from the lattice.~~ **Delivered in Slice 1** for
   European payoffs and **Slice 2** for American ones.
-- Leisen-Reimer smoothing is checked by measured order 2. Still open, and now
-  better motivated: Slice 2 measured that Richardson extrapolation, the cheap
-  alternative, does *not* restore order 2 for an American put.
+- ~~Leisen-Reimer smoothing is checked by measured order 2.~~ **Delivered in
+  Slice 3** (see below): measured 1.9840 at the money and 1.9709-1.9842 off
+  it, with no odd/even oscillation. The Slice 2 motivation held up -- and the
+  slice also measured that Leisen-Reimer does *not* rescue the American order
+  or the lattice Greeks, for reasons that are now written down.
 - A Bermudan exercise schedule, if a case needs one. Slice 2 found that the
   Longstaff-Schwartz Table 1 benchmark is a 50-exercise-date Bermudan value,
   and reproduced it with a restriction applied in the test rather than by
   adding an instrument; if a second case wants it, that is when the instrument
-  earns its place.
+  earns its place. Still open; no second case yet.
+- **Trinomial trees: deferred, not scheduled.** Leisen-Reimer reaches order 2
+  for European payoffs with no extra machinery, and a trinomial lattice would
+  be a third parameterisation with no case demanding it. It comes back onto
+  the plan only if a case forces it -- a barrier that needs a node on the
+  barrier, most likely.
+
+**Phase 1 is complete** apart from those two deferred items.
 - ~~Forces ADR-0005: an engine registry keyed by `(instrument, model, method)`
   replacing the `isinstance` ladder in `qpl.pricing`.~~ **Delivered in
   Slice 1**; ADR-0005 accepted.
@@ -334,6 +343,98 @@ unknowns stay unknown.
   and its negative twin, two exact identities, three premium bounds/orderings,
   and the in-repo reference value 6.0905564143067235 at `n = 8001` (whose
   `source` says in as many words that it is **not** a published table value).
+
+### Slice 3
+- `TreeConfig(scheme="leisen-reimer")` prices European and American vanillas,
+  and their Greeks, through the same `method="tree"` dispatch. The lattice
+  builder is the only place that knows the scheme; `qpl.engines.tree.lattice`
+  gains `peizer_pratt_inversion`, `leisen_reimer_parameters` and the
+  `lattice_parameters(scheme=...)` dispatcher, and `CRRLattice` becomes
+  `BinomialLattice` with a `spot_centred` flag. CRR is **bit-for-bit
+  unchanged** (168 prices and Greek tuples diffed against the previous commit).
+- The construction, derived and cited rather than copied: `p = h(d2, n)`,
+  `p' = h(d1, n)` from the **Peizer-Pratt method-2** inversion (the variant
+  carrying the `0.1/(n+1)` term), then `u = e^{(r−q)dt} p'/p` and
+  `d = (e^{(r−q)dt} − p u)/(1 − p)`. The second form is chosen so the one-step
+  forward is repriced to round-off, which is what makes parity exact
+  (residual <= 9.7e-12 at `n = 2001`). No-arbitrage is automatic: `d1 > d2`
+  and `h` increasing give `p' > p`, which *is* `d < e^{(r−q)dt} < u`.
+- **Even `n` is rejected**, with `InvalidInputError`, not rounded up. The
+  binomial tail `P(Bin(n,p) > n/2)` counts a whole number of outcomes only for
+  odd `n`. The decision is backed by measurement, not taste: QuantLib rounds
+  up inside the tree but not inside the engine's time grid, and its even-`n`
+  price is an **order-1** approximation -- ATM call error −1.330e-02 at
+  `n = 800` against −5.518e-07 at `n = 801`, a factor of 24 000.
+- **Measured**, European, `S = K = 100, r = 5%, q = 0, sigma = 20%, T = 1`,
+  odd `n` in `{25, 51, 101, 201, 401, 801}`:
+  - Fitted order **1.9840**, log-space RMS residual **0.0087**; `n²·|err|`
+    settles at **0.354**. Error at `n = 801`: **5.52e-07** against CRR's
+    2.188e-03, a factor of **3966** (507x at `n = 101`).
+  - Off the money, at the two points where CRR's constant is erratic in both
+    engines: **1.9842** (residual 0.0086) and **1.9709** (0.0154). Order 2
+    survives where CRR's fit was 1.21-1.48 with residuals 0.37-1.52.
+  - The orders sit consistently just *below* 2, and the residuals an order of
+    magnitude above CRR's, because the Peizer-Pratt tail match is high but
+    finite order. Recorded rather than rounded away.
+  - **No oscillation, measured directly**: over `n = 101…121` the CRR error
+    changes sign 20 times; the Leisen-Reimer error on the odd counts in the
+    same range is one-signed and monotone.
+  - Richardson with `n²` weights: fitted **2.9577**, error 1.465e-09 at the
+    (401, 801) pair.
+- **Measured**, American put, same point, against the bracketed limit
+  6.090376463020103: order **1.0641** (residual 0.0176) against CRR's 0.9872.
+  **Order 1, as expected** -- the dominant error is the early-exercise
+  boundary, resolved only to the node spacing, which does not care how the
+  terminal grid was chosen. What the scheme buys is a constant 3.79x-4.97x
+  better and the *opposite sign*: Leisen-Reimer approaches from below at every
+  `n`, CRR from above, so the two bracket the value at a shared `n`.
+  Richardson re-measured and **still fails**: 1.3423 with residual 0.7187 and
+  non-monotone extrapolated errors.
+- **Three contradicted expectations, all encoded:**
+  - The slice expected lattice **delta at about order 2** at the money.
+    Measured **1.00** (0.996-1.000 across three points and both kinds), and so
+    are gamma and theta. Delta, gamma and theta are read at time levels 1 and
+    2 and used at time 0; that `O(dt)` substitution dominates the `O(1/n²)`
+    price error and no lattice can fix it.
+  - The fallback -- "at least the Greek *constants* improve" -- is false for
+    two of the five. The Leisen-Reimer delta and gamma errors sit **between**
+    CRR's odd and even errors, beating one parity and losing to the other.
+    Theta improves 4x-14x, vega 3x-32x, rho 190x-5000x (vega and rho because
+    they are bump-and-revalue and CRR's oscillation does not cancel between
+    the two bumped prices).
+  - The Leisen-Reimer **vega error is flat** at 3.06e-03 across
+    `n` in {101 … 801}: it has stopped being discretisation error, and what is
+    left is the `O(h²)` bias of `VEGA_BUMP = 1e-2`, previously invisible under
+    CRR's oscillation.
+- **One real bug, found because `u d != 1`.** The shared lattice Greek
+  estimator read theta as `(V(2,1) − V(0,0))/(2 dt)`, which is a pure time
+  difference only when `S(2,1) = S0`. On a Leisen-Reimer lattice the offset is
+  4.6e-02 at `S=100, K=120, n=801`, and the uncorrected theta error is
+  **5.235** with a fitted order of **−0.002** -- it does not converge, while
+  returning a plausible number. Subtracting the second-order Taylor expansion
+  in spot restores order **1.000**. Applied only when the lattice is not
+  spot-centred, so CRR's theta is unchanged.
+- Oracle: the expectation that QuantLib would agree "near round-off" **holds**
+  this time -- worst European residual **2.71e-11** over `n` in {51, 201, 801}
+  at two points and both kinds, and **7.3e-12** for the American put. Against
+  `FdBlackScholesVanillaEngine(3200, 3200)` the gap is **1.52e-04**, less than
+  half Slice 2's 3.71e-04 for CRR at the same `n`. Two QuantLib quirks pinned
+  as negative findings: the even-`n` behaviour above, and isolated `n`
+  (501, 1601, 8001) at which its American Leisen-Reimer leaves its own
+  convergence curve by up to 9.5e-03 while this package's value stays on it.
+- `qpl.cases`: three `CONVERGENCE_ORDER` rows for the European order-2 claim
+  (ATM plus the two erratic-CRR points), three American rows (order, the
+  bracketing, and the Richardson negative finding), the exported
+  `AMERICAN_BRACKETED_LIMIT`, and `TREE_LR_REFERENCE_N_STEPS = 2001` with
+  `TREE_LR_KNOWN_VALUE_TOLERANCE = 2.5e-7`. The cross-engine test now prices
+  each known-value row **five** ways and asserts the order gap: at 2001 steps
+  against CRR's 2000, the Leisen-Reimer error must be at least 1000x smaller
+  (measured 11 000x).
+- `examples/tree_convergence.py --scheme {crr,leisen-reimer}`; the default
+  output is byte-for-byte unchanged, and the smoke harness now carries
+  `(script, args, keys)` triples so one example can have several curated
+  invocations.
+- Full tables and the derivation: `docs/notes/leisen_reimer.md`.
 
 ## Reconciled old roadmap
 

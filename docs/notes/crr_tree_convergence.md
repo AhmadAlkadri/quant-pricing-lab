@@ -169,15 +169,36 @@ vega is two to three orders of magnitude coarser relative to its own size than
 delta is. Bumping `r` leaves the lattice geometry alone, and rho is much
 better behaved.
 
-## What Leisen-Reimer will fix
+## What Leisen-Reimer fixes (Slice 3), and what it does not
 
 Leisen and Reimer (1996) keep the recombining binomial structure but choose
 `u`, `d` and `p` from an inversion of a normal approximation to the binomial
 (Peizer-Pratt), with the tree built so that the strike sits centrally in the
-terminal distribution by construction for odd `n`. That removes the term that
-was oscillating and raises the measured order to 2. It is a later slice; this
-note stops at CRR deliberately, because the oscillation is worth measuring
-before it is engineered away.
+terminal distribution by construction for odd `n`. This note stopped at CRR
+deliberately, because the oscillation is worth measuring before it is
+engineered away; `docs/notes/leisen_reimer.md` now does the engineering and
+the measuring. Available as `TreeConfig(scheme="leisen-reimer")`.
+
+The headline numbers, so that the comparison is on this page too. Same ATM
+reference point, same odd grid `n` in {25, 51, 101, 201, 401, 801}:
+
+| claim | CRR | Leisen-Reimer |
+|---|---|---|
+| European order (ATM) | 1.0010 odd / 0.9987 even | **1.9840**, one sequence |
+| European order off the money | 1.21-1.48, residual 0.37-1.52 | **1.9709-1.9842**, residual < 0.016 |
+| ATM error at `n = 801` | 2.188e-03 | **5.52e-07** (3966x smaller) |
+| sign of the error | flips with the parity of `n` | one-signed and monotone |
+| American put order | 0.9872 | 1.0641 — **still order 1** |
+| American error at `n = 801` | +1.820e-03 | −3.663e-04 (4.97x, other side) |
+| Richardson, European | 1.9590 | 2.9577 |
+| Richardson, American | 0.2960 / 0.6447 | 1.3423 — **still fails** |
+| lattice delta/gamma order | ~1 | **still ~1** |
+
+The three "still" rows are the point of reading both notes. Leisen-Reimer
+fixes the error in the *terminal distribution*; it does nothing for the error
+in the early-exercise boundary (American) or for reading a derivative one time
+level away from the root (Greeks), because neither has anything to do with
+where the strike sits among the terminal nodes.
 
 ## Reproducing
 
@@ -201,7 +222,8 @@ fitting is `qpl.validation.fit_convergence_order`.
 - Leisen, D. and Reimer, M. (1996). "Binomial models for option valuation --
   examining and improving convergence". *Applied Mathematical Finance* 3(4),
   319-346. The order-1 result for CRR, the oscillation, and the construction
-  that removes it.
+  that removes it; the construction is derived and measured in
+  `docs/notes/leisen_reimer.md`.
 
 Everything above was re-derived and re-measured here; no prose, code, table or
 example sequence is taken from either source.
