@@ -100,6 +100,7 @@ from .engines.tree.pricers import (
     greeks_european as greeks_european_tree,
     price_european as price_european_tree,
 )
+from .exceptions import NotSupportedError
 from .instruments.options import (
     AmericanOption,
     AsianOption,
@@ -108,8 +109,51 @@ from .instruments.options import (
     EuropeanOption,
 )
 from .models.black_scholes import BlackScholesModel
+from .models.heston import HestonModel
 
 Method = Literal["analytic", "fourier", "mc", "pde", "tree"]
+
+
+def _heston_refusal(method: str, reason: str):
+    """An engine callable that refuses Heston for `method`, naming the route."""
+
+    def refuse(instrument: Any, model: Any, market: Any, **kwargs: Any):
+        raise NotSupportedError(
+            f"method='{method}' has no Heston engine: {reason}. Use "
+            "method='fourier' (COS by default; also 'carr_madan', 'lewis' and "
+            "'gil_pelaez'), which prices Heston through its characteristic "
+            "function."
+        )
+
+    return refuse
+
+
+_HESTON_REFUSAL_REASONS = (
+    (
+        ANALYTIC_METHOD_SPEC,
+        "the Heston call has no elementary closed form, only a Fourier integral",
+    ),
+    (
+        MC_METHOD_SPEC,
+        "simulating Heston needs a variance scheme (Andersen's QE), which is a "
+        "later slice",
+    ),
+    (
+        PDE_METHOD_SPEC,
+        "Heston is a two-dimensional PDE with a mixed derivative term, which "
+        "this package's one-factor grid does not solve",
+    ),
+    (
+        TREE_METHOD_SPEC,
+        "a recombining lattice needs one state variable and Heston has two",
+    ),
+)
+"""Why each non-transform method refuses Heston, as data for the messages."""
+
+_HESTON_REFUSALS = tuple(
+    (spec, _heston_refusal(spec.method, reason))
+    for spec, reason in _HESTON_REFUSAL_REASONS
+)
 
 
 def _register_builtin_engines() -> None:
@@ -311,6 +355,43 @@ def _register_builtin_engines() -> None:
         greeks=greeks_barrier_pde,
     )
 
+    # Slice 15: Heston. The first model in this package that is not
+    # Black-Scholes, and the check on whether Slice 14's interface was real:
+    # `HestonModel` implements `characteristic_function` and
+    # `log_return_cumulants` and nothing else, so the four transform methods
+    # price under it with no engine change at all -- the two lines below are
+    # the entire pricing-side cost.
+    for instrument_type in (EuropeanOption, DigitalOption):
+        register(
+            instrument_type=instrument_type,
+            model_type=HestonModel,
+            spec=FOURIER_METHOD_SPEC,
+            price=(
+                price_european_fourier
+                if instrument_type is EuropeanOption
+                else price_digital_fourier
+            ),
+            greeks=(
+                greeks_european_fourier
+                if instrument_type is EuropeanOption
+                else greeks_digital_fourier
+            ),
+        )
+    # The other four methods are registered with callables that always raise.
+    # Not registering would give "Unsupported instrument/model/market
+    # combination", which is true but tells a caller nothing about the route
+    # that does work or about which slice will open the one they asked for.
+    # Same registered-and-raising pattern as the Slice 6 MC digital Greeks.
+    for spec, refusal in _HESTON_REFUSALS:
+        for instrument_type in (EuropeanOption, DigitalOption):
+            register(
+                instrument_type=instrument_type,
+                model_type=HestonModel,
+                spec=spec,
+                price=refusal,
+                greeks=refusal,
+            )
+
 
 _register_builtin_engines()
 
@@ -332,7 +413,9 @@ def price(
         `AmericanOption` by `method="tree"`, `method="pde"` and (Slice 11,
         least-squares Monte Carlo on a Bermudan exercise grid) `method="mc"`.
     model
-        Model instance. Currently `BlackScholesModel` is supported.
+        Model instance. `BlackScholesModel` for every method; `HestonModel`
+        (Slice 15) for `method="fourier"` only -- the other four refuse it with
+        a message naming the transform route.
     market
         Market instance. Currently `Market` is supported.
     method
@@ -380,7 +463,9 @@ def greeks(
         `AmericanOption` by `method="tree"` and `method="pde"`;
         `method="mc"` prices one but refuses its Greeks.
     model
-        Model instance. Currently `BlackScholesModel` is supported.
+        Model instance. `BlackScholesModel` for every method; `HestonModel`
+        for `method="fourier"` only (delta and gamma closed form, vega taken
+        with respect to `sqrt(v0)`).
     market
         Market instance. Currently `Market` is supported.
     method

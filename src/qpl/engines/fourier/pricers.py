@@ -31,7 +31,7 @@ that it still is one. The refusal names the limit and points at `method="analyti
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from ...exceptions import InvalidInputError, NotSupportedError
@@ -524,10 +524,12 @@ def _carr_madan_value(
     )
 
 
-def _meta(cfg: FourierConfig, extra: dict[str, Any], instrument: str) -> dict[str, Any]:
+def _meta(
+    cfg: FourierConfig, extra: dict[str, Any], instrument: str, model: Any = None
+) -> dict[str, Any]:
     meta: dict[str, Any] = {
         "method": "fourier",
-        "model": "BlackScholes",
+        "model": "BlackScholes" if model is None else type(model).__name__,
         "instrument": instrument,
     }
     meta.update(extra)
@@ -546,7 +548,39 @@ def price_european(
     value, extra = transform_value(
         inputs, cfg, strike=option.strike, kind=option.kind
     )
-    return PriceResult(value=value, meta=_meta(cfg, extra, "european"))
+    return PriceResult(value=value, meta=_meta(cfg, extra, "european", model))
+
+
+VEGA_UNITS = {"sigma": "d/d_sigma", "spot_volatility": "d/d_sqrt(v0)"}
+"""What "vega" means for a model, keyed by how the bump is taken.
+
+Black-Scholes has one volatility and bumping it is unambiguous. Heston has
+`v0`, `theta` and `xi`, and the derivative this package reports is with respect
+to the *spot volatility* `sqrt(v0)` -- the quantity that plays the role
+Black-Scholes' `sigma` plays -- so that the two are comparable numbers. The
+model decides, through `with_volatility_bump`; the metadata says which was used.
+"""
+
+
+def _volatility_bumps(model: Any) -> tuple[Any, Any] | None:
+    """The two bumped models a vega needs, or `None` if the model has no vol."""
+    if hasattr(model, "with_volatility_bump"):
+        return (
+            model.with_volatility_bump(VEGA_BUMP),
+            model.with_volatility_bump(-VEGA_BUMP),
+        )
+    if hasattr(model, "sigma"):
+        return (
+            replace(model, sigma=model.sigma + VEGA_BUMP),
+            replace(model, sigma=model.sigma - VEGA_BUMP),
+        )
+    return None
+
+
+def _vega_units(model: Any) -> str:
+    if hasattr(model, "with_volatility_bump"):
+        return VEGA_UNITS["spot_volatility"]
+    return VEGA_UNITS["sigma"]
 
 
 def _bumped_greeks(
@@ -561,8 +595,6 @@ def _bumped_greeks(
     cash: float,
 ) -> tuple[float, float, float]:
     """vega, theta, rho by central differences of the transform price."""
-    from dataclasses import replace
-
     def value_at(
         *,
         cf: CharacteristicFunctionModel | None = None,
@@ -581,12 +613,13 @@ def _bumped_greeks(
             rate=rate,
         )[0]
 
-    if not hasattr(model, "sigma"):
+    bumped = _volatility_bumps(model)
+    if bumped is None:
         raise NotSupportedError(
-            "vega needs a volatility parameter to bump; this model has none"
+            "vega needs a volatility parameter to bump; this model has neither "
+            "a `sigma` field nor a `with_volatility_bump` method"
         )
-    up = characteristic_function_model(replace(model, sigma=model.sigma + VEGA_BUMP))
-    down = characteristic_function_model(replace(model, sigma=model.sigma - VEGA_BUMP))
+    up, down = (characteristic_function_model(m) for m in bumped)
     vega = (value_at(cf=up) - value_at(cf=down)) / (2.0 * VEGA_BUMP)
 
     if inputs.expiry <= TIME_BUMP:
@@ -633,6 +666,7 @@ def _cos_greeks(
         "truncation_l": cfg.truncation_l,
         "truncation_range": (result.lower, result.upper),
         "greeks": {"delta": "closed_form", "gamma": "closed_form", "other": "central_difference"},
+        "vega_units": _vega_units(model),
     }
     return GreeksResult(
         delta=result.delta,
@@ -640,7 +674,7 @@ def _cos_greeks(
         vega=vega,
         theta=theta,
         rho=rho,
-        meta=_meta(cfg, extra, instrument),
+        meta=_meta(cfg, extra, instrument, model),
     )
 
 

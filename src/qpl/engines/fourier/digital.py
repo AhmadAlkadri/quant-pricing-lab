@@ -68,7 +68,7 @@ def price_digital(
         payoff="digital",
         cash=option.cash,
     )
-    return PriceResult(value=value, meta=_meta(cfg, extra, "digital"))
+    return PriceResult(value=value, meta=_meta(cfg, extra, "digital", model))
 
 
 def greeks_digital(
