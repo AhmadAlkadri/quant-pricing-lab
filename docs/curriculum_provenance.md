@@ -80,6 +80,29 @@ no book prose, only provenance: lab notebook -> `src/qpl` changes -> test covera
 - Derivation note (own words, citations only):
   - `docs/notes/pde_strike_alignment.md`
 
+### Phase 1 Slice 1 - Engine registry and the CRR binomial tree
+
+- Driven by: the Phase 1 tree slice, whose fourth engine made the duplicated
+  `isinstance` ladder in `qpl.pricing` untenable (ADR-0005).
+- New/modified `src/` modules:
+  - `src/qpl/engines/registry.py`, `src/qpl/pricing.py`
+  - `src/qpl/engines/tree/{__init__,lattice,pricers}.py`
+  - `src/qpl/engines/dp/american_put_binomial.py` (now consumes the shared
+    lattice builder; prices bit-identical)
+  - `src/qpl/cases/european_black_scholes.py` (tree convergence-order rows)
+- Key functions/classes added:
+  - `MethodSpec`, `register`, `resolve_price`, `resolve_greeks`, `method_spec`
+  - `CRRLattice`, `crr_parameters`, `crr_spot_level`, `TreeConfig`,
+    `price_european`, `greeks_european`
+  - `TREE_ORDER_CASES`, `TREE_REFERENCE_N_STEPS`, `TREE_KNOWN_VALUE_TOLERANCE`
+- New tests added:
+  - `tests/test_engine_registry.py`, `tests/test_tree_pricing.py`,
+    `tests/test_tree_convergence.py`, `tests/oracle/test_tree_vs_quantlib.py`
+- Derivation note (own words, citations only):
+  - `docs/notes/crr_tree_convergence.md` (Cox/Ross/Rubinstein 1979 for the
+    lattice and the replication argument; Leisen & Reimer 1996 for the order-1
+    result and the oscillation)
+
 ## Chapter 5 - Numerical Solution Of Linear Systems
 
 - Lab notebook:

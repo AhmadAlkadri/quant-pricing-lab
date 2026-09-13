@@ -110,17 +110,18 @@ user can X by running Y, correct because Z" where that is already known;
 unknowns stay unknown.
 
 ### Phase 1 — Discrete time (trees)
-- A user will be able to price a European call/put via a CRR binomial tree,
+- ~~A user will be able to price a European call/put via a CRR binomial tree,
   correct because its measured convergence order to the Black-Scholes closed
   form is order 1, with the odd/even node-count oscillation documented rather
-  than hidden.
+  than hidden.~~ **Delivered in Slice 1** (see below).
 - American exercise becomes an instrument property; CRR American call/put
   with dividends is checked by early-exercise premium >= 0 and American >=
   European.
 - Leisen-Reimer smoothing is checked by measured order 2.
 - Tree Greeks are read from the lattice.
-- Forces ADR-0005: an engine registry keyed by `(instrument, model, method)`
-  replacing the `isinstance` ladder in `qpl.pricing`.
+- ~~Forces ADR-0005: an engine registry keyed by `(instrument, model, method)`
+  replacing the `isinstance` ladder in `qpl.pricing`.~~ **Delivered in
+  Slice 1**; ADR-0005 accepted.
 
 ### Phase 2 — PDE rigor
 - Rannacher start-up, with Greeks read from the grid at measured order.
@@ -189,6 +190,60 @@ unknowns stay unknown.
   reference-value, and comparative-statics cases, each carrying a
   `BenchmarkRow` with an explicit `EvidenceClass`; exercised by a cross-engine
   test (`tests/cases/test_european_black_scholes_cases.py`).
+
+### Slice 1
+- `qpl.engines.registry`: the `qpl.pricing` `isinstance` ladder replaced by a
+  registry keyed by `(instrument type, model type, method)` plus a per-method
+  `MethodSpec` holding the keyword contract (ADR-0005). Public signatures,
+  error types and error messages unchanged; pinned by
+  `tests/test_engine_registry.py`.
+- `qpl.engines.tree`: CRR binomial lattice (`crr_parameters`,
+  `crr_spot_level`, `build_recombining_spot_tree`) plus
+  `TreeConfig(n_steps=200, scheme="crr")`, `price_european` and
+  `greeks_european`, wired into the dispatcher as `method="tree"`. The
+  American-put DP engine in `qpl.engines.dp` now consumes the same lattice
+  builder; its prices are bit-identical across 45 configurations.
+- **Measured** on `S = K = 100, r = 5%, q = 0, sigma = 20%, T = 1`, European
+  call (and put, whose signed errors are identical because parity holds on the
+  tree to round-off):
+  - Odd `n` in `{25, 51, 101, 201, 401, 801}`: fitted order **1.0010**,
+    log-space RMS residual **0.0005**; the tree is **above** Black-Scholes at
+    every one of them, scaled constant `n·|err|` settling at **1.7529**.
+  - Even `n` in `{26, 50, 100, 200, 400, 800}`: fitted order **0.9987**,
+    residual **0.0007**; **below** Black-Scholes at every one, constant
+    **1.9994**. The two subsequences therefore bracket the true value. At the
+    money an even `n` puts a terminal node exactly on the strike; an odd `n`
+    puts the strike exactly midway between two nodes.
+  - Richardson extrapolation of consecutive odd pairs: fitted order **1.9590**
+    (residual 0.0224) — close to 2 but not 2, because the pairs are
+    `(n, 2n+1)` and the within-parity second-order coefficient is only
+    asymptotically constant. Error at `n₁ = 401` falls from 4.372e-03 to
+    5.710e-07.
+  - Lattice Greeks: delta/gamma/theta at order **1.004 / 1.002 / 1.001** (odd)
+    and **0.999 / 1.010 / 1.010** (even). Vega and rho are bump-and-revalue
+    and carry the oscillation.
+  - Away from the money the order-1 constant is **erratic**, not two-valued
+    (fitted order 1.21-1.48 with log residuals 0.37-1.52 over even `n`);
+    QuantLib's binomial engine behaves identically, so this is the scheme and
+    not the implementation. Pinned as a negative finding.
+  - Full tables and the derivation: `docs/notes/crr_tree_convergence.md`.
+- Oracle: the expected 1e-10 agreement with QuantLib's
+  `BinomialVanillaEngine<CoxRossRubinstein>` **does not exist**. QuantLib's
+  `CoxRossRubinstein` uses the log-space probability
+  `1/2 + (r−q−σ²/2)dt/(2σ√dt)` on the same lattice, which differs from the
+  forward-matching `p = (e^{(r−q)dt}−d)/(u−d)` at `O(dt^{1.5})` per step and
+  `O(1/n)` in price: `n·(qpl − QuantLib)` is constant to better than 1% over
+  `n` in `{50, 200, 800}`. A twelve-line reimplementation of QuantLib's
+  probability reproduces its engine to 8.3e-11, which identifies the mechanism
+  rather than merely observing the gap. Where 1e-10 *is* available: our
+  closed form matches `AnalyticEuropeanEngine` to 1.1e-14.
+- `qpl.cases`: two `CONVERGENCE_ORDER` rows for the odd/even claims, plus
+  `TREE_REFERENCE_N_STEPS = 2000` and `TREE_KNOWN_VALUE_TOLERANCE = 2.5e-3`
+  (derived from the measured even-`n` constant: predicted error 1.00e-3,
+  measured 9.998e-04). The cross-engine test now prices each known-value row
+  four ways: analytic, PDE, Monte Carlo, tree.
+- `examples/tree_convergence.py`: deterministic table plus the fitted orders;
+  `--plot` for the log-log error picture.
 
 ## Reconciled old roadmap
 

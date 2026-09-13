@@ -1,5 +1,91 @@
 # Steering Brief
 
+What changed in Slice 1 (files + bullets)
+
+Phase 1 of the curriculum: the CRR binomial tree, and the dispatcher refactor
+it forced. Still on `dev/curriculum`; not pushed.
+
+- `src/qpl/engines/registry.py`, `src/qpl/pricing.py`,
+  `src/qpl/engines/{analytic,mc,pde}/*`, `tests/test_engine_registry.py`,
+  `.agents/brain/adr/0005-engine-registry.md`:
+  - Replaced the `isinstance` ladder (one branch per method, duplicated across
+    `price` and `greeks`) with a registry keyed by
+    `(instrument type, model type, method)` plus a per-method `MethodSpec`
+    carrying the keyword contract (`cfg` type, MC's optional `bumps` and its
+    validator). Public signatures, error types, error messages and the
+    validation ordering are all unchanged and now pinned by a test. Lookup
+    walks the MRO, preserving `isinstance` semantics. `Market` is type-checked
+    but is not part of the key; ADR-0005 says why. Adding an engine is now one
+    `register(...)` call.
+- `src/qpl/engines/tree/{__init__,lattice,pricers}.py`,
+  `src/qpl/engines/dp/american_put_binomial.py`, `tests/test_tree_pricing.py`:
+  - Added `qpl.engines.tree`: `crr_parameters` (with the no-arbitrage check),
+    `crr_spot_level`, `build_recombining_spot_tree` (moved out of
+    `engines.dp`), `TreeConfig(n_steps=200, scheme="crr")`, `price_european`
+    (vectorized backward induction, one numpy expression per time level) and
+    `greeks_european` (delta/gamma/theta off the lattice, vega/rho by bump).
+    Wired in as `method="tree"`. T=0 and sigma=0 behave as in the other
+    engines.
+  - The American-put DP engine now consumes the shared lattice; prices are
+    **bit-identical** across 45 configurations, five of them pinned with a
+    zero tolerance.
+- `tests/test_tree_convergence.py`, `docs/notes/crr_tree_convergence.md`,
+  `examples/tree_convergence.py`:
+  - **Measured** (S=K=100, r=5%, q=0, sigma=20%, T=1, European call): odd `n`
+    fitted order **1.0010** (residual 0.0005), tree **above** BS, constant
+    `n·|err| -> 1.7529`; even `n` order **0.9987** (residual 0.0007), tree
+    **below** BS, constant **1.9994**. The two subsequences bracket the true
+    value — the textbook story held, and is asserted as measured rather than
+    assumed. Richardson on consecutive odd pairs: order **1.9590** (residual
+    0.0224), *not* 2, and the note says why; error at `n=401` drops from
+    4.372e-03 to 5.710e-07.
+  - Lattice Greeks converge at order ~1 too (delta/gamma/theta 1.004/1.002/
+    1.001 odd, 0.999/1.010/1.010 even). Vega and rho carry the oscillation;
+    bump sizes chosen from a measured scan, not habit.
+  - One-step and two-step trees match hand-computed *replication* values
+    (max residual 2.3e-14); put-call parity holds on the tree at every `n`
+    (8.3e-12 at n=800) because `p` reprices the forward exactly.
+- `tests/oracle/test_tree_vs_quantlib.py`:
+  - **Contradicted expectation.** The slice expected 1e-10 agreement with
+    QuantLib's `BinomialVanillaEngine<CoxRossRubinstein>`. QuantLib's
+    `CoxRossRubinstein` uses the *log-space* probability
+    `1/2 + (r−q−σ²/2)dt/(2σ√dt)` on the same lattice, not the
+    forward-matching `p = (e^{(r−q)dt}−d)/(u−d)`. The two differ at
+    `O(dt^1.5)` per step, i.e. `O(1/n)` in price: `n·(qpl − QuantLib)` is
+    constant to better than 1% over `n` in {50, 200, 800}. A twelve-line
+    reimplementation of QuantLib's probability reproduces its engine to
+    8.3e-11, identifying the mechanism. Our closed form does match
+    `AnalyticEuropeanEngine` to 1.1e-14.
+  - Second negative finding: away from the money the order-1 constant is
+    erratic (fitted order 1.21-1.48, log residual 0.37-1.52) for *both*
+    engines, so the clean odd/even story is an at-the-money story.
+- `src/qpl/cases/european_black_scholes.py`,
+  `tests/cases/test_european_black_scholes_cases.py`:
+  - Two `CONVERGENCE_ORDER` rows for the odd/even claims, plus
+    `TREE_REFERENCE_N_STEPS=2000` and `TREE_KNOWN_VALUE_TOLERANCE=2.5e-3`
+    derived from the measured constant (predicted 1.00e-3, measured 9.998e-04).
+    The cross-engine test now has a fourth leg.
+- `examples/README.md`, `tests/test_examples_smoke.py`,
+  `docs/CURRICULUM.md`, `.agents/brain/brain.md`:
+  - `examples/tree_convergence.py` added to the curated set and to both halves
+    of the smoke harness; curriculum "Delivered" gained a Slice 1 entry with
+    the measured numbers; brain.md sections 2/3/4/8 reconciled.
+
+Deferred (intentional, Slice 1)
+- Leisen-Reimer, American exercise on the European tree, and trinomial trees
+  are later slices; `TreeConfig.scheme` exists so adding LR does not change
+  this config's identity.
+- `qpl.engines.dp.price_american_put_binomial` is still not on the dispatcher:
+  it takes `strike`/`expiry` rather than an instrument, and American exercise
+  becomes an instrument property in a later Phase 1 slice.
+
+How to validate Slice 1 quickly
+- `PYTHONPATH=src python examples/tree_convergence.py`
+- `pytest -q tests/test_tree_convergence.py tests/test_tree_pricing.py tests/test_engine_registry.py`
+- `pytest -q tests/oracle` (needs the `oracle` extra; skips cleanly without it)
+
+---
+
 What changed in Slice 0 (files + bullets)
 
 This is the first slice of the Textbook-Driven Development curriculum

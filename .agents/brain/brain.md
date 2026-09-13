@@ -60,10 +60,11 @@ Agent Contract
 - Current exception exports: `qpl.exceptions` module and its error types (`QPLError`, `InvalidInputError`, `ModelAssumptionError`, `NotSupportedError`). (source: src/qpl/exceptions.py; src/qpl/__init__.py)
 - Current example-level interfaces: `qpl.engines.mc.pricers.MCConfig`, `price_european`, `greeks_european`. (source: src/qpl/engines/mc/pricers.py; examples/bs_mc_vs_analytic.py)
 - Current example-level interfaces: `qpl.engines.pde.pricers.PDEConfig`, `price_european`. (source: src/qpl/engines/pde/pricers.py)
+- Current tree engine exports: `qpl.engines.tree` exports `TreeConfig`, `CRRLattice`, `crr_parameters`, `crr_spot_level`, `build_recombining_spot_tree`, `price_european`, `greeks_european`, `TREE_METHOD_SPEC`; reachable from the dispatcher as `method="tree"`. (source: src/qpl/engines/tree/__init__.py; src/qpl/pricing.py)
 - `PDEConfig` has a `strike_alignment: Literal["none", "midpoint"]` field; `"midpoint"` nudges the grid spacing so the strike sits exactly between two nodes, restoring measured order-2 convergence (see `docs/notes/pde_strike_alignment.md`). Default `"none"` is bit-identical to pre-Slice-0 output. (source: src/qpl/engines/pde/pricers.py)
 - Current validation exports: `qpl.validation` exports `ConvergenceFit`, `fit_convergence_order`, `refinement_errors`, `BenchmarkRow`, `EvidenceClass`. (source: src/qpl/validation/__init__.py)
-- Current cases exports: `qpl.cases` exports `EuropeanBSSpec`, `EuropeanBSCase`, `PARITY_CASES`, `LIMIT_CASES`, `KNOWN_VALUE_CASES`, `MONOTONICITY_CASES`, `ALL_CASES`, `parity_residual`. (source: src/qpl/cases/__init__.py)
-- Current DP engine exports: `qpl.engines.dp` exports `BinomialDPConfig`, `build_recombining_spot_tree`, `price_american_put_binomial`, `backward_induction_optimal_stopping`; not yet wired into the `qpl.pricing` dispatcher. (source: src/qpl/engines/dp/__init__.py)
+- Current cases exports: `qpl.cases` exports `EuropeanBSSpec`, `EuropeanBSCase`, `PARITY_CASES`, `LIMIT_CASES`, `KNOWN_VALUE_CASES`, `TREE_ORDER_CASES`, `MONOTONICITY_CASES`, `ALL_CASES`, `parity_residual`, plus the tree study constants `TREE_ODD_LEVELS`, `TREE_EVEN_LEVELS`, `TREE_REFERENCE_N_STEPS`, `TREE_KNOWN_VALUE_TOLERANCE`. (source: src/qpl/cases/__init__.py)
+- Current DP engine exports: `qpl.engines.dp` exports `BinomialDPConfig`, `build_recombining_spot_tree` (re-exported from `qpl.engines.tree.lattice`, where it now lives), `price_american_put_binomial`, `backward_induction_optimal_stopping`; still not wired into the `qpl.pricing` dispatcher, because it takes `strike`/`expiry` rather than an instrument. (source: src/qpl/engines/dp/__init__.py; src/qpl/engines/tree/lattice.py)
 - Current numerics exports: `qpl.numerics` exports `LinearSolveResult`, `jacobi_solve`, `gauss_seidel_solve`, `sor_solve`, `composite_trapezoid`, `composite_simpson`, `gauss_legendre`. (source: src/qpl/numerics/__init__.py)
 - Current transforms exports: `qpl.transforms` exports `stehfest_coefficients`, `inverse_laplace_stehfest`, `inverse_laplace_grid_stehfest`. (source: src/qpl/transforms/__init__.py)
 - Current dependence exports: `qpl.dependence` exports `gaussian_copula_sample`, `empirical_kendall_tau`, `empirical_spearman_rho`, `gaussian_copula_kendall_tau`, `gaussian_copula_spearman_rho`. (source: src/qpl/dependence/__init__.py)
@@ -81,14 +82,14 @@ engines.registry: MethodSpec (kwargs contract)
                   + (instrument type, model type, method) -> engine
         |
         v
-analytic engine | MC engine | PDE engine
+analytic engine | MC engine | PDE engine | tree engine
         |
         v
 PriceResult / GreeksResult
 
 - Domain objects: `EuropeanOption`, `BlackScholesModel`, `Market` with flat curves. (source: src/qpl/instruments/options.py; src/qpl/models/black_scholes.py; src/qpl/market/market.py; src/qpl/market/curves.py)
 - Dispatcher: `qpl.pricing` binds kwargs via the method's `MethodSpec`, resolves the engine from `qpl.engines.registry`, and calls it; the wiring table is `qpl.pricing._register_builtin_engines`. `Market` is type-checked but is not part of the key (ADR-0005). (source: src/qpl/pricing.py; src/qpl/engines/registry.py; .agents/brain/adr/0005-engine-registry.md)
-- Engines: analytic uses closed-form BS, MC uses GBM sampling (terminal or multi-step), PDE uses theta-scheme FD grid. (source: src/qpl/engines/analytic/black_scholes.py; src/qpl/engines/mc/pricers.py; src/qpl/engines/pde/pricers.py)
+- Engines: analytic uses closed-form BS, MC uses GBM sampling (terminal or multi-step), PDE uses theta-scheme FD grid, tree uses a CRR recombining lattice with vectorized backward induction. The CRR lattice builder in `qpl.engines.tree.lattice` is shared with the American-put DP engine. (source: src/qpl/engines/analytic/black_scholes.py; src/qpl/engines/mc/pricers.py; src/qpl/engines/pde/pricers.py; src/qpl/engines/tree/pricers.py; src/qpl/engines/tree/lattice.py)
 - Results: `PriceResult` and `GreeksResult` normalize outputs across engines. (source: src/qpl/engines/base.py)
 - Key entry points (paths): `src/qpl/pricing.py`, `src/qpl/engines/registry.py`, `src/qpl/__init__.py`, `src/qpl/engines/base.py`, `src/qpl/engines/analytic/black_scholes.py`, `src/qpl/engines/mc/pricers.py`, `src/qpl/engines/pde/pricers.py`, `src/qpl/instruments/options.py`, `src/qpl/market/market.py`, `src/qpl/market/curves.py`, `src/qpl/models/black_scholes.py`, `examples/bs_analytic.py`, `examples/bs_mc_vs_analytic.py`, `tests/test_pricing_analytic.py`, `tests/test_mc_pricing.py`, `tests/test_pde_pricing.py`, `.github/workflows/ci.yml`, `pyproject.toml`, `docs/CURRICULUM.md`.
 - The dispatcher's `isinstance` ladder was replaced by the engine registry keyed by `(instrument type, model type, method)` (ADR-0005, accepted). Adding an engine means a `MethodSpec` next to its config object plus one `register(...)` call. (source: src/qpl/pricing.py; src/qpl/engines/registry.py; .agents/brain/adr/0005-engine-registry.md)
@@ -98,10 +99,11 @@ PriceResult / GreeksResult
 - `Market` requires spot > 0; enforced at init. (source: src/qpl/market/market.py)
 - `BlackScholesModel` requires sigma >= 0; enforced at init. (source: src/qpl/models/black_scholes.py)
 - Flat curves require non-negative rate/yield unless `allow_negative=True`. (source: src/qpl/market/curves.py)
-- Dispatcher only supports `EuropeanOption` + `BlackScholesModel` + `Market` for methods {analytic, mc, pde}; otherwise `NotSupportedError`. Keyword validation runs before engine lookup, so a bad `cfg` yields `InvalidInputError`, not `NotSupportedError`. (source: src/qpl/pricing.py; src/qpl/engines/registry.py; tests/test_engine_registry.py)
+- Dispatcher only supports `EuropeanOption` + `BlackScholesModel` + `Market` for methods {analytic, mc, pde, tree}; otherwise `NotSupportedError`. Keyword validation runs before engine lookup, so a bad `cfg` yields `InvalidInputError`, not `NotSupportedError`. (source: src/qpl/pricing.py; src/qpl/engines/registry.py; tests/test_engine_registry.py)
 - MC config requires n_paths >= 2 and n_steps >= 1; stderr uses ddof=1; results deterministic for a fixed seed. (source: src/qpl/engines/mc/pricers.py; tests/test_mc_pricing.py)
 - PDE config requires n_s >= 3, n_t >= 1, theta in [0,1]; deterministic for fixed inputs. (source: src/qpl/engines/pde/pricers.py; tests/test_pde_pricing.py)
-- At T=0 or sigma=0, pricing returns intrinsic or discounted-forward intrinsic (analytic/MC/PDE). (source: src/qpl/models/black_scholes.py; src/qpl/engines/mc/pricers.py; src/qpl/engines/pde/pricers.py; tests/test_pricing_analytic.py; tests/test_mc_pricing.py)
+- Tree config requires n_steps >= 1 for prices and >= 2 for Greeks (gamma and theta read step-2 nodes), and scheme == "crr"; the CRR lattice raises `InvalidInputError` when no-arbitrage fails. Deterministic for fixed inputs. (source: src/qpl/engines/tree/pricers.py; src/qpl/engines/tree/lattice.py; tests/test_tree_pricing.py)
+- At T=0 or sigma=0, pricing returns intrinsic or discounted-forward intrinsic (analytic/MC/PDE/tree). (source: src/qpl/models/black_scholes.py; src/qpl/engines/mc/pricers.py; src/qpl/engines/pde/pricers.py; tests/test_pricing_analytic.py; tests/test_mc_pricing.py)
 - Units: T in years; r and q are continuously compounded. (source: src/qpl/models/black_scholes.py; src/qpl/market/curves.py)
 
 5) Error handling & validation policy
@@ -112,6 +114,7 @@ PriceResult / GreeksResult
 6) Configuration & defaults
 - MC defaults: `MCConfig(n_paths=50_000, n_steps=1, seed=123)`. (source: src/qpl/engines/mc/pricers.py)
 - PDE defaults: `PDEConfig(n_s=200, n_t=200, theta=0.5, s_max=None, s_max_multiplier=4.0)`. (source: src/qpl/engines/pde/pricers.py)
+- Tree defaults: `TreeConfig(n_steps=200, scheme="crr")`; tree Greek bumps `VEGA_BUMP=1e-2`, `RHO_BUMP=1e-4`, both chosen from a measured scan. (source: src/qpl/engines/tree/pricers.py)
 - Market defaults: flat rate/dividend curves with `allow_negative=False`. (source: src/qpl/market/curves.py)
 - No repo-level config files beyond `pyproject.toml`; behavior is code-driven. (source: pyproject.toml)
 
@@ -143,7 +146,8 @@ Top 10 cheapest checks
 
 9) Curriculum
 - Full curriculum map (TDD loop, identity decision, literature spine, method dependency graph, evidence classes, provenance rules, phase plan, Slice 0 delivered results, reconciled old roadmap): `docs/CURRICULUM.md`. (source: docs/CURRICULUM.md)
-- Next slice: Phase 1, discrete time. CRR binomial tree for the European call/put wired into the dispatcher, with measured order-1 convergence to the Black-Scholes closed form and the odd/even node-count oscillation documented rather than hidden. (source: docs/CURRICULUM.md)
+- Slice 1 delivered (Phase 1, first half): the engine registry (ADR-0005) and the CRR binomial tree with measured order-1 convergence, the odd/even oscillation documented rather than hidden, lattice Greeks, and a QuantLib oracle that disproved the expected 1e-10 agreement and pinned the reason instead. Derivation: `docs/notes/crr_tree_convergence.md`. (source: docs/CURRICULUM.md; .agents/brain/steering-brief.md)
+- Next slice: the rest of Phase 1 — Leisen-Reimer smoothing checked by measured order 2, American exercise as an instrument property (which is what would finally put `engines.dp` on the dispatcher), and tree Greeks for American payoffs. (source: docs/CURRICULUM.md)
 
 10) Open questions / risks
 - Version sync risk: `pyproject.toml` `[project].version` and `src/qpl/__init__.py:__version__` currently match (`0.1.0`, verified 2026-09-13), but no CI step enforces that they stay aligned — a future bump to one without the other would drift silently. Verify: compare the two values directly. (source: pyproject.toml; src/qpl/__init__.py)
