@@ -38,7 +38,10 @@ from ..validation import BenchmarkRow, EvidenceClass
 
 __all__ = [
     "ALL_AMERICAN_CASES",
+    "AMERICAN_BRACKETED_LIMIT",
     "AMERICAN_IDENTITY_CASES",
+    "AMERICAN_LR_CASES",
+    "AMERICAN_LR_LEVELS",
     "AMERICAN_PREMIUM_CASES",
     "AMERICAN_REFERENCE_CASES",
     "AMERICAN_REFERENCE_N_STEPS",
@@ -472,6 +475,130 @@ AMERICAN_REFERENCE_CASES: tuple[AmericanBSCase, ...] = (
 )
 
 
+# --------------------------------------------------------------------------
+# (v) The Leisen-Reimer lattice under early exercise.
+#
+# The European story -- order 2, no oscillation -- does not carry over, and
+# the rows below say so rather than assuming it. The American value's dominant
+# discretisation error is the location of the early-exercise boundary, which a
+# lattice resolves only to its own node spacing; that error is O(1/n) and is
+# indifferent to how the terminal grid was chosen. Measured order: 1.06.
+#
+# What does carry over is a better constant and a useful sign: on this grid
+# Leisen-Reimer approaches the limit from BELOW at every n while CRR approaches
+# from ABOVE, so the two schemes bracket the value at a shared n -- a cheap
+# error bar that CRR alone can only get by pairing an odd and an even lattice.
+#
+# The reference is `AMERICAN_BRACKETED_LIMIT`, which comes from the CRR engine
+# and is therefore independent of the scheme being measured.
+# --------------------------------------------------------------------------
+
+AMERICAN_BRACKETED_LIMIT = 6.090376463020103
+"""The converged American put value at `AMERICAN_REFERENCE_SPEC`.
+
+Derived in-repo, not published: the average of the CRR engine at `n = 64000`
+and `n = 64001`, which bracket the limit from below and above (the odd/even
+bracketing measured in `tests/test_tree_american_convergence.py`). Distinct
+from `AMERICAN_REFERENCE_VALUE`, which pins this engine's output at a
+particular `n = 8001` and sits 1.8e-04 above this number.
+"""
+
+AMERICAN_LR_LEVELS: tuple[int, ...] = (25, 51, 101, 201, 401, 801)
+"""Refinement grid for the Leisen-Reimer American rows; odd throughout, which
+the scheme requires. The same grid as `TREE_ODD_LEVELS`."""
+
+_AMERICAN_LR_SOURCE = (
+    "Leisen & Reimer (1996), 'Binomial models for option valuation - "
+    "examining and improving convergence', Applied Mathematical Finance 3(4), "
+    "319-346, for the lattice. The paper is about European convergence; every "
+    "American number below was measured in-repo "
+    "(tests/test_tree_lr_convergence.py) and nothing is quoted from it."
+)
+
+AMERICAN_LR_CASES: tuple[AmericanBSCase, ...] = (
+    AmericanBSCase(
+        row=BenchmarkRow(
+            id="american_put_on_lr_lattice_is_first_order_not_second",
+            description=(
+                "the American put on a Leisen-Reimer lattice converges at "
+                "order 1, not at the order 2 the European price gets"
+            ),
+            expected=1.0,
+            tolerance=0.25,
+            evidence=EvidenceClass.CONVERGENCE_ORDER,
+            source=_AMERICAN_LR_SOURCE,
+            notes=(
+                "Measured order 1.0641 with log-space RMS residual 0.0176 "
+                "over n in (25, 51, 101, 201, 401, 801), against "
+                "AMERICAN_BRACKETED_LIMIT. CRR on the same grid fits 0.9872 "
+                "with residual 0.0034. The band is deliberately wide enough "
+                "to admit the measured 1.0641 -- the boundary error and the "
+                "smaller order-2 terminal error are both present and the "
+                "second shrinks faster -- and deliberately too narrow to "
+                "admit order 2. The signed errors at n=801 are -3.66e-04 "
+                "(Leisen-Reimer) and +1.82e-03 (CRR)."
+            ),
+        ),
+        specs=(AMERICAN_REFERENCE_SPEC,),
+    ),
+    AmericanBSCase(
+        row=BenchmarkRow(
+            id="american_lr_and_crr_bracket_the_limit_at_the_same_n",
+            description=(
+                "at a shared odd n the Leisen-Reimer American put is below the "
+                "limit and the CRR one above it; expected value is the worst "
+                "permitted violation of that ordering"
+            ),
+            expected=0.0,
+            tolerance=1e-12,
+            evidence=EvidenceClass.CONVERGENCE_ORDER,
+            source=_AMERICAN_LR_SOURCE,
+            notes=(
+                "Measured signed errors against AMERICAN_BRACKETED_LIMIT over "
+                "n in (25 ... 801): Leisen-Reimer -1.47e-02 ... -3.66e-04, all "
+                "negative; CRR +5.58e-02 ... +1.82e-03, all positive. The "
+                "|CRR| / |LR| ratio runs 3.79, 4.05, 4.50, 4.55, 4.79, 4.97. "
+                "Tolerance is a round-off budget on an ordering, not an "
+                "accuracy claim: the two errors differ by 1e-02 to 1e-04, so "
+                "nothing here is close to the boundary."
+            ),
+        ),
+        specs=(AMERICAN_REFERENCE_SPEC,),
+    ),
+    AmericanBSCase(
+        row=BenchmarkRow(
+            id="american_lr_richardson_does_not_restore_order_two",
+            description=(
+                "Richardson extrapolation of consecutive odd n on the "
+                "Leisen-Reimer lattice does not make the American sequence a "
+                "power law; expected value is the order it fails to reach"
+            ),
+            expected=2.0,
+            tolerance=0.2,
+            evidence=EvidenceClass.NEGATIVE_FINDING,
+            source=_AMERICAN_LR_SOURCE,
+            notes=(
+                "Pinned as a failure, so the assertion is that the fitted "
+                "order lies OUTSIDE this band and the log-space residual is "
+                "large. Measured: order 1.3423 with residual 0.7187, and "
+                "non-monotone extrapolated errors 7.97e-04, 5.68e-04, "
+                "2.87e-05, 6.70e-05, 2.23e-05 over the pairs (25,51) ... "
+                "(401,801). Slice 2 measured the same failure on the CRR "
+                "lattice (0.30 odd, 0.64 even), and Slice 3 confirms a better "
+                "lattice does not fix it: the boundary error is C(n)/n with a "
+                "constant that jumps as the node grid steps past the true "
+                "boundary, not C/n."
+            ),
+        ),
+        specs=(AMERICAN_REFERENCE_SPEC,),
+    ),
+)
+
+
 ALL_AMERICAN_CASES: tuple[AmericanBSCase, ...] = (
-    LS2001_CASES + AMERICAN_IDENTITY_CASES + AMERICAN_PREMIUM_CASES + AMERICAN_REFERENCE_CASES
+    LS2001_CASES
+    + AMERICAN_IDENTITY_CASES
+    + AMERICAN_PREMIUM_CASES
+    + AMERICAN_REFERENCE_CASES
+    + AMERICAN_LR_CASES
 )

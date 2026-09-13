@@ -32,6 +32,9 @@ __all__ = [
     "PARITY_CASES",
     "TREE_EVEN_LEVELS",
     "TREE_KNOWN_VALUE_TOLERANCE",
+    "TREE_LR_KNOWN_VALUE_TOLERANCE",
+    "TREE_LR_ORDER_CASES",
+    "TREE_LR_REFERENCE_N_STEPS",
     "TREE_ODD_LEVELS",
     "TREE_ORDER_CASES",
     "TREE_REFERENCE_N_STEPS",
@@ -369,6 +372,113 @@ TREE_ORDER_CASES: tuple[EuropeanBSCase, ...] = (
 
 
 # --------------------------------------------------------------------------
+# (vi) The Leisen-Reimer tree: order two, and the margin over CRR.
+#
+# Same shape as the CRR rows above -- the expected value is a convergence
+# order and the tolerance is the band the fitted slope must land in -- but
+# three things differ and each is the point of the scheme:
+#
+# - there is one sequence, not two, because the construction has no even-`n`
+#   form and the error therefore has no parity to oscillate with;
+# - the rows are evaluated off the money as well as at it, at the two points
+#   where `tests/oracle/test_tree_vs_quantlib.py` measured the CRR error
+#   constant to be erratic in BOTH engines;
+# - the fitted order is about 2 rather than about 1.
+#
+# The scheme is Leisen & Reimer (1996); the numbers in `notes` were measured
+# in this repository (`tests/test_tree_lr_convergence.py`), not copied from
+# that paper.
+# --------------------------------------------------------------------------
+
+TREE_LR_REFERENCE_N_STEPS = 2001
+"""Step count at which the Leisen-Reimer tree prices the known-value rows in
+the cross-engine test. Odd, which the scheme requires; chosen next to the CRR
+leg's 2000 so the two legs are compared at essentially the same work."""
+
+TREE_LR_KNOWN_VALUE_TOLERANCE = 2.5e-7
+"""Absolute tolerance for the Leisen-Reimer leg of the cross-engine test.
+
+Derived from the measurement, not guessed. At `n = 2001` the measured error at
+the reference ATM point is -8.853e-08 for both the call and the put, so the
+tolerance keeps a factor of 2.8 -- the same headroom the CRR leg's
+`TREE_KNOWN_VALUE_TOLERANCE` keeps, at four orders of magnitude tighter. The
+CRR leg at `n = 2000` misses by 9.998e-04, i.e. this leg is 11_000 times
+closer at the same lattice size.
+"""
+
+_TREE_LR_ORDER_SOURCE = (
+    "Leisen & Reimer (1996), 'Binomial models for option valuation - "
+    "examining and improving convergence', Applied Mathematical Finance 3(4), "
+    "319-346, whose construction this package implements. The fitted slopes, "
+    "residuals and error ratios in `notes` were measured in-repo "
+    "(tests/test_tree_lr_convergence.py); none is quoted from that paper."
+)
+
+LR_OTM_2Y_DIV = EuropeanBSSpec(100.0, 110.0, 2.0, 0.03, 0.01, 0.25, "call")
+"""Off-the-money point 1: where the CRR order fit came out at 1.21-1.48 with a
+log-space residual of 0.37-1.52 in both `qpl` and QuantLib."""
+
+LR_ITM_1Y_DIV = EuropeanBSSpec(120.0, 90.0, 1.0, 0.03, 0.05, 0.35, "call")
+"""Off-the-money point 2, same provenance; the CRR errors there run
+2.8e-02, 1.3e-02, 2.8e-04, 5.2e-04, 2.0e-03 -- non-monotone."""
+
+_LR_ORDER_POINTS: tuple[tuple[str, EuropeanBSSpec, str], ...] = (
+    (
+        "atm_1y",
+        REFERENCE_ATM_CALL,
+        "order 1.9840, log-space RMS residual 0.0087, |error| 5.52e-07 at "
+        "n=801. CRR on the same odd grid: order 1.0010, |error| 2.19e-03. "
+        "Error ratio CRR/LR 507x at n=101 and 3966x at n=801.",
+    ),
+    (
+        "otm_2y_div",
+        LR_OTM_2Y_DIV,
+        "order 1.9842, log-space RMS residual 0.0086, |error| 1.06e-06 at "
+        "n=801. This is one of the two points where the CRR fit is erratic "
+        "(order 1.21-1.48, residual 0.37-1.52). Error ratio CRR/LR 35x at "
+        "n=101 -- the weakest cell measured, because CRR's erratic constant "
+        "happens to sit near a sign change there -- and 2673x at n=801.",
+    ),
+    (
+        "itm_1y_div",
+        LR_ITM_1Y_DIV,
+        "order 1.9709, log-space RMS residual 0.0154, |error| 2.26e-07 at "
+        "n=801. The second erratic-CRR point. Error ratio CRR/LR 1137x at "
+        "n=101 and 5229x at n=801.",
+    ),
+)
+
+TREE_LR_ORDER_CASES: tuple[EuropeanBSCase, ...] = tuple(
+    EuropeanBSCase(
+        row=BenchmarkRow(
+            id=f"tree_lr_order_two_{name}",
+            description=(
+                "Leisen-Reimer tree error against the closed form decays like "
+                f"1/n**2 on odd step counts at {name}"
+            ),
+            expected=2.0,
+            tolerance=0.2,
+            evidence=EvidenceClass.CONVERGENCE_ORDER,
+            source=_TREE_LR_ORDER_SOURCE,
+            notes=(
+                f"Measured over n in {TREE_ODD_LEVELS}: {note} The fitted "
+                "order sits just BELOW 2 at every point rather than "
+                "straddling it: the Peizer-Pratt inversion matches the "
+                "binomial tail to high but finite order, so a slowly decaying "
+                "correction rides on the 1/n**2 term and drags the slope down "
+                "by 0.02-0.03 over a sixfold refinement. The error is "
+                "one-signed and monotone across the whole grid -- there is no "
+                "parity to oscillate with, since the scheme has no even-n "
+                "construction."
+            ),
+        ),
+        specs=(spec,),
+    )
+    for name, spec, note in _LR_ORDER_POINTS
+)
+
+
+# --------------------------------------------------------------------------
 # (iv) Comparative statics.
 #
 # A call is non-decreasing in spot (its payoff is), non-decreasing in
@@ -437,5 +547,10 @@ MONOTONICITY_CASES: tuple[EuropeanBSCase, ...] = (
 
 
 ALL_CASES: tuple[EuropeanBSCase, ...] = (
-    PARITY_CASES + LIMIT_CASES + KNOWN_VALUE_CASES + TREE_ORDER_CASES + MONOTONICITY_CASES
+    PARITY_CASES
+    + LIMIT_CASES
+    + KNOWN_VALUE_CASES
+    + TREE_ORDER_CASES
+    + TREE_LR_ORDER_CASES
+    + MONOTONICITY_CASES
 )

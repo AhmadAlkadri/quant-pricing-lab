@@ -21,7 +21,10 @@ import pytest
 
 from qpl.cases import (
     ALL_AMERICAN_CASES,
+    AMERICAN_BRACKETED_LIMIT,
     AMERICAN_IDENTITY_CASES,
+    AMERICAN_LR_CASES,
+    AMERICAN_LR_LEVELS,
     AMERICAN_PREMIUM_CASES,
     AMERICAN_REFERENCE_CASES,
     AMERICAN_REFERENCE_N_STEPS,
@@ -32,7 +35,7 @@ from qpl.cases import (
 )
 from qpl.engines.tree import TreeConfig, crr_parameters
 from qpl.pricing import price
-from qpl.validation import EvidenceClass
+from qpl.validation import EvidenceClass, fit_convergence_order
 
 _LATTICE_N_STEPS = 500
 """Step count for the identity and premium rows.
@@ -47,13 +50,13 @@ def _ids(cases: tuple[AmericanBSCase, ...]) -> list[str]:
     return [case.row.id for case in cases]
 
 
-def _american(case_spec, n_steps: int) -> float:
+def _american(case_spec, n_steps: int, scheme: str = "crr") -> float:
     return price(
         case_spec.option(),
         case_spec.model(),
         case_spec.market(),
         method="tree",
-        cfg=TreeConfig(n_steps=n_steps),
+        cfg=TreeConfig(n_steps=n_steps, scheme=scheme),  # type: ignore[arg-type]
     ).value
 
 
@@ -271,6 +274,84 @@ def test_american_reference_value_row() -> None:
 
     value = _american(case.spec, AMERICAN_REFERENCE_N_STEPS)
     assert value == pytest.approx(case.row.expected, abs=case.row.tolerance)
+
+
+# --------------------------------------------------------------------------
+# Early exercise on the Leisen-Reimer lattice
+# --------------------------------------------------------------------------
+
+
+def _lr_and_crr_signed_errors(spec) -> tuple[list[float], list[float]]:
+    """Signed errors of both schemes against the bracketed limit, on the odd
+    grid. One helper, because all three rows below read the same numbers."""
+    lr = [
+        _american(spec, n, "leisen-reimer") - AMERICAN_BRACKETED_LIMIT
+        for n in AMERICAN_LR_LEVELS
+    ]
+    crr = [_american(spec, n) - AMERICAN_BRACKETED_LIMIT for n in AMERICAN_LR_LEVELS]
+    return lr, crr
+
+
+def test_american_lr_order_row() -> None:
+    """Evidence class: CONVERGENCE_ORDER.
+
+    The row's `expected` is the order and its `tolerance` the band; nothing
+    numeric is written here. The point of the row is that it is 1, not 2: the
+    European order-2 argument is about the terminal distribution and the
+    American error is dominated by the early-exercise boundary instead.
+    """
+    case = AMERICAN_LR_CASES[0]
+    assert case.row.evidence is EvidenceClass.CONVERGENCE_ORDER
+
+    lr, _ = _lr_and_crr_signed_errors(case.spec)
+    fit = fit_convergence_order(
+        [1.0 / n for n in AMERICAN_LR_LEVELS], [abs(e) for e in lr]
+    )
+    assert abs(fit.order - case.row.expected) <= case.row.tolerance, case.row.notes
+    assert fit.residual < 0.05, fit.residual
+    # Explicitly not order 2, which is the claim the row exists to deny.
+    assert fit.order < 1.5, fit.order
+
+
+def test_american_lr_and_crr_bracket_the_limit_row() -> None:
+    """Evidence class: CONVERGENCE_ORDER (the sign structure).
+
+    Two schemes at the same `n` give an error bar for free, which is what
+    CRR alone can only get by pairing an odd lattice with an even one. The
+    expected value is the worst permitted violation of the ordering.
+    """
+    case = AMERICAN_LR_CASES[1]
+    lr, crr = _lr_and_crr_signed_errors(case.spec)
+
+    worst = max([0.0, max(lr), -min(crr)])
+    assert worst <= case.row.expected + case.row.tolerance, (lr, crr)
+    # And the bracket is not degenerate: LR is the tighter side at every n.
+    ratios = [abs(c) / abs(x) for c, x in zip(crr, lr, strict=True)]
+    assert min(ratios) > 3.0, ratios
+
+
+def test_american_lr_richardson_negative_finding_row() -> None:
+    """Evidence class: NEGATIVE_FINDING.
+
+    The assertion is the failure: the fitted order must lie OUTSIDE the row's
+    band and the log-space residual must stay large, so that the finding fails
+    loudly if a future change quietly makes Richardson work here. The detailed
+    study is in `tests/test_tree_lr_convergence.py`.
+    """
+    case = AMERICAN_LR_CASES[2]
+    assert case.row.evidence is EvidenceClass.NEGATIVE_FINDING
+
+    spec = case.spec
+    h, errs = [], []
+    for n1, n2 in pairwise(AMERICAN_LR_LEVELS):
+        v1 = _american(spec, n1, "leisen-reimer")
+        v2 = _american(spec, n2, "leisen-reimer")
+        h.append(1.0 / n1)
+        errs.append(abs((n2 * v2 - n1 * v1) / (n2 - n1) - AMERICAN_BRACKETED_LIMIT))
+
+    fit = fit_convergence_order(h, errs)
+    assert abs(fit.order - case.row.expected) > case.row.tolerance, fit.order
+    assert fit.residual > 0.2, fit.residual
 
 
 def test_every_american_row_states_its_evidence_and_source() -> None:

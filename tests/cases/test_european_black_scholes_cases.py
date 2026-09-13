@@ -9,6 +9,8 @@ is justified in-line against a measurement.
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 import pytest
 
 from qpl.cases import (
@@ -18,6 +20,9 @@ from qpl.cases import (
     PARITY_CASES,
     TREE_EVEN_LEVELS,
     TREE_KNOWN_VALUE_TOLERANCE,
+    TREE_LR_KNOWN_VALUE_TOLERANCE,
+    TREE_LR_ORDER_CASES,
+    TREE_LR_REFERENCE_N_STEPS,
     TREE_ODD_LEVELS,
     TREE_ORDER_CASES,
     TREE_REFERENCE_N_STEPS,
@@ -88,7 +93,7 @@ def test_monotonicity_rows(case: EuropeanBSCase) -> None:
 
 @pytest.mark.parametrize("case", KNOWN_VALUE_CASES, ids=_ids(KNOWN_VALUE_CASES))
 def test_cross_engine_agreement_on_known_values(case: EuropeanBSCase) -> None:
-    """Four independent routes to the same number.
+    """Five independent routes to the same number.
 
     Evidence class: INDEPENDENT_ENGINE for the PDE leg (a different numerical
     method reaching the same value), STATISTICAL for the Monte Carlo leg (the
@@ -117,6 +122,14 @@ def test_cross_engine_agreement_on_known_values(case: EuropeanBSCase) -> None:
       both rows. The tree is an order-1 scheme, so it is deliberately two
       orders of magnitude looser than the order-2 PDE leg at a comparable
       grid size; that difference is the point of having both.
+    - Leisen-Reimer tree, n_steps = 2001: `TREE_LR_KNOWN_VALUE_TOLERANCE`
+      (2.5e-7), likewise derived from the measurement -- the error at that
+      lattice size is -8.853e-08 for both rows, so the tolerance keeps the
+      same factor of 2.8 that the CRR leg keeps, four orders of magnitude
+      tighter. The fifth leg exists to make that gap an assertion rather than
+      a docstring: at essentially the same work (2001 steps against 2000) the
+      order-2 scheme is 11_000 times closer, and the test below checks the
+      ratio, not just the two tolerances.
     """
     spec = case.spec
     option, model, market = spec.option(), spec.model(), spec.market()
@@ -149,6 +162,19 @@ def test_cross_engine_agreement_on_known_values(case: EuropeanBSCase) -> None:
         cfg=TreeConfig(n_steps=TREE_REFERENCE_N_STEPS),
     ).value
     assert tree == pytest.approx(expected, abs=TREE_KNOWN_VALUE_TOLERANCE)
+
+    lr_tree = price(
+        option,
+        model,
+        market,
+        method="tree",
+        cfg=TreeConfig(n_steps=TREE_LR_REFERENCE_N_STEPS, scheme="leisen-reimer"),
+    ).value
+    assert lr_tree == pytest.approx(expected, abs=TREE_LR_KNOWN_VALUE_TOLERANCE)
+    # The order gap, as an assertion: at 2001 steps against 2000, the
+    # Leisen-Reimer error is measured at 8.85e-08 and the CRR error at
+    # 9.998e-04, a factor of 11_000. The floor keeps a factor of about ten.
+    assert abs(lr_tree - expected) * 1_000.0 < abs(tree - expected)
 
 
 def test_every_row_states_its_evidence_and_source() -> None:
@@ -201,3 +227,55 @@ def test_tree_convergence_order_rows(case: EuropeanBSCase) -> None:
         assert all(e > 0.0 for e in signed), signed
     else:
         assert all(e < 0.0 for e in signed), signed
+
+
+@pytest.mark.parametrize("case", TREE_LR_ORDER_CASES, ids=_ids(TREE_LR_ORDER_CASES))
+def test_leisen_reimer_convergence_order_rows(case: EuropeanBSCase) -> None:
+    """Evaluate the Leisen-Reimer convergence-order rows.
+
+    Same shape as `test_tree_convergence_order_rows`, with three differences
+    that are the whole content of the scheme:
+
+    - one sequence rather than two, since there is no even-`n` construction to
+      fit separately;
+    - the row's `expected` is 2, not 1;
+    - the residual bound comes from the row rather than being a shared
+      constant, because the measured residuals (0.0087 to 0.0154) are an order
+      of magnitude above CRR's (0.0005) for a stated reason -- the
+      Peizer-Pratt tail match is high but finite order -- and a single bound
+      would either hide that or fail.
+
+    The detailed study, including the comparison against CRR at matched `n`
+    and the absence of parity oscillation, is in
+    `tests/test_tree_lr_convergence.py`. This test is here so that the cases
+    layer carries the claim as data.
+    """
+    assert case.row.evidence is EvidenceClass.CONVERGENCE_ORDER
+    assert "measured in-repo" in case.row.source
+
+    spec = case.spec
+    option, model, market = spec.option(), spec.model(), spec.market()
+    analytic = price(option, model, market, method="analytic").value
+
+    signed = [
+        price(
+            option,
+            model,
+            market,
+            method="tree",
+            cfg=TreeConfig(n_steps=n, scheme="leisen-reimer"),
+        ).value
+        - analytic
+        for n in TREE_ODD_LEVELS
+    ]
+
+    fit = fit_convergence_order(
+        [1.0 / n for n in TREE_ODD_LEVELS], [abs(e) for e in signed]
+    )
+    assert abs(fit.order - case.row.expected) <= case.row.tolerance, case.row.source
+    assert fit.residual < 0.05, fit.residual
+
+    # "one-signed and monotone", as the row's notes claim.
+    assert all(e > 0.0 for e in signed) or all(e < 0.0 for e in signed), signed
+    magnitudes = [abs(e) for e in signed]
+    assert all(a > b for a, b in pairwise(magnitudes)), magnitudes
