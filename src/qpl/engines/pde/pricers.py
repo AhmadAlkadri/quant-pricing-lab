@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
-from typing import Any, Literal
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 from scipy.linalg import solve_banded
@@ -14,6 +15,23 @@ from ...market.market import Market
 from ...models.black_scholes import BlackScholesModel
 from ..base import GreeksResult, PriceResult
 from ..registry import MethodSpec
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .american import PSORConfig
+
+
+def _default_psor() -> PSORConfig:
+    """Default `PSORConfig`, imported lazily to keep the module graph acyclic.
+
+    `PSORConfig` belongs next to the solver that reads it, in
+    `qpl.engines.pde.american`, and that module imports the grid, the operator
+    and the time march from here. Importing it back at module scope would be a
+    cycle; importing it at `PDEConfig` construction time is a `sys.modules`
+    lookup after the first call.
+    """
+    from .american import PSORConfig
+
+    return PSORConfig()
 
 
 @dataclass(frozen=True)
@@ -64,6 +82,14 @@ class PDEConfig:
           and `S(1-h)` with `h = 1%`, differenced through the cubic spline, and
           NaN for vega, theta and rho. Kept, named, and measured against
           `"grid"`; see `greeks_european` for where it is worse and why.
+    psor
+        Projected-SOR settings, read **only** by the American engine
+        (`qpl.engines.pde.american`). It lives here rather than in a separate
+        keyword because the dispatcher's `MethodSpec` for `method="pde"` takes
+        one `cfg=` argument and no others; the European theta scheme solves its
+        tridiagonal system directly (`_solve_tridiagonal`) and ignores this
+        field entirely, including its validation. See
+        `qpl.engines.pde.american.PSORConfig`.
     """
 
     n_s: int = 200
@@ -74,6 +100,7 @@ class PDEConfig:
     strike_alignment: Literal["none", "midpoint"] = "none"
     time_stepping: Literal["theta", "rannacher"] = "theta"
     greeks_method: Literal["grid", "bump"] = "grid"
+    psor: PSORConfig = field(default_factory=_default_psor)
 
 
 PDE_METHOD_SPEC = MethodSpec(method="pde", cfg_type=PDEConfig)
@@ -209,6 +236,84 @@ def _time_levels(t: float, cfg: PDEConfig) -> list[tuple[float, float, float, fl
     return steps
 
 
+def _build_grid(strike: float, spot: float, cfg: PDEConfig) -> tuple[np.ndarray, float, float]:
+    """Return `(s_grid, ds, s_max)` for this configuration.
+
+    Extracted verbatim from `_solve_grid` so that the American engine in
+    `qpl.engines.pde.american` builds *the same* grid rather than a second copy
+    of the alignment arithmetic. The expressions and their evaluation order are
+    unchanged, which is what keeps European prices bit-for-bit.
+    """
+    s_max = cfg.s_max if cfg.s_max is not None else cfg.s_max_multiplier * spot
+    ds = s_max / cfg.n_s
+
+    if cfg.strike_alignment == "midpoint":
+        # Nearest half-integer node position for the strike; see `price_european`.
+        j = max(round(strike / ds - 0.5), 0)
+        ds = strike / (j + 0.5)
+        s_max = ds * cfg.n_s
+
+    if not (0.0 < strike < s_max):
+        raise InvalidInputError(
+            f"strike {strike} must lie strictly inside the spot grid (0, {s_max})"
+        )
+
+    if cfg.strike_alignment == "midpoint":
+        # Build from ds directly so the half-integer node position is exact.
+        s_grid = ds * np.arange(cfg.n_s + 1, dtype=float)
+    else:
+        s_grid = np.linspace(0.0, s_max, cfg.n_s + 1)
+    return s_grid, ds, s_max
+
+
+def _payoff(kind: str, strike: float, s: np.ndarray) -> np.ndarray:
+    """Vanilla payoff on a spot grid."""
+    if kind == "call":
+        return np.maximum(s - strike, 0.0)
+    return np.maximum(strike - s, 0.0)
+
+
+def _dirichlet(
+    kind: str, strike: float, s_max: float, df_r: float, df_q: float
+) -> tuple[float, float]:
+    """European Dirichlet values at `S = 0` and `S = s_max`, `tau` from the dfs.
+
+    The call's upper value is the discounted forward intrinsic
+    `s_max e^{-q tau} - K e^{-r tau}`; the put's lower value is `K e^{-r tau}`.
+    Extracted from `_solve_grid` unchanged; the American engine takes the
+    elementwise maximum of these and the intrinsic value, which is what turns
+    them into the American boundary (see `qpl.engines.pde.american`).
+    """
+    if kind == "call":
+        return 0.0, s_max * df_q - strike * df_r
+    return strike * df_r, 0.0
+
+
+def _operator(
+    s_inner: np.ndarray, ds: float, sigma: float, r: float, q: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Second-order central discretisation of the Black-Scholes operator.
+
+    Returns the sub/diagonal/super coefficients `(a, b, c)` of
+
+        L V = 1/2 sigma^2 S^2 V_SS + (r - q) S V_S - r V
+
+    at the interior nodes, so that `(L V)_i = a_i V_{i-1} + b_i V_i + c_i V_{i+1}`.
+    `b` is a scalar `-r` plus an array term; numpy broadcasts it to full length.
+
+    This is the single definition of the operator in this package. The European
+    theta scheme below and the American PSOR solve in
+    `qpl.engines.pde.american` both call it, so there is no second copy to
+    drift.
+    """
+    diffusion = 0.5 * sigma * sigma * (s_inner**2) / (ds * ds)
+    drift = (r - q) * s_inner / (2.0 * ds)
+    a = diffusion - drift
+    b = -(sigma * sigma) * (s_inner**2) / (ds * ds) - r
+    c = diffusion + drift
+    return a, b, c
+
+
 @dataclass(frozen=True)
 class _GridSolution:
     """A finished finite-difference solve, and everything read off it.
@@ -247,33 +352,13 @@ def _solve_grid(
     t = option.expiry
     sigma = model.sigma
 
-    s_max = cfg.s_max if cfg.s_max is not None else cfg.s_max_multiplier * s0
     n_s = cfg.n_s
     n_t = cfg.n_t
-    ds = s_max / n_s
-
-    if cfg.strike_alignment == "midpoint":
-        # Nearest half-integer node position for the strike; see the docstring.
-        j = max(round(k / ds - 0.5), 0)
-        ds = k / (j + 0.5)
-        s_max = ds * n_s
-
-    if not (0.0 < k < s_max):
-        raise InvalidInputError(
-            f"strike {k} must lie strictly inside the spot grid (0, {s_max})"
-        )
+    s_grid, ds, s_max = _build_grid(k, s0, cfg)
 
     steps = _time_levels(t, cfg)
 
-    if cfg.strike_alignment == "midpoint":
-        # Build from ds directly so the half-integer node position is exact.
-        s_grid = ds * np.arange(n_s + 1, dtype=float)
-    else:
-        s_grid = np.linspace(0.0, s_max, n_s + 1)
-    if option.kind == "call":
-        v = np.maximum(s_grid - k, 0.0)
-    else:
-        v = np.maximum(k - s_grid, 0.0)
+    v = _payoff(option.kind, k, s_grid)
 
     s_inner = s_grid[1:-1]
 
@@ -287,16 +372,8 @@ def _solve_grid(
         df_r_np1 = market.df_r(tau_np1)
         df_q_np1 = market.df_q(tau_np1)
 
-        if option.kind == "call":
-            v0_n = 0.0
-            v0_np1 = 0.0
-            vmax_n = s_max * df_q_n - k * df_r_n
-            vmax_np1 = s_max * df_q_np1 - k * df_r_np1
-        else:
-            v0_n = k * df_r_n
-            v0_np1 = k * df_r_np1
-            vmax_n = 0.0
-            vmax_np1 = 0.0
+        v0_n, vmax_n = _dirichlet(option.kind, k, s_max, df_r_n, df_q_n)
+        v0_np1, vmax_np1 = _dirichlet(option.kind, k, s_max, df_r_np1, df_q_np1)
 
         v[0] = v0_n
         v[-1] = vmax_n
@@ -304,9 +381,7 @@ def _solve_grid(
         r = market.rate(tau_np1)
         q = market.dividend_yield(tau_np1)
 
-        a = 0.5 * sigma * sigma * (s_inner**2) / (ds * ds) - (r - q) * s_inner / (2.0 * ds)
-        b = -(sigma * sigma) * (s_inner**2) / (ds * ds) - r
-        c = 0.5 * sigma * sigma * (s_inner**2) / (ds * ds) + (r - q) * s_inner / (2.0 * ds)
+        a, b, c = _operator(s_inner, ds, sigma, r, q)
 
         lower = -theta_step * dt * a
         diag = 1.0 - theta_step * dt * b
@@ -539,12 +614,29 @@ def _interp_nodal(nodes: np.ndarray, i: int, w: float) -> float:
 
 
 def _greeks_from_grid(
-    option: EuropeanOption,
+    option: Any,
     model: BlackScholesModel,
     market: Market,
     cfg: PDEConfig,
+    *,
+    solve: Callable[[Any, BlackScholesModel, Market, PDEConfig], _GridSolution] = None,  # type: ignore[assignment]
+    obstacle: np.ndarray | None = None,
 ) -> GreeksResult:
-    """Delta, gamma and theta read off the grid; vega and rho by bump."""
+    """Delta, gamma and theta read off the grid; vega and rho by bump.
+
+    `solve` is the grid solver to read: `_solve_grid` for European options,
+    `qpl.engines.pde.american._solve_grid_american` for American ones. The
+    estimators below are identical either way -- a central stencil reads a
+    slope off neighbouring values and does not care how they were produced --
+    which is why there is one copy of them and not two.
+
+    `obstacle` is the exercise payoff on the spot grid, supplied by the
+    American engine and `None` for European options. It is used for exactly one
+    thing: deciding whether the spot lies in the exercise region, where the PDE
+    identity for theta does not hold. See `qpl.engines.pde.american.greeks_american`.
+    """
+    if solve is None:
+        solve = _solve_grid
     t = option.expiry
     sigma = model.sigma
     if t == 0.0:
@@ -552,7 +644,7 @@ def _greeks_from_grid(
     if sigma == 0.0:
         raise InvalidInputError("sigma must be > 0 for PDE grid Greeks")
 
-    sol = _solve_grid(option, model, market, cfg)
+    sol = solve(option, model, market, cfg)
     s0 = market.spot
     v = sol.v
     ds = sol.ds
@@ -587,12 +679,25 @@ def _greeks_from_grid(
     theta = -(
         0.5 * sigma * sigma * s0 * s0 * gamma + (r - q) * s0 * delta - r * sol.price
     )
+    theta_source = "PDE identity at the spot"
+
+    # American only. Inside the exercise region the PDE is a strict inequality,
+    # not an equation -- that is the content of the complementarity condition --
+    # so the identity above does not apply there. What does apply is that
+    # `V = g(S)` is independent of time, so theta is exactly zero. Reported as
+    # zero, with the source saying so, rather than silently returning `rK - qS`.
+    in_exercise_region = obstacle is not None and _interp_nodal(
+        sol.v - obstacle, i, w
+    ) <= 0.0
+    if in_exercise_region:
+        theta = 0.0
+        theta_source = "exercise region: V = payoff, so theta = 0 exactly"
 
     # Cross-check only: (V at calendar time dt_last - V at calendar time 0)/dt_last.
     theta_backward = _interp_nodal((sol.v_prev - sol.v) / sol.dt_last, i, w)
 
     def _price(mdl: BlackScholesModel, mkt: Market) -> float:
-        return _solve_grid(option, mdl, mkt, cfg).price
+        return solve(option, mdl, mkt, cfg).price
 
     sigma_up = BlackScholesModel(sigma=sigma + GRID_VEGA_BUMP)
     sigma_dn = BlackScholesModel(sigma=max(sigma - GRID_VEGA_BUMP, 0.0))
@@ -617,8 +722,9 @@ def _greeks_from_grid(
         "greeks_method": "grid",
         "delta_source": "central stencil on the grid, linear interpolation in S",
         "gamma_source": "central stencil on the grid, linear interpolation in S",
-        "theta_source": "PDE identity at the spot",
+        "theta_source": theta_source,
         "theta_backward_difference": float(theta_backward),
+        "spot_in_exercise_region": bool(in_exercise_region),
         "vega_source": "bump-and-revalue on the same grid",
         "rho_source": "bump-and-revalue on the same grid",
         "bumps": {"sigma": GRID_VEGA_BUMP, "r": GRID_RHO_BUMP},
@@ -638,21 +744,30 @@ def _greeks_from_grid(
 
 
 def _greeks_by_bump(
-    option: EuropeanOption,
+    option: Any,
     model: BlackScholesModel,
     market: Market,
     cfg: PDEConfig,
+    *,
+    price_fn: Callable[..., PriceResult] = None,  # type: ignore[assignment]
 ) -> GreeksResult:
-    """The pre-Slice-4 path: three full solves at three spots, differenced."""
+    """The pre-Slice-4 path: three full solves at three spots, differenced.
+
+    `price_fn` is the pricer to bump: `price_european` by default,
+    `qpl.engines.pde.american.price_american` when the American engine asks for
+    `greeks_method="bump"`.
+    """
+    if price_fn is None:
+        price_fn = price_european
     s0 = market.spot
     h = max(BUMP_SPOT_FRACTION * s0, 1e-4)
 
     market_up = replace(market, spot=s0 + h)
     market_down = replace(market, spot=s0 - h)
 
-    res_up = price_european(option, model, market_up, cfg=cfg)
-    res_down = price_european(option, model, market_down, cfg=cfg)
-    res_mid = price_european(option, model, market, cfg=cfg)
+    res_up = price_fn(option, model, market_up, cfg=cfg)
+    res_down = price_fn(option, model, market_down, cfg=cfg)
+    res_mid = price_fn(option, model, market, cfg=cfg)
 
     delta = (res_up.value - res_down.value) / (2 * h)
     gamma = (res_up.value - 2 * res_mid.value + res_down.value) / (h * h)

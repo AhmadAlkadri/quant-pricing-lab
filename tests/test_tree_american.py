@@ -33,7 +33,6 @@ import numpy as np
 import pytest
 
 from qpl.engines.mc.pricers import MCConfig
-from qpl.engines.pde.pricers import PDEConfig
 from qpl.engines.tree import TreeConfig
 from qpl.exceptions import InvalidInputError, NotSupportedError
 from qpl.instruments.options import AmericanOption, EuropeanOption
@@ -761,15 +760,20 @@ def test_american_greeks_validation_and_degenerate_cases() -> None:
 
 @pytest.mark.parametrize(
     ("method", "cfg"),
-    [("analytic", None), ("mc", MCConfig(n_paths=64, n_steps=1, seed=1)), ("pde", PDEConfig())],
+    [("analytic", None), ("mc", MCConfig(n_paths=64, n_steps=1, seed=1))],
 )
-def test_non_tree_methods_reject_american_exercise(method: str, cfg: object) -> None:
+def test_non_early_exercise_methods_reject_american_exercise(method: str, cfg: object) -> None:
     """Evidence class: EXACT_IDENTITY (an API contract, not a number).
 
-    None of the analytic, Monte Carlo or PDE engines implements an
-    early-exercise rule, and none of them is registered for `AmericanOption`.
-    The refusal therefore comes out of the ordinary registry lookup with the
+    Neither the analytic nor the Monte Carlo engine implements an
+    early-exercise rule, and neither is registered for `AmericanOption`. The
+    refusal therefore comes out of the ordinary registry lookup with the
     ordinary message -- no engine needs an `if instrument.american: raise`.
+
+    `method="pde"` was on this list until Slice 5, when
+    `qpl.engines.pde.american` registered a PSOR engine for `AmericanOption`.
+    That it now prices instead of refusing is asserted in
+    `tests/test_pde_american.py`, so the removal cannot pass unnoticed.
     """
     option = AmericanOption(kind="put", strike=100.0, expiry=1.0)
     model, market = BlackScholesModel(sigma=0.2), _market(100.0, 0.05, 0.0)

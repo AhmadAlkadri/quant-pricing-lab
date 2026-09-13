@@ -23,6 +23,10 @@ from .engines.mc.pricers import (
     greeks_european as greeks_european_mc,
     price_european as price_european_mc,
 )
+from .engines.pde.american import (
+    greeks_american as greeks_american_pde,
+    price_american as price_american_pde,
+)
 from .engines.pde.pricers import (
     PDE_METHOD_SPEC,
     greeks_european as greeks_european_pde,
@@ -82,16 +86,24 @@ def _register_builtin_engines() -> None:
         greeks=greeks_european_tree,
     )
     # Exercise style is an instrument property (see `qpl.instruments.options`),
-    # so the American entry is another key on the same method, not another
-    # method. Nothing registers the analytic, MC or PDE engines for
-    # `AmericanOption`: asking for one raises `NotSupportedError` through the
-    # ordinary lookup, which is the point of keying on the instrument type.
+    # so an American entry is another key on the same method, not another
+    # method. The tree engine (Slice 2) and the PDE engine's PSOR path
+    # (Slice 5) each register one. Nothing registers the analytic or MC engines
+    # for `AmericanOption`: asking them for one raises `NotSupportedError`
+    # through the ordinary lookup, which is the point of keying on the
+    # instrument type.
+    american = {"instrument_type": AmericanOption, "model_type": BlackScholesModel}
     register(
-        instrument_type=AmericanOption,
-        model_type=BlackScholesModel,
+        **american,
         spec=TREE_METHOD_SPEC,
         price=price_american_tree,
         greeks=greeks_american_tree,
+    )
+    register(
+        **american,
+        spec=PDE_METHOD_SPEC,
+        price=price_american_pde,
+        greeks=greeks_american_pde,
     )
 
 
@@ -112,7 +124,7 @@ def price(
     ----------
     instrument
         Instrument instance. `EuropeanOption` is supported by every method;
-        `AmericanOption` only by `method="tree"`.
+        `AmericanOption` by `method="tree"` and `method="pde"`.
     model
         Model instance. Currently `BlackScholesModel` is supported.
     market
@@ -157,7 +169,7 @@ def greeks(
     ----------
     instrument
         Instrument instance. `EuropeanOption` is supported by every method;
-        `AmericanOption` only by `method="tree"`.
+        `AmericanOption` by `method="tree"` and `method="pde"`.
     model
         Model instance. Currently `BlackScholesModel` is supported.
     market
