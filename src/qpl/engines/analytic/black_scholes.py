@@ -7,6 +7,10 @@ from ...instruments.options import EuropeanOption
 from ...market.market import Market
 from ...models.black_scholes import BlackScholesModel, bs_price
 from ..base import GreeksResult, PriceResult
+from ..registry import MethodSpec
+
+ANALYTIC_METHOD_SPEC = MethodSpec(method="analytic")
+"""Keyword contract for `method="analytic"`: no configuration object, no extras."""
 
 
 def _norm_cdf(x: float) -> float:

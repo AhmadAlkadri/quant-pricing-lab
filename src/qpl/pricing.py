@@ -1,26 +1,74 @@
+"""Public pricing dispatcher.
+
+`price` and `greeks` do three things and nothing else: look up the keyword
+contract for the requested `method`, validate the caller's keyword arguments
+against it, and look up the engine registered for
+`(instrument type, model type, method)`. The lookup tables live in
+`qpl.engines.registry`; the wiring below is the whole list of engines this
+package ships. See `.agents/brain/adr/0005-engine-registry.md`.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Literal
 
 from .engines.analytic.black_scholes import (
-    greeks_european,
+    ANALYTIC_METHOD_SPEC,
+    greeks_european as greeks_european_analytic,
     price_european as price_european_analytic,
 )
 from .engines.base import GreeksResult, PriceResult
 from .engines.mc.pricers import (
-    MCConfig,
+    MC_METHOD_SPEC,
     greeks_european as greeks_european_mc,
     price_european as price_european_mc,
 )
 from .engines.pde.pricers import (
-    PDEConfig,
+    PDE_METHOD_SPEC,
     greeks_european as greeks_european_pde,
     price_european as price_european_pde,
 )
-from .exceptions import InvalidInputError, NotSupportedError
+from .engines.registry import (
+    method_spec,
+    register,
+    resolve_greeks,
+    resolve_price,
+)
 from .instruments.options import EuropeanOption
-from .market.market import Market
 from .models.black_scholes import BlackScholesModel
+
+Method = Literal["analytic", "mc", "pde"]
+
+
+def _register_builtin_engines() -> None:
+    """Wire the engines this package ships into the registry.
+
+    Explicit and ordinary: a new engine adds one `register(...)` call here (or
+    the owning package calls `register` itself), and nothing scans the import
+    graph looking for engines to discover.
+    """
+    common = {"instrument_type": EuropeanOption, "model_type": BlackScholesModel}
+    register(
+        **common,
+        spec=ANALYTIC_METHOD_SPEC,
+        price=price_european_analytic,
+        greeks=greeks_european_analytic,
+    )
+    register(
+        **common,
+        spec=MC_METHOD_SPEC,
+        price=price_european_mc,
+        greeks=greeks_european_mc,
+    )
+    register(
+        **common,
+        spec=PDE_METHOD_SPEC,
+        price=price_european_pde,
+        greeks=greeks_european_pde,
+    )
+
+
+_register_builtin_engines()
 
 
 def price(
@@ -28,7 +76,7 @@ def price(
     model: Any,
     market: Any,
     *,
-    method: Literal["analytic", "mc", "pde"] = "analytic",
+    method: Method = "analytic",
     **kwargs: Any,
 ) -> PriceResult:
     """Dispatch option pricing to the selected engine.
@@ -61,58 +109,9 @@ def price(
     NotSupportedError
         If the method is unknown or the instrument/model/market combination is unsupported.
     """
-    if method == "analytic":
-        if kwargs:
-            raise InvalidInputError("Unexpected keyword arguments for method 'analytic'")
-
-        if (
-            isinstance(instrument, EuropeanOption)
-            and isinstance(model, BlackScholesModel)
-            and isinstance(market, Market)
-        ):
-            return price_european_analytic(instrument, model, market)
-
-        raise NotSupportedError("Unsupported instrument/model/market combination")
-
-    if method == "mc":
-        cfg = kwargs.get("cfg")
-        extra_kwargs = {key: value for key, value in kwargs.items() if key != "cfg"}
-        if cfg is None:
-            raise InvalidInputError("cfg is required for method 'mc'")
-        if extra_kwargs:
-            raise InvalidInputError("Unexpected keyword arguments for method 'mc'")
-        if not isinstance(cfg, MCConfig):
-            raise InvalidInputError("cfg must be an instance of MCConfig")
-
-        if (
-            isinstance(instrument, EuropeanOption)
-            and isinstance(model, BlackScholesModel)
-            and isinstance(market, Market)
-        ):
-            return price_european_mc(instrument, model, market, cfg=cfg)
-
-        raise NotSupportedError("Unsupported instrument/model/market combination")
-
-    if method == "pde":
-        cfg = kwargs.get("cfg")
-        extra_kwargs = {key: value for key, value in kwargs.items() if key != "cfg"}
-        if cfg is None:
-            raise InvalidInputError("cfg is required for method 'pde'")
-        if extra_kwargs:
-            raise InvalidInputError("Unexpected keyword arguments for method 'pde'")
-        if not isinstance(cfg, PDEConfig):
-            raise InvalidInputError("cfg must be an instance of PDEConfig")
-
-        if (
-            isinstance(instrument, EuropeanOption)
-            and isinstance(model, BlackScholesModel)
-            and isinstance(market, Market)
-        ):
-            return price_european_pde(instrument, model, market, cfg=cfg)
-
-        raise NotSupportedError("Unsupported instrument/model/market combination")
-
-    raise NotSupportedError(f"method '{method}' is not supported")
+    bound = method_spec(method).bind_price_kwargs(kwargs)
+    engine = resolve_price(instrument, model, market, method)
+    return engine(instrument, model, market, **bound)
 
 
 def greeks(
@@ -120,7 +119,7 @@ def greeks(
     model: Any,
     market: Any,
     *,
-    method: Literal["analytic", "mc", "pde"] = "analytic",
+    method: Method = "analytic",
     **kwargs: Any,
 ) -> GreeksResult:
     """Dispatch Greeks computation to the selected engine.
@@ -153,58 +152,6 @@ def greeks(
     NotSupportedError
         If the method is unknown or the instrument/model/market combination is unsupported.
     """
-    if method == "analytic":
-        if kwargs:
-            raise InvalidInputError("Unexpected keyword arguments for method 'analytic'")
-
-        if (
-            isinstance(instrument, EuropeanOption)
-            and isinstance(model, BlackScholesModel)
-            and isinstance(market, Market)
-        ):
-            return greeks_european(instrument, model, market)
-
-        raise NotSupportedError("Unsupported instrument/model/market combination")
-
-    if method == "mc":
-        cfg = kwargs.get("cfg")
-        bumps = kwargs.get("bumps")
-        extra_kwargs = {key: value for key, value in kwargs.items() if key not in {"cfg", "bumps"}}
-        if cfg is None:
-            raise InvalidInputError("cfg is required for method 'mc'")
-        if extra_kwargs:
-            raise InvalidInputError("Unexpected keyword arguments for method 'mc'")
-        if not isinstance(cfg, MCConfig):
-            raise InvalidInputError("cfg must be an instance of MCConfig")
-        if bumps is not None and not isinstance(bumps, dict):
-            raise InvalidInputError("bumps must be a dict of bump sizes")
-
-        if (
-            isinstance(instrument, EuropeanOption)
-            and isinstance(model, BlackScholesModel)
-            and isinstance(market, Market)
-        ):
-            return greeks_european_mc(instrument, model, market, cfg=cfg, bumps=bumps)
-
-        raise NotSupportedError("Unsupported instrument/model/market combination")
-
-    if method == "pde":
-        cfg = kwargs.get("cfg")
-        extra_kwargs = {key: value for key, value in kwargs.items() if key != "cfg"}
-        if cfg is None:
-            raise InvalidInputError("cfg is required for method 'pde'")
-        if extra_kwargs:
-            raise InvalidInputError("Unexpected keyword arguments for method 'pde'")
-        if not isinstance(cfg, PDEConfig):
-            raise InvalidInputError("cfg must be an instance of PDEConfig")
-
-        if (
-            isinstance(instrument, EuropeanOption)
-            and isinstance(model, BlackScholesModel)
-            and isinstance(market, Market)
-        ):
-            return greeks_european_pde(instrument, model, market, cfg=cfg)
-
-        raise NotSupportedError("Unsupported instrument/model/market combination")
-
-    raise NotSupportedError(f"method '{method}' is not supported")
+    bound = method_spec(method).bind_greeks_kwargs(kwargs)
+    engine = resolve_greeks(instrument, model, market, method)
+    return engine(instrument, model, market, **bound)

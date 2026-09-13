@@ -11,6 +11,7 @@ from ...instruments.options import EuropeanOption
 from ...market.market import Market
 from ...models.black_scholes import BlackScholesModel
 from ..base import GreeksResult, PriceResult
+from ..registry import MethodSpec
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,10 @@ class PDEConfig:
     s_max: float | None = None
     s_max_multiplier: float = 4.0
     strike_alignment: Literal["none", "midpoint"] = "none"
+
+
+PDE_METHOD_SPEC = MethodSpec(method="pde", cfg_type=PDEConfig)
+"""Keyword contract for `method="pde"`: a required `PDEConfig`, nothing else."""
 
 
 def _solve_tridiagonal(

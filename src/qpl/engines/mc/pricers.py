@@ -9,6 +9,7 @@ from ...market.curves import FlatDividendCurve, FlatRateCurve
 from ...market.market import Market
 from ...models.black_scholes import BlackScholesModel
 from ..base import GreeksResult, PriceResult
+from ..registry import MethodSpec
 from .processes import price_european_from_terminal, simulate_gbm_exact
 
 
@@ -28,6 +29,21 @@ class MCConfig:
     n_paths: int = 50_000
     n_steps: int = 1
     seed: int = 123
+
+
+def _validate_bumps(value: object) -> None:
+    """Reject a `bumps` argument that is not a mapping of bump sizes."""
+    if not isinstance(value, dict):
+        raise InvalidInputError("bumps must be a dict of bump sizes")
+
+
+MC_METHOD_SPEC = MethodSpec(
+    method="mc",
+    cfg_type=MCConfig,
+    greeks_optional_kwargs={"bumps": _validate_bumps},
+)
+"""Keyword contract for `method="mc"`: a required `MCConfig`, plus an optional
+`bumps` mapping accepted by `greeks` only."""
 
 
 def price_european(
