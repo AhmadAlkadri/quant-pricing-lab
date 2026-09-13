@@ -37,7 +37,7 @@ from .pricers import (
 
 __all__ = ["DIGITAL_METHODS", "greeks_digital", "price_digital"]
 
-DIGITAL_METHODS: tuple[str, ...] = ("cos",)
+DIGITAL_METHODS: tuple[str, ...] = ("cos", "gil_pelaez")
 """Transform methods with a digital payoff here (module docstring)."""
 
 

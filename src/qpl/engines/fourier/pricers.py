@@ -49,6 +49,8 @@ from .carr_madan import (
 )
 from .charfn import CharacteristicFunctionModel, characteristic_function_model
 from .cos import cos_price
+from .gil_pelaez import gil_pelaez_probabilities
+from .lewis import lewis_call
 
 __all__ = [
     "CARR_MADAN_TRANSFORMS",
@@ -61,7 +63,7 @@ __all__ = [
     "price_european",
 ]
 
-FOURIER_METHODS: tuple[str, ...] = ("carr_madan", "cos")
+FOURIER_METHODS: tuple[str, ...] = ("carr_madan", "cos", "gil_pelaez", "lewis")
 """Transform methods this package implements, as data for validation."""
 
 CARR_MADAN_TRANSFORMS: tuple[str, ...] = ("fft", "quadrature")
@@ -167,9 +169,28 @@ class FourierConfig:
         Where the ``v`` integral is truncated. ``None`` derives it from the
         model's own variance as ``12 / sqrt(c2)``; a fixed number would be
         wrong by orders of magnitude across maturities and volatilities.
+    quad_limit, quad_tolerance
+        Subdivision limit and requested absolute/relative accuracy for the
+        adaptive `scipy.integrate.quad` used by ``"lewis"`` and
+        ``"gil_pelaez"``. The default tolerance is **not** SciPy's own
+        (1.49e-08) but the bottom of a measured scan -- worst error over the
+        five test points, and cost per call:
+
+            tolerance   Lewis      Gil-Pelaez   Lewis us   GP us
+            1.49e-08    2.49e-13     2.84e-14      1010     1611
+            1e-10       2.13e-14     7.11e-15      1324     2074     <- chosen
+            1e-12       3.55e-14     2.13e-14      1569     2864
+            1e-13       2.84e-14     1.07e-14      1936     3252
+
+        A factor of ten in accuracy for about 30% more work, and below 1e-10 the
+        error stops improving (it is at the floating-point floor) while the cost
+        keeps rising. The *reported* error bound that comes back with the answer
+        is a different matter: it is measured to be four to five decimal orders
+        of magnitude pessimistic on these integrands, so it is recorded in the
+        result's metadata as what it is and never used as an accuracy claim.
     """
 
-    method: Literal["cos", "carr_madan"] = "cos"
+    method: Literal["cos", "carr_madan", "lewis", "gil_pelaez"] = "cos"
     n_terms: int = 256
     truncation_l: float = 10.0
     alpha: float = 1.5
@@ -180,6 +201,8 @@ class FourierConfig:
     quadrature: Literal["trapezoid", "simpson", "gauss_legendre"] = "trapezoid"
     n_quad: int = 512
     u_max: float | None = None
+    quad_limit: int = 200
+    quad_tolerance: float = 1e-10
 
     def __post_init__(self) -> None:
         if self.method not in FOURIER_METHODS:
@@ -210,6 +233,10 @@ class FourierConfig:
             not math.isfinite(self.u_max) or self.u_max <= 0.0
         ):
             raise InvalidInputError("u_max must be None or finite and > 0")
+        if not isinstance(self.quad_limit, int) or self.quad_limit < 1:
+            raise InvalidInputError("quad_limit must be an integer >= 1")
+        if not math.isfinite(self.quad_tolerance) or self.quad_tolerance <= 0.0:
+            raise InvalidInputError("quad_tolerance must be finite and > 0")
 
 
 FOURIER_METHOD_SPEC = MethodSpec(method="fourier", cfg_type=FourierConfig)
@@ -313,6 +340,80 @@ def transform_value(
             "truncation_range": (result.lower, result.upper),
         }
         return result.value, meta
+
+    if cfg.method == "lewis":
+        transform = cf if cf is not None else inputs.cf
+        spot = s0 if s0 is not None else inputs.s0
+        maturity = expiry if expiry is not None else inputs.expiry
+        discount_rate = rate if rate is not None else inputs.rate
+        call, abserr = lewis_call(
+            transform,
+            s0=spot,
+            strike=strike,
+            expiry=maturity,
+            rate=discount_rate,
+            dividend=inputs.dividend,
+            limit=cfg.quad_limit,
+            tolerance=cfg.quad_tolerance,
+        )
+        meta = {
+            "fourier_method": "lewis",
+            "quad_limit": cfg.quad_limit,
+            "quad_tolerance": cfg.quad_tolerance,
+            "reported_abserr": abserr,
+        }
+        if kind == "put":
+            call = _parity_put(
+                call,
+                s0=spot,
+                strike=strike,
+                expiry=maturity,
+                rate=discount_rate,
+                dividend=inputs.dividend,
+            )
+        return call, meta
+
+    if cfg.method == "gil_pelaez":
+        transform = cf if cf is not None else inputs.cf
+        spot = s0 if s0 is not None else inputs.s0
+        maturity = expiry if expiry is not None else inputs.expiry
+        discount_rate = rate if rate is not None else inputs.rate
+        probabilities = gil_pelaez_probabilities(
+            transform,
+            s0=spot,
+            strike=strike,
+            expiry=maturity,
+            rate=discount_rate,
+            dividend=inputs.dividend,
+            limit=cfg.quad_limit,
+            tolerance=cfg.quad_tolerance,
+        )
+        discount = math.exp(-discount_rate * maturity)
+        meta = {
+            "fourier_method": "gil_pelaez",
+            "quad_limit": cfg.quad_limit,
+            "quad_tolerance": cfg.quad_tolerance,
+            "pi1": probabilities.pi1,
+            "pi2": probabilities.pi2,
+            "reported_abserr": max(probabilities.pi1_abserr, probabilities.pi2_abserr),
+        }
+        if payoff == "digital":
+            exercise = probabilities.pi2 if kind == "call" else 1.0 - probabilities.pi2
+            return cash * discount * exercise, meta
+        call = (
+            spot * math.exp(-inputs.dividend * maturity) * probabilities.pi1
+            - strike * discount * probabilities.pi2
+        )
+        if kind == "put":
+            call = _parity_put(
+                call,
+                s0=spot,
+                strike=strike,
+                expiry=maturity,
+                rate=discount_rate,
+                dividend=inputs.dividend,
+            )
+        return call, meta
 
     if cfg.method == "carr_madan":
         return _carr_madan_value(

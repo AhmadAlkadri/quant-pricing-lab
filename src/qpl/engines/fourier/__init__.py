@@ -29,6 +29,8 @@ from .cos import (
     psi_coefficients,
 )
 from .digital import DIGITAL_METHODS, greeks_digital, price_digital
+from .gil_pelaez import GilPelaezProbabilities, gil_pelaez_probabilities
+from .lewis import LEWIS_STRIP_OFFSET, lewis_call
 from .pricers import (
     CARR_MADAN_TRANSFORMS,
     FOURIER_METHOD_SPEC,
@@ -49,6 +51,7 @@ __all__ = [
     "FOURIER_METHODS",
     "FOURIER_METHOD_SPEC",
     "GREEKS_METHODS",
+    "LEWIS_STRIP_OFFSET",
     "ON_GRID_FRACTION",
     "QUADRATURE_RULES",
     "U_MAX_STANDARD_DEVIATIONS",
@@ -58,6 +61,7 @@ __all__ = [
     "CosResult",
     "FourierConfig",
     "FourierInputs",
+    "GilPelaezProbabilities",
     "LogReturnCumulants",
     "black_scholes_characteristic_function",
     "black_scholes_log_return_cumulants",
@@ -70,8 +74,10 @@ __all__ = [
     "damped_call_transform",
     "default_u_max",
     "fourier_inputs",
+    "gil_pelaez_probabilities",
     "greeks_digital",
     "greeks_european",
+    "lewis_call",
     "price_digital",
     "price_european",
     "psi_coefficients",
