@@ -30,6 +30,7 @@ from qpl.cases import (
     DIGITAL_GREEKS_MC_STDERR_MULTIPLE,
     DIGITAL_IDENTITY_CASES,
     DIGITAL_KNOWN_VALUE_CASES,
+    DIGITAL_MC_GREEKS_CASES,
     DIGITAL_MC_PATHS,
     DIGITAL_MC_SEED,
     DIGITAL_MC_STDERR_MULTIPLE,
@@ -351,6 +352,41 @@ def test_monte_carlo_greeks_are_by_likelihood_ratio_and_pathwise_is_refused() ->
             stderr = result.meta["stderr"][name]
             z = abs(getattr(result, name) - getattr(exact, name)) / stderr
             assert z <= DIGITAL_GREEKS_MC_STDERR_MULTIPLE, (case.row.id, name, z)
+
+
+@pytest.mark.parametrize("case", DIGITAL_MC_GREEKS_CASES, ids=lambda c: c.row.id)
+def test_digital_monte_carlo_likelihood_ratio_greek_rows(case: DigitalBSCase) -> None:
+    """Fifteen cells of the estimator Slice 6 named and could not ship.
+
+    Evidence class: STATISTICAL. `row.tolerance` is a z-score against the
+    estimator's own reported standard error, the same shape the vanilla rows
+    use -- which is the point of stating them the same way: the likelihood
+    ratio meets a 4-sigma budget on a jump exactly as the pathwise estimator
+    does on a smooth payoff, while the bump meets it on one and misses it by
+    two orders of magnitude on the other.
+    """
+    assert case.row.evidence is EvidenceClass.STATISTICAL
+    greek = case.row.id.split("_")[4]
+
+    spec = case.spec
+    triple = (spec.option(), spec.model(), spec.market())
+    analytic = greeks(*triple, method="analytic")
+    result = greeks(
+        *triple,
+        method="mc",
+        cfg=MCConfig(
+            n_paths=DIGITAL_GREEKS_MC_PATHS,
+            n_steps=1,
+            seed=DIGITAL_MC_SEED,
+            greeks_estimator="likelihood_ratio",
+        ),
+    )
+    assert result.meta is not None
+    stderr = result.meta["stderr"][greek]
+    assert stderr > 0.0, (case.row.id, stderr)
+    z = (getattr(result, greek) - getattr(analytic, greek)) / stderr
+    assert abs(z) <= case.row.tolerance, (case.row.id, z, case.row.notes)
+    assert getattr(result, greek) != getattr(analytic, greek)
 
 
 # --------------------------------------------------------------------------

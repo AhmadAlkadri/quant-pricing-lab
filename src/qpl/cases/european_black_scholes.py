@@ -28,6 +28,12 @@ __all__ = [
     "ALL_CASES",
     "KNOWN_VALUE_CASES",
     "LIMIT_CASES",
+    "MC_GREEKS_ESTIMATORS",
+    "MC_GREEKS_PATHS",
+    "MC_GREEKS_SEED",
+    "MC_GREEKS_STDERR_MULTIPLE",
+    "MC_GREEK_CASES",
+    "MC_GREEK_CASE_KEYS",
     "MONOTONICITY_CASES",
     "PARITY_CASES",
     "PDE_GREEKS_N",
@@ -593,6 +599,89 @@ PDE_GREEK_CASES: tuple[EuropeanBSCase, ...] = tuple(
 )
 
 
+MC_GREEKS_PATHS = 200_000
+MC_GREEKS_SEED = 123
+MC_GREEKS_STDERR_MULTIPLE = 4.0
+MC_GREEKS_ESTIMATORS: tuple[str, ...] = ("bump", "pathwise", "likelihood_ratio")
+"""Settings for the Monte Carlo Greeks leg of the cross-engine claims.
+
+The tolerance is a multiple of **each Greek's own reported standard error**,
+which is what makes the leg STATISTICAL rather than an accuracy claim: a Monte
+Carlo Greek has no absolute error budget, it has an error bar, and the row
+checks that the error bar is honest. Four standard errors is a two-sided
+false-failure rate near 6e-05 per cell for a fixed seed.
+
+All three estimators are held to the same budget on a *vanilla*, and they all
+meet it: measured |z| at 200 000 paths, seed 123, over the ATM call and put and
+all five Greeks, worst 1.364 (put delta, bump) and median 0.50. That is the
+finding worth having next to the digital rows, where the same table for
+`"bump"` reaches |z| = 531 -- the estimator is not universally bad, it is bad
+exactly where the payoff jumps.
+"""
+
+_MC_GREEKS_SOURCE = (
+    "derived in-repo: qpl.engines.mc Greek estimators against "
+    "qpl.engines.analytic closed-form Greeks at the reference ATM points, "
+    "each compared to its own reported standard error. The estimators are "
+    "re-derived in src/qpl/engines/mc/greeks.py from the terminal lognormal "
+    "law; the ideas are Glasserman (2003), 'Monte Carlo Methods in Financial "
+    "Engineering', sections 7.1-7.4, and Broadie & Glasserman (1996), "
+    "Management Science 42(2), 269-285. No number here is quoted from either."
+)
+
+_MC_GREEK_CELLS: tuple[tuple[str, str, EuropeanBSSpec], ...] = tuple(
+    (estimator, greek, spec)
+    for estimator in MC_GREEKS_ESTIMATORS
+    for greek in ("delta", "gamma", "vega", "theta", "rho")
+    for spec in (REFERENCE_ATM_CALL, REFERENCE_ATM_PUT)
+)
+
+
+def _mc_greek_row_id(estimator: str, greek: str, spec: EuropeanBSSpec) -> str:
+    return f"mc_{estimator}_{greek}_{spec.kind}"
+
+
+MC_GREEK_CASES: tuple[EuropeanBSCase, ...] = tuple(
+    EuropeanBSCase(
+        row=BenchmarkRow(
+            id=_mc_greek_row_id(estimator, greek, spec),
+            description=(
+                f"Monte Carlo {estimator} {greek} against the closed form at "
+                f"S=K=100, r=5%, q=0, sigma=20%, T=1 ({spec.kind}), "
+                f"{MC_GREEKS_PATHS} paths, seed {MC_GREEKS_SEED}"
+            ),
+            expected=0.0,
+            tolerance=MC_GREEKS_STDERR_MULTIPLE,
+            evidence=EvidenceClass.STATISTICAL,
+            source=_MC_GREEKS_SOURCE,
+            notes=(
+                "The residual is measured in units of the estimator's own "
+                "reported standard error, so `tolerance` is a z-score and not "
+                "a price. Gamma under `pathwise` is the mixed LR-PW estimator "
+                "(the payoff has no second derivative) and the result records "
+                "that in meta['estimator']; gamma and vega under "
+                "`likelihood_ratio` carry proportional weights and therefore "
+                "the same z. Measured |z| at this seed: worst 1.364, median "
+                "0.50, over all thirty cells."
+            ),
+        ),
+        specs=(spec,),
+    )
+    for estimator, greek, spec in _MC_GREEK_CELLS
+)
+MC_GREEK_CASE_KEYS: dict[str, tuple[str, str]] = {
+    _mc_greek_row_id(estimator, greek, spec): (estimator, greek)
+    for estimator, greek, spec in _MC_GREEK_CELLS
+}
+"""Row id -> `(greeks_estimator, greek)`.
+
+Exported so the test reads the cell off a mapping instead of splitting the id
+on underscores -- `"likelihood_ratio"` contains one, and a parser that gets
+that wrong fails by testing the *wrong Greek*, silently."""
+
+"""Thirty rows: three estimators x five Greeks x call and put."""
+
+
 # --------------------------------------------------------------------------
 # (iv) Comparative statics.
 #
@@ -668,5 +757,6 @@ ALL_CASES: tuple[EuropeanBSCase, ...] = (
     + TREE_ORDER_CASES
     + TREE_LR_ORDER_CASES
     + PDE_GREEK_CASES
+    + MC_GREEK_CASES
     + MONOTONICITY_CASES
 )

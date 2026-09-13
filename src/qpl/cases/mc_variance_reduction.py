@@ -60,6 +60,8 @@ __all__ = [
     "MC_CROSS_ENGINE_SEED",
     "MC_CROSS_ENGINE_STDERR_MULTIPLE",
     "MC_CROSS_ENGINE_VARIANCE_REDUCTION",
+    "MC_GREEKS_VARIANCE_BAND",
+    "MC_GREEKS_VARIANCE_CASES",
     "MC_VARIANCE_REDUCTION_CASES",
     "MC_VR_BAND",
     "MC_VR_DIGITAL_CALL",
@@ -68,6 +70,7 @@ __all__ = [
     "MC_VR_OTM_CALL",
     "MC_VR_POINTS",
     "MC_VR_SEEDS",
+    "MCGreeksVarianceCase",
     "MCVarianceCase",
     "paths_for_draws",
 ]
@@ -365,3 +368,160 @@ MC_VARIANCE_REDUCTION_CASES: tuple[MCVarianceCase, ...] = tuple(
 """Fifteen rows: five estimators at three points. `expected` is the log of the
 theoretical factor where one exists and of the measured factor where it does
 not; `source` says which."""
+
+
+# --------------------------------------------------------------------------
+# Slice 10: the same question asked about Greek *estimators* rather than about
+# samplers. "Which estimator" is a variance question exactly as "which
+# sampler" is, and the rows have the same shape -- a log-space ratio with a
+# multiplicative band -- so they live here rather than being invented again.
+# --------------------------------------------------------------------------
+
+MC_GREEKS_VARIANCE_BAND = 2.0
+"""Multiplicative band for the Greek-estimator ratios.
+
+Wider than `MC_VR_BAND` (1.7) and the reason is arithmetic, not caution: these
+rows compare two *estimators* over the same 50 seeds, so each variance carries
+a relative standard deviation of `sqrt(2/49) = 0.202` and their ratio about
+`0.29`. A factor of 2.0 is 2.4 of those, against the 1.8 that 1.7 would be.
+The sampler rows can afford the tighter band because most of them have a
+closed-form prediction to sit against; none of these does.
+"""
+
+
+@dataclass(frozen=True)
+class MCGreeksVarianceCase:
+    """One "estimator A is noisier than estimator B" claim, for one Greek.
+
+    Parameters
+    ----------
+    row
+        The claim. `expected` is `log(variance ratio)` and `tolerance` is
+        `log(MC_GREEKS_VARIANCE_BAND)`, as for :class:`MCVarianceCase`.
+    point_id
+        Key into :data:`MC_VR_POINTS`, so the Greek rows and the sampler rows
+        are measured at the same points.
+    greek
+        Which Greek the ratio is about. It matters: at the ATM call the
+        likelihood-ratio estimator is 6.5 times noisier than the pathwise one
+        in delta and 13.0 times in gamma.
+    numerator, denominator
+        `MCConfig.greeks_estimator` values. The ratio is
+        `Var(numerator) / Var(denominator)`, so a row's factor is always the
+        cost of choosing the numerator.
+    """
+
+    row: BenchmarkRow
+    point_id: str
+    greek: str
+    numerator: str
+    denominator: str
+    spec: EuropeanBSSpec | DigitalBSSpec
+
+
+_GREEKS_MEASURED_SOURCE = (
+    "derived in-repo: 50-seed variance ratio between two Greek estimators at "
+    "MC_VR_DRAWS normal draws, measured by tests/test_mc_greeks_variance.py. "
+    "The estimators are re-derived in src/qpl/engines/mc/greeks.py from the "
+    "terminal lognormal law; the ideas are Glasserman (2003), 'Monte Carlo "
+    "Methods in Financial Engineering', sections 7.2-7.4, and Broadie & "
+    "Glasserman (1996), Management Science 42(2), 269-285. There is no "
+    "closed-form prediction for any of these ratios, so each row pins a "
+    "measurement. No number is quoted from either source."
+)
+
+# (point id, greek, numerator, denominator, measured factor, note)
+_GREEKS_ROWS: tuple[tuple[str, str, str, str, float, str], ...] = (
+    (
+        "atm_call",
+        "delta",
+        "likelihood_ratio",
+        "pathwise",
+        6.46,
+        "Glasserman's rule in the direction it predicts: the payoff is smooth, "
+        "so differentiating it beats weighting it. The likelihood-ratio "
+        "estimator keeps the payoff -- an O(10) quantity -- and multiplies it "
+        "by a mean-zero score; the pathwise one replaces the payoff by an "
+        "indicator bounded by 1. Multiplying by a mean-zero weight cannot "
+        "reduce variance. Standard deviations 1.1244e-02 against 4.4236e-03.",
+    ),
+    (
+        "atm_call",
+        "gamma",
+        "likelihood_ratio",
+        "pathwise",
+        13.03,
+        "The 'pathwise' gamma is really the mixed LR-PW estimator (the payoff "
+        "has no second derivative), so this row compares two density "
+        "derivatives of different orders: one score against two. Twice the "
+        "penalty of the delta row, at the same point and the same draws.",
+    ),
+    (
+        "atm_call",
+        "vega",
+        "likelihood_ratio",
+        "pathwise",
+        13.03,
+        "Exactly the gamma row's factor, to three decimals, and not by "
+        "coincidence: the two likelihood-ratio weights are proportional path "
+        "by path, so the Black-Scholes identity vega = S**2 sigma T gamma is "
+        "reproduced in the *sample* and not merely in the mean. Asserted "
+        "directly in tests/test_mc_greeks.py. Two rows, one measurement.",
+    ),
+    (
+        "atm_call",
+        "gamma",
+        "bump",
+        "pathwise",
+        559.64,
+        "What a *second* difference costs: the variance carries 1/(N h**4) "
+        "because the estimator divides by h**2 rather than h, and at the "
+        "default h = 0.01 that is a factor of 10 000 against a signal of "
+        "0.0189. Standard deviations 6.7609e-03 against 2.8579e-04. This is "
+        "the row that makes the mixed estimator worth having.",
+    ),
+    (
+        "digital_call",
+        "delta",
+        "bump",
+        "likelihood_ratio",
+        864.73,
+        "The same rule with the payoff's smoothness removed, and the ordering "
+        "reverses: on a jump the bump's two legs differ only on the O(h) "
+        "fraction of paths that cross the strike, each by a full cash amount. "
+        "The pathwise estimator is absent from this row because it does not "
+        "exist here -- its almost-everywhere payoff derivative is identically "
+        "zero (tests/test_digital_mc.py computes it).",
+    ),
+)
+
+
+MC_GREEKS_VARIANCE_CASES: tuple[MCGreeksVarianceCase, ...] = tuple(
+    MCGreeksVarianceCase(
+        row=BenchmarkRow(
+            id=f"mc_greeks_var_{point_id}_{greek}_{numerator}_over_{denominator}",
+            description=(
+                f"Var({numerator}) / Var({denominator}) for {greek} at "
+                f"{point_id}, {MC_VR_DRAWS} normal draws "
+                f"(log-space claim: log {measured:.2f})"
+            ),
+            expected=math.log(measured),
+            tolerance=math.log(MC_GREEKS_VARIANCE_BAND),
+            evidence=EvidenceClass.STATISTICAL,
+            source=_GREEKS_MEASURED_SOURCE,
+            notes=note,
+        ),
+        point_id=point_id,
+        greek=greek,
+        numerator=numerator,
+        denominator=denominator,
+        spec=MC_VR_POINTS[point_id],
+    )
+    for point_id, greek, numerator, denominator, measured, note in _GREEKS_ROWS
+)
+"""Five rows: which Greek estimator costs what, at the two Slice 7 points.
+
+Both of Glasserman's rules appear here, in opposite directions on the same
+axis: the likelihood ratio loses by 6.5 on a smooth payoff's delta and the bump
+loses by 865 on a discontinuous one's. That pair is the slice's headline and it
+is two rows of the same table."""

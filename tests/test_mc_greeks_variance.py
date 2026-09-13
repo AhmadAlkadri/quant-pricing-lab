@@ -37,6 +37,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from qpl.cases import (
+    MC_GREEKS_VARIANCE_BAND,
+    MC_GREEKS_VARIANCE_CASES,
+    MC_VR_DRAWS,
+    MC_VR_SEEDS,
+    MCGreeksVarianceCase,
+)
 from qpl.engines.analytic.black_scholes import greeks_european as greeks_analytic
 from qpl.engines.analytic.digital import (
     digital_price,
@@ -502,3 +509,78 @@ def test_the_evidence_classes_this_file_uses_exist() -> None:
         EvidenceClass.CLOSED_FORM,
         EvidenceClass.NEGATIVE_FINDING,
     } <= set(EvidenceClass)
+
+
+# --------------------------------------------------------------------------
+# The same comparisons as data: `qpl.cases.mc_variance_reduction`.
+# --------------------------------------------------------------------------
+
+
+def _case_spread(case: MCGreeksVarianceCase, estimator: str) -> float:
+    """Standard deviation of one estimator over the Slice 7 seeds and draws.
+
+    Deliberately the *cases* constants (50 seeds, `MC_VR_DRAWS` normal draws at
+    the `MC_VR_POINTS` specifications) rather than this module's, so a Greek
+    row and a sampler row are measured at the same point with the same budget
+    and can be read in one table.
+    """
+    spec = case.spec
+    option, model, market = spec.option(), spec.model(), spec.market()
+    values = [
+        getattr(
+            greeks(
+                option,
+                model,
+                market,
+                method="mc",
+                cfg=MCConfig(
+                    n_paths=MC_VR_DRAWS,
+                    n_steps=1,
+                    seed=seed,
+                    greeks_estimator=estimator,
+                ),
+            ),
+            case.greek,
+        )
+        for seed in MC_VR_SEEDS
+    ]
+    return float(np.std(values, ddof=1))
+
+
+@pytest.mark.parametrize(
+    "case", MC_GREEKS_VARIANCE_CASES, ids=lambda c: c.row.id
+)
+def test_greek_estimator_variance_rows(case: MCGreeksVarianceCase) -> None:
+    """The five pinned estimator-cost ratios, checked in log space.
+
+    Evidence class: STATISTICAL. `expected` is `log(measured factor)` and
+    `tolerance` is `log(MC_GREEKS_VARIANCE_BAND)`, so the comparison is a
+    symmetric multiplicative band -- the natural shape for a ratio that ranges
+    from 6.5 to 865 across the table. An absolute tolerance would be vacuous at
+    one end and impossible at the other.
+
+    Measured at the Slice 7 points and budget (50 seeds, 20 480 normal draws):
+
+        point         greek   numerator / denominator        factor
+        atm_call      delta   likelihood_ratio / pathwise      6.46
+        atm_call      gamma   likelihood_ratio / pathwise     13.03
+        atm_call      vega    likelihood_ratio / pathwise     13.03
+        atm_call      gamma   bump / pathwise                559.64
+        digital_call  delta   bump / likelihood_ratio        864.73
+
+    The two rows at the extremes are the slice's headline and they are the same
+    rule: differentiate the payoff when it is smooth (the likelihood ratio pays
+    6.5x for not doing so), differentiate the density when it is not (the bump
+    pays 865x for not doing so).
+    """
+    assert case.row.evidence is EvidenceClass.STATISTICAL
+    assert case.row.tolerance == pytest.approx(np.log(MC_GREEKS_VARIANCE_BAND))
+
+    numerator = _case_spread(case, case.numerator)
+    denominator = _case_spread(case, case.denominator)
+    factor = (numerator / denominator) ** 2
+    assert abs(np.log(factor) - case.row.expected) <= case.row.tolerance, (
+        case.row.id,
+        factor,
+        float(np.exp(case.row.expected)),
+    )

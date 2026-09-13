@@ -46,6 +46,7 @@ __all__ = [
     "DIGITAL_GREEKS_MC_STDERR_MULTIPLE",
     "DIGITAL_IDENTITY_CASES",
     "DIGITAL_KNOWN_VALUE_CASES",
+    "DIGITAL_MC_GREEKS_CASES",
     "DIGITAL_MC_PATHS",
     "DIGITAL_MC_SEED",
     "DIGITAL_MC_STDERR_MULTIPLE",
@@ -583,6 +584,50 @@ DIGITAL_CROSS_ENGINE_CASES: tuple[DigitalBSCase, ...] = tuple(
 )
 
 
+_MC_GREEKS_SOURCE = (
+    "derived in-repo: qpl.engines.mc.digital likelihood-ratio Greeks against "
+    "qpl.engines.analytic.digital closed-form Greeks, each compared to its own "
+    "reported standard error. The scores are re-derived in "
+    "src/qpl/engines/mc/greeks.py from the lognormal density; the method is "
+    "Glasserman (2003), 'Monte Carlo Methods in Financial Engineering', "
+    "section 7.3, and Broadie & Glasserman (1996), Management Science 42(2), "
+    "269-285. No number here is quoted from either."
+)
+
+DIGITAL_MC_GREEKS_CASES: tuple[DigitalBSCase, ...] = tuple(
+    DigitalBSCase(
+        row=BenchmarkRow(
+            id=f"digital_mc_likelihood_ratio_{greek}_{name}",
+            description=(
+                f"Monte Carlo likelihood-ratio {greek} against the closed form "
+                f"at {name}, {DIGITAL_GREEKS_MC_PATHS} paths, seed "
+                f"{DIGITAL_MC_SEED}"
+            ),
+            expected=0.0,
+            tolerance=DIGITAL_GREEKS_MC_STDERR_MULTIPLE,
+            evidence=EvidenceClass.STATISTICAL,
+            source=_MC_GREEKS_SOURCE,
+            notes=(
+                "The residual is in units of the estimator's own reported "
+                "standard error, so `tolerance` is a z-score. Measured |z| at "
+                "this seed across the three points and five Greeks: worst "
+                "1.289 (itm_1y_div rho), median 0.59. The likelihood ratio is "
+                "the only estimator held to this budget here: `pathwise` does "
+                "not exist for an indicator payoff (its almost-everywhere "
+                "derivative is identically zero) and `bump` reaches |z| = 531 "
+                "on theta at the ATM point, because the paths that cross the "
+                "strike when the maturity moves by 1e-04 are too rare to "
+                "appear in the sample. See tests/test_digital_mc.py."
+            ),
+        ),
+        specs=(spec,),
+    )
+    for greek in ("delta", "gamma", "vega", "theta", "rho")
+    for name, spec in _POINTS
+)
+"""Fifteen rows: five Greeks at three points, likelihood ratio only."""
+
+
 ALL_DIGITAL_CASES: tuple[DigitalBSCase, ...] = (
     DIGITAL_IDENTITY_CASES
     + DIGITAL_STRIKE_DERIVATIVE_CASES
@@ -590,4 +635,5 @@ ALL_DIGITAL_CASES: tuple[DigitalBSCase, ...] = (
     + DIGITAL_TREE_ORDER_CASES
     + DIGITAL_PDE_ORDER_CASES
     + DIGITAL_CROSS_ENGINE_CASES
+    + DIGITAL_MC_GREEKS_CASES
 )

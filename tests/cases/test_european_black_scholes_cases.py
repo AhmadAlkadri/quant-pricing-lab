@@ -21,6 +21,10 @@ from qpl.cases import (
     MC_CROSS_ENGINE_SEED,
     MC_CROSS_ENGINE_STDERR_MULTIPLE,
     MC_CROSS_ENGINE_VARIANCE_REDUCTION,
+    MC_GREEK_CASE_KEYS,
+    MC_GREEK_CASES,
+    MC_GREEKS_PATHS,
+    MC_GREEKS_SEED,
     MONOTONICITY_CASES,
     PARITY_CASES,
     PDE_GREEK_CASES,
@@ -362,6 +366,57 @@ def test_pde_grid_greek_rows(case: EuropeanBSCase) -> None:
     # Not vacuous: the row would also pass if the engine returned the analytic
     # value, so pin that it is genuinely a discretisation and not a passthrough.
     assert residual != 0.0
+
+
+@pytest.mark.parametrize("case", MC_GREEK_CASES, ids=lambda c: c.row.id)
+def test_monte_carlo_greek_rows(case: EuropeanBSCase) -> None:
+    """The fourth Greek engine, held to its own error bar.
+
+    Evidence class: STATISTICAL. Unlike the PDE rows above, whose tolerance is
+    an absolute accuracy budget derived from a measured discretisation error,
+    a Monte Carlo Greek has no absolute budget -- it has a standard error, and
+    the claim a row can make is that the reported standard error is honest.
+    So `row.tolerance` here is a **z-score**: `|estimate - closed form|` divided
+    by the estimator's own `meta["stderr"]` for that Greek.
+
+    All three estimators are in the table and all three meet a 4-sigma budget
+    on a vanilla (worst measured |z| 1.364, median 0.50 over the thirty cells).
+    That is the row worth reading next to `DIGITAL_MC_GREEKS_CASES`, where the
+    same table for `"bump"` reaches |z| = 531 on theta: the bump is not
+    universally unusable, it is unusable exactly where the payoff jumps, and
+    holding it to the same budget on both instruments is what makes the
+    difference visible rather than asserted.
+
+    The row id encodes the estimator and the Greek, so a failure names the cell.
+    """
+    assert case.row.evidence is EvidenceClass.STATISTICAL
+    assert "derived in-repo" in case.row.source
+
+    estimator, greek = MC_GREEK_CASE_KEYS[case.row.id]
+
+    spec = case.spec
+    option, model, market = spec.option(), spec.model(), spec.market()
+    analytic = greeks(option, model, market, method="analytic")
+    result = greeks(
+        option,
+        model,
+        market,
+        method="mc",
+        cfg=MCConfig(
+            n_paths=MC_GREEKS_PATHS,
+            n_steps=1,
+            seed=MC_GREEKS_SEED,
+            greeks_estimator=estimator,  # type: ignore[arg-type]
+        ),
+    )
+    assert result.meta is not None
+    stderr = result.meta["stderr"][greek]
+    assert stderr > 0.0, (case.row.id, stderr)
+    z = (getattr(result, greek) - getattr(analytic, greek)) / stderr
+    assert abs(z) <= case.row.tolerance, (case.row.id, z, case.row.notes)
+    # Not vacuous: a passthrough of the analytic value would also pass, so pin
+    # that this is a sample and not the closed form.
+    assert getattr(result, greek) != getattr(analytic, greek)
 
 
 def test_pde_grid_greeks_beat_the_bump_path_on_delta() -> None:
