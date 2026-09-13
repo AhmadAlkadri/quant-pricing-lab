@@ -13,6 +13,7 @@ fast, and designed to run without external data sources.
 - `american_put_cross_method.py`
 - `american_put_binomial_dp.py`
 - `digital_option_cross_method.py` (also `--case pde`)
+- `mc_variance_reduction.py` (also `--case digital`)
 - `quadrature_demo.py`
 - `laplace_inversion_demo.py`
 - `copula_gaussian_demo.py`

@@ -310,21 +310,40 @@ def test_stratified_gain_for_a_digital_is_set_by_where_the_jump_falls() -> None:
         K        f       predicted   measured   ratio
         8      0.5231       7.90        9.00    1.14
         16     0.0461      89.64      108.82    1.21
+        20     0.8076      31.73       48.50    1.53
         32     0.0922      94.19      115.32    1.22
+        40     0.6153      41.65       75.55    1.81
         64     0.1845     104.84      101.26    0.97
+        80     0.2306     111.13      102.36    0.92
         128    0.3689     135.49      150.07    1.11
+        160    0.4612     158.68      191.61    1.21
         256    0.7379     326.19      385.85    1.18
+        320    0.9223    1100.97     1014.18    0.92
+        512    0.4757     505.91      491.01    0.97
 
     Two consequences, both of which contradict the slice statement's
     expectation of "a very large gain for the digital" that grows with `K`:
 
-    - **The gain is not monotone in `K`.** `K = 16` (108.8) beats `K = 64`
-      (101.3), because 16 strata happen to put the jump 4.6% into a stratum
-      while 64 put it 18.4% in. Doubling the strata can make a digital *worse*.
+    - **The gain is not monotone in `K`**, and the non-monotonicity is
+      predicted, not noise: 16 strata put the jump 4.6% into its stratum and 20
+      strata put it 80.8% in, so going from `K = 16` to `K = 20` is predicted to
+      fall 89.64 -> 31.73 and measures 108.82 -> 48.50. The same happens at the
+      other end of the scan, 320 -> 512 predicted 1100.97 -> 505.91 and
+      measured 1014.18 -> 491.01. Both pairs are asserted below. (An earlier
+      draft of this test claimed the pair `K = 16` beats `K = 64`; that is true
+      of the measurement, 108.82 against 101.26, but theory predicts the
+      opposite ordering there -- 89.64 against 104.84 -- so it was a 50-seed
+      sampling accident dressed up as a mechanism, and it is not what is
+      asserted.)
     - **It is a lottery on the contract, not a property of the method.** Move
       the strike and the same `K` gives a different factor; the quantity that
       controls it is `f`, which depends on the strike, the drift, the
       volatility and the maturity through `u*`.
+
+    Where the formula is worst is where the predicted gain is smallest (ratio
+    1.81 at `K = 40`, 1.53 at `K = 20`): those cells sit just outside the
+    factor-of-1.7 band, so the asserted scan is the six powers of two, and the
+    two extra pairs are asserted as orderings rather than as levels.
 
     The vanilla has no such structure -- its payoff varies inside every stratum
     -- which is why its gain is a clean `O(K)` and the digital's is not.
@@ -340,17 +359,29 @@ def test_stratified_gain_for_a_digital_is_set_by_where_the_jump_falls() -> None:
     p_itm = 1.0 - u_star
 
     plain = _estimator_variance(DIGITAL_CALL, "none")
+
+    def predicted_gain(k: int) -> float:
+        f = (k * u_star) % 1.0
+        return k * p_itm * (1.0 - p_itm) / (f * (1.0 - f))
+
+    def measured_gain(k: int) -> float:
+        return plain / _estimator_variance(DIGITAL_CALL, "stratified", k)
+
     gains = {}
     for k in (8, 16, 32, 64, 128, 256):
-        f = (k * u_star) % 1.0
-        predicted = k * p_itm * (1.0 - p_itm) / (f * (1.0 - f))
-        measured = plain / _estimator_variance(DIGITAL_CALL, "stratified", k)
-        gains[k] = measured
-        assert predicted / BAND < measured < predicted * BAND, (
-            f"K={k}: measured {measured:.2f} against predicted {predicted:.2f}"
+        predicted = predicted_gain(k)
+        gains[k] = measured_gain(k)
+        assert predicted / BAND < gains[k] < predicted * BAND, (
+            f"K={k}: measured {gains[k]:.2f} against predicted {predicted:.2f}"
         )
-    # The non-monotonicity, pinned: more strata is not always better.
-    assert gains[16] > gains[64]
+    # The non-monotonicity, pinned at two pairs where theory predicts the
+    # *direction* -- more strata, less gain -- rather than at a pair where the
+    # measurement happens to invert inside its own noise.
+    for smaller, larger in ((16, 20), (320, 512)):
+        assert predicted_gain(smaller) > predicted_gain(larger)
+        assert measured_gain(smaller) > measured_gain(larger), (
+            f"K={smaller} vs K={larger}"
+        )
 
 
 # ---------------------------------------------------------------------------

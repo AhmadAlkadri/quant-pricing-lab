@@ -303,11 +303,14 @@ _ROWS: tuple[tuple[str, str | tuple[str, ...], float, float | None, str], ...] =
         "stratified",
         101.26,
         None,
-        "K = 64. Not monotone in K, and predicted exactly by "
-        "K p(1-p) / (f(1-f)) with f = frac(K Phi(z*)) = 0.1845: all the "
-        "residual variance sits in the single stratum containing the jump. "
-        "K = 16 gives 108.8 and K = 64 gives 101.3, so doubling the strata "
-        "twice makes it worse.",
+        "K = 64. Predicted by K p(1-p) / (f(1-f)) with "
+        "f = frac(K Phi(z*)) = 0.1845: all the residual variance sits in the "
+        "single stratum containing the jump, so the gain depends on where "
+        "inside that stratum the jump falls. It is therefore NOT monotone in "
+        "K, and the non-monotonicity is predicted rather than noise: K = 16 "
+        "measures 108.8 and K = 20 measures 48.5 (predicted 89.6 and 31.7), "
+        "and K = 320 measures 1014.2 against K = 512's 491.0 (predicted "
+        "1101.0 and 505.9). More strata can mean less gain.",
     ),
     (
         "digital_call",

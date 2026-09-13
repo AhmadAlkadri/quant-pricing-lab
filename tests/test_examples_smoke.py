@@ -145,6 +145,48 @@ _SMOKE_CASES = [
         ],
     ),
     (
+        # Six estimators on one price at a fixed cost. The curated keys are the
+        # ones a run that had lost the point would not print: `paths= 40960
+        # normals= 20480` is the equal-cost bookkeeping (antithetic buys two
+        # paths per normal, so the comparison is at equal normals), and
+        # `predicted_factor antithetic=4.0` next to the measured `seed_factor`
+        # column is theory and measurement in the same table.
+        "mc_variance_reduction.py",
+        [],
+        [
+            "example=mc_variance_reduction",
+            "case=vanilla",
+            "analytic=10.4505835722",
+            "pilot_rho_antithetic=-0.50",
+            "predicted_factor antithetic=4.0",
+            "predicted_factor control_variate=6.7",
+            "estimator=none",
+            "paths= 40960 normals= 20480",
+            "estimator=stratified+control",
+            "seed_factor=",
+        ],
+    ),
+    (
+        # The digital leg, which exists for the stratum scan:
+        # `strata_gain_monotone_in_K=False` with `K= 16` beating `K= 20` by
+        # 2.9x is the finding -- for a discontinuous payoff the gain is set by
+        # where the jump falls inside its stratum, so more strata can mean less
+        # gain, and the printed `predicted` column says so before the measured
+        # one does.
+        "mc_variance_reduction.py",
+        ["--case", "digital"],
+        [
+            "case=digital",
+            "analytic=0.5323248155",
+            "pilot_rho_antithetic=-0.78",
+            "jump_at_u=0.440382",
+            "strata_scan K= 16 f=0.0461",
+            "strata_scan K= 20 f=0.8076",
+            "strata_gain_monotone_in_K=False",
+            "strata_gain_K16_over_K20=2.9",
+        ],
+    ),
+    (
         "american_put_binomial_dp.py",
         [],
         [
