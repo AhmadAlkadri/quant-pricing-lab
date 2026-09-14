@@ -138,8 +138,8 @@ HESTON_CALIBRATION_SAFETY_FACTOR = 10.0
 A residual perturbation `dr` moves the Gauss-Newton solution by at most
 `||dr|| / s_min`, so a converged fit's parameter error is at most the residual
 it stopped at divided by the Jacobian's smallest singular value there. On the
-reference set with the implied-volatility objective that bound is 2.67e-10
-against a worst measured error of 1.48e-10 -- tight to a factor of 1.8. The
+reference set with the implied-volatility objective that bound is 5.43e-11
+against a worst measured error of 7.02e-12 -- tight to a factor of 8. The
 factor of 10 covers the two places the linearisation is not exact (the model is
 nonlinear in the parameters, and the solver's stopping point is not the exact
 minimiser). It is not headroom over a guess."""
@@ -300,15 +300,15 @@ def noisy_quotes(
 # --------------------------------------------------------------------------
 
 _RECOVERY_MEASURED = {
-    ("reference", "price"): (2.95e-09, 5.42e-07, 3.28e-09, 4.08e-07, 1.29e-07),
-    ("reference", "implied_vol"): (2.19e-12, 1.48e-10, 2.06e-12, 9.68e-12, 2.85e-12),
-    ("feller_violated", "price"): (2.51e-10, 8.23e-08, 5.75e-09, 1.27e-09, 5.76e-09),
+    ("reference", "price"): (2.94e-09, 5.41e-07, 3.28e-09, 4.08e-07, 1.29e-07),
+    ("reference", "implied_vol"): (5.41e-14, 7.02e-12, 1.52e-13, 1.16e-12, 2.38e-13),
+    ("feller_violated", "price"): (4.20e-10, 7.64e-08, 7.68e-09, 2.86e-08, 2.28e-09),
     ("feller_violated", "implied_vol"): (
-        2.20e-10,
-        9.07e-09,
-        1.61e-09,
-        5.27e-09,
-        1.01e-09,
+        7.63e-13,
+        6.19e-12,
+        5.73e-13,
+        3.50e-11,
+        1.17e-11,
     ),
 }
 """Measured absolute recovery errors, in `(v0, kappa, theta, xi, rho)` order.
@@ -689,12 +689,11 @@ HESTON_CALIBRATION_OBJECTIVE_CASES: tuple[CalibrationCase, ...] = tuple(
 # (6) Initialisation.
 # --------------------------------------------------------------------------
 
-HESTON_CALIBRATION_GLOBAL_COUNT = 11
+HESTON_CALIBRATION_GLOBAL_COUNT = 14
 HESTON_CALIBRATION_GLOBAL_TOLERANCE = 1e-02
 """Relative slack on the best objective for a start to count as having reached
-it. The eleven winners agree to 1e-06 relative and the three failures are four
-to seven decimal orders away, so any tolerance between 1e-06 and 1e+02 gives
-the same count."""
+it. Not doing any work: the fourteen winners agree to 1e-10 relative, so any
+tolerance between 1e-09 and 1e+02 gives the same count."""
 
 _INITIALISATION_SPEC = CalibrationSpec(
     parameters=HESTON_CALIBRATION_REFERENCE,
@@ -718,37 +717,45 @@ HESTON_CALIBRATION_INITIALISATION_CASES: tuple[CalibrationCase, ...] = (
             evidence=EvidenceClass.NEGATIVE_FINDING,
             source="derived in-repo: tests/test_heston_calibration.py",
             notes=(
-                "11/14, so the failure rate is 21% from a deliberately spread grid. "
-                "The three failures -- (0.10,0.3,0.10,1.8,+0.8), "
-                "(0.50,0.1,0.80,3.0,-0.99) and (0.04,0.2,0.60,4.0,-0.3) -- stop within "
-                "1e-02 of where they started, and the cause is measured rather than "
-                "assumed: all three have a huge theta or xi, which is where the "
-                "COS_LOG_RANGE_CAP clip binds hard, so the pricer is wrong by three "
-                "decimal orders and the residual is flat. They are not local minima of "
-                "the true objective. Before the clip existed the same grid scored 5/14 "
-                "and the failures returned their starting vector exactly. Tolerance 0: "
-                "this is a count, and a change in it is a change in the finding."
+                "14/14, at one, three and six maturities alike, from a "
+                "deliberately spread grid. This row read 11/14 before the "
+                "COS_PUT_LEG_THRESHOLD rule went in, and the three failures were "
+                "not local minima: all three had a huge theta or xi, where a fixed "
+                "call leg's e^b made the pricer wrong by three decimal orders and "
+                "the residual flat, so each solver stalled within 1e-02 of its "
+                "start. Fixing the pricer fixed the optimiser, which is the lesson "
+                "the row carries -- an optimisation failure rate measured on a "
+                "broken pricer measures the pricer. What 14/14 does NOT mean is "
+                "that the answer is identified: at ONE maturity all fourteen also "
+                "reach the best objective within 1% and land on kappa anywhere from "
+                "7.197 to 15.004 against a true 4.0. Tolerance 0: this is a count, "
+                "and a change in it is a change in the finding."
             ),
         ),
         spec=_INITIALISATION_SPEC,
     ),
     CalibrationCase(
         row=BenchmarkRow(
-            id="heston_cal_multistart_recovers_from_a_dead_start",
+            id="heston_cal_multistart_ties_the_best_single_start",
             description=(
                 f"relative objective gap between an {HESTON_CALIBRATION_MULTISTART_COUNT}"
-                "-start run from a dead start and the best single-start run"
+                "-start run from the worst start and the best single-start run"
             ),
             expected=0.0,
             tolerance=1e-03,
             evidence=EvidenceClass.CLOSED_FORM,
             source="derived in-repo: tests/test_heston_calibration.py",
             notes=(
-                "Started at (0.50, 0.1, 0.80, 3.0, -0.99), one of the three stalls, "
-                "n_starts=6 reaches 3.116984e-05, the same objective the eleven good "
-                "starts reach. n_starts of 4, 8, 12 and 16 reach the same six digits at "
-                "1.5, 3.4, 5.4 and 7.2 seconds, so 6 is a run-time choice and not a "
-                "tuned one. The draw is reproducible at a fixed seed."
+                "Started at (0.50, 0.1, 0.80, 3.0, -0.99), n_starts=6 reaches "
+                "3.116984e-05, which is what every single start reaches. So the "
+                "multi-start FINDS the best objective and does not IMPROVE on a "
+                "single start: on this problem there is nothing to improve, and "
+                "saying so is more useful than dressing a tie up as a rescue. It "
+                "was worth something while the pricer was broken -- it recovered "
+                "the global optimum from all three stalled starts. n_starts of 4, "
+                "8, 12 and 16 reach the same six digits at 1.5, 3.4, 5.4 and 7.2 "
+                "seconds, so 6 is a run-time choice and not a tuned one. The draw "
+                "is reproducible at a fixed seed."
             ),
         ),
         spec=_INITIALISATION_SPEC,

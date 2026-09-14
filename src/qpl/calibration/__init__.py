@@ -8,7 +8,7 @@ identifiability caveat.
 
 from .heston import (
     CALIBRATION_METHODS,
-    COS_LOG_RANGE_CAP,
+    COS_PUT_LEG_THRESHOLD,
     DEFAULT_BOUNDS,
     DOMAIN_PENALTY,
     FELLER_SATISFIED_COS,
@@ -35,7 +35,7 @@ from .heston import (
 
 __all__ = [
     "CALIBRATION_METHODS",
-    "COS_LOG_RANGE_CAP",
+    "COS_PUT_LEG_THRESHOLD",
     "DEFAULT_BOUNDS",
     "DOMAIN_PENALTY",
     "FELLER_SATISFIED_COS",

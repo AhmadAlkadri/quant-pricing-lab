@@ -44,48 +44,56 @@ COS is used rather than Lewis or Gil-Pelaez for that reason alone -- measured
 here, 15 quotes cost **1.2 ms** by COS and **85 ms** by adaptive-quadrature
 Lewis, a factor of 70, and a calibration makes hundreds of those calls.
 
-Slice 15 warned that COS "needs a setting chosen per parameter set", and this
-module measures the warning and finds it is worse than stated: the failure is
-**two-sided**. Worst absolute error against a Lewis integral of the same
-transform, over strikes 80..120 and maturities 0.25..2 on the reference set
-(Feller number 4) and on the repository's Feller-violating set (0.08):
+Slice 15 warned that COS "needs a setting chosen per parameter set", and it is
+right, but the warning turns out to be about the *payoff leg* first and the
+range second.
+
+The leg. A COS call's payoff coefficient integrates `e^z` over `[z*, b]`, so it
+carries `e^b`; the cosine sum then has to cancel that against a price of order
+`S_0`, and its round-off grows exponentially with the range's upper end. A COS
+put's coefficient integrates over `[a, z*]`, so it carries `e^{z*} = K / S_0`
+and nothing else -- but it is exposed to the **truncated left tail**, which for
+`rho < 0` is where the missing mass is. Neither leg is uniformly better and
+`b` is the variable that decides: see `COS_PUT_LEG_THRESHOLD` for the crossover
+table and the rule. Picking the leg by `b` is also what makes the residual
+function **total**: the put leg's coefficients cannot overflow, so a search in
+the far corner of the parameter box gets a wrong price rather than `-3.2e+43`.
+Measured over all fourteen starts of `qpl.cases.heston_calibration` and 200
+uniform draws inside `DEFAULT_BOUNDS`, every price and every gradient entry is
+finite and inside the no-arbitrage strip.
+
+The range. With the leg chosen that way the round-off side of the failure is
+gone and only the truncation side is left. Worst absolute error against a Lewis
+integral of the same transform, over strikes 80-120 and maturities 0.25-2 on
+the reference set (Feller number 4) and on the repository's Feller-violating
+set (0.08):
 
     L,  N        Feller-satisfying      Feller-violating
     10,  256          4.92e-12               1.43e-02
-    16, 1024          9.50e-10               3.53e-04
-    24, 2048          8.00e-08               5.86e-07
-    28, 4096          8.00e-08               1.49e-07
-    32, 8192          8.00e-08               3.24e-08
-    40,16384          1.20e-07               1.29e-07
+    16, 1024          3.70e-11               3.53e-04
+    24, 2048          3.23e-11               1.22e-06
+    28, 4096          2.05e-12               7.74e-08
+    32, 8192          8.16e-12               4.88e-09
+    40,16384          2.13e-11               1.86e-11
 
-Too narrow a range truncates the left tail: that is the Feller-violating
-column at `L = 10`, and it is the `c4 = 0` error
-`HESTON_TRUNCATION_L_FELLER_VIOLATED` records. Too wide a range **amplifies
-round-off**, because the payoff coefficients carry `e^b` with
-`b = c1 + L sqrt(c2)` and the cosine sum has to cancel that against an `O(10)`
-price -- which is why the Feller-satisfying column stops improving and then
-turns round, and why it is flat in `N` (8.00e-08 at `N = 2048`, 4096 and 8192
-alike, a range effect rather than a series one). The table above is already
-protected by `COS_LOG_RANGE_CAP`; without that clip the same column reads
-5.17e-07, 1.26e-05, 2.30e-04 and 4.07e-02, and a corner of the parameter box
-overflows outright. There is no `(L, N)` that is machine-accurate on both
-sets, and `L = 28` costs 6.5x the run time of `L = 10` (9.1 ms against 1.4 ms
-for 30 quotes). `default_cos_settings` is therefore a two-branch rule keyed on
-the Feller number, and `calibrate_heston` resolves it **once**, from the
-initial guess, and holds it fixed for the whole solve:
-re-resolving per evaluation would make the residual function discontinuous
-exactly where a search crosses `4 kappa theta = 2 xi^2`, and a discontinuous
-residual is not something a Gauss-Newton step or a finite-difference Jacobian
-can be asked to handle. Pass `cos=` to override.
+The Feller-satisfying column is now flat at round-off instead of turning round
+and diverging (before the leg rule it read 4.92e-12, 9.50e-10, 8.00e-08,
+8.00e-08, 8.00e-08, 1.20e-07 *with* a range clip in place, and 5.17e-07 /
+1.26e-05 / 2.30e-04 / 4.07e-02 without one). The Feller-violating column falls
+monotonically, because `c4 = 0` makes the default range too narrow there and
+the only repair is a wider one -- which is what
+`HESTON_TRUNCATION_L_FELLER_VIOLATED` records.
 
-One more Slice 15 finding is used here and one is contradicted. Used: the COS
-*call* is the reliable leg under Heston (measured 1.4e-12 against the put's
-2.70e-08 at the package defaults, because a negative `rho` puts the missing
-tail mass at the range's lower end, which is the put's end). Contradicted: the
-slice statement for this work said the *put* was the reliable leg and the call
-should come by parity. It is the other way round, so this module prices the
-call and derives the put by parity, and `tests/test_heston_calibration.py`
-measures the difference the wrong choice would make.
+So a single setting would now work: `L = 40, N = 16384` is 2.1e-11 on both. It
+costs **64x** the term count of `L = 10, N = 256`, and `L = 28, N = 4096`
+already costs 6.5x (9.1 ms against 1.4 ms for 30 quotes). `default_cos_settings`
+is therefore a two-branch rule keyed on the Feller number, justified by run
+time rather than by accuracy, and `calibrate_heston` resolves it **once**, from
+the initial guess, holding it fixed for the whole solve: re-resolving per
+evaluation would make the residual discontinuous exactly where a search crosses
+`4 kappa theta = 2 xi^2`, and a discontinuous residual is not something a
+Gauss-Newton step or a finite-difference Jacobian can be asked to handle. Pass
+`cos=` to override.
 
 The analytic Jacobian
 ---------------------
@@ -175,7 +183,7 @@ from ..models.heston import HestonModel, heston_log_return_cumulants
 
 __all__ = [
     "CALIBRATION_METHODS",
-    "COS_LOG_RANGE_CAP",
+    "COS_PUT_LEG_THRESHOLD",
     "DEFAULT_BOUNDS",
     "DOMAIN_PENALTY",
     "FELLER_SATISFIED_COS",
@@ -247,58 +255,54 @@ set where the defaults are at 4.9e-12 -- which is the round-off half of the
 module docstring's table and the reason this is a branch and not a default."""
 
 
-COS_LOG_RANGE_CAP = 16.0
-"""Hard clip on the COS truncation range `[a, b]`, in log-return units.
+COS_PUT_LEG_THRESHOLD = 7.5
+"""Range endpoint `b` above which the call is priced through the **put** leg.
 
-Without it a parameter search is not merely inaccurate off in the corners of
-the bounds -- it **overflows**. The payoff coefficients carry `e^b`, and the
-cosine sum has to cancel that against a price of order `S_0`, so the absolute
-error grows exponentially in the range endpoint. It is the endpoint that
-governs it, not `L` and not the parameter set; measured at the money against a
-Lewis integral of the same transform over four sets spanning Feller numbers
-0.03 to 4 and maturities 1 to 3 years, with no clip in place:
+Slice 15 measured the COS call/put asymmetry twice and got opposite answers,
+and both are right, because the two legs fail for different reasons.
 
-    half-width     ~7      ~10     ~14     ~17     ~20     ~24     ~32
-    |error|      1e-12   3e-10   1e-08   2e-06   1e-05   2e-04   7e-01
+- The **call**'s payoff coefficient integrates `e^z` over `[z*, b]`, so it
+  carries `e^b`. The cosine sum then has to cancel `e^b` against a price of
+  order `S_0`, and its round-off grows exponentially with the range endpoint.
+  No value of `L` repairs that -- widening the range to cover a fat tail makes
+  it worse, which is the oracle finding in
+  `tests/oracle/test_heston_vs_quantlib.py` (error rising monotonically through
+  7.2e+00, 1.3e+01, 4.9e+01, 4.1e+02, 1.6e+05, 9.4e+08, 4.4e+15 as `L` goes 8
+  to 50 on the Feller-violating set at `T = 10`).
+- The **put**'s coefficient integrates `e^z` over `[a, z*]`, so it carries
+  `e^{z*} = K / S_0` and nothing else, and is immune to that. What it is not
+  immune to is the **truncated left tail**: with `rho < 0` the density is
+  left-skewed, the mass the range misses sits below `a`, and that is the put's
+  end. That is the finding in `tests/test_heston_fourier.py`, where at the
+  package defaults the call is at 1.4e-12 and the put at 2.70e-08.
 
-and past 40 it is 1e+14 and rising: at `(v0, kappa, theta, xi, rho) =
-(0.5, 0.1, 0.8, 3.0, -0.99)` and `T = 3`, where the Feller branch asks for
-`L = 28` and the half-width is 113.8, the "price" of a 100-strike call comes
-back as **-3.2e+43**. A number like that clamps to the edge of the
-no-arbitrage strip, its implied volatility clamps with it, the residual goes
-flat and a local solver **stalls on its first step** -- which is how this was
-found, as four dead starts out of fourteen.
+So the leg to use depends on the regime, and `b` is the variable that decides
+it. Measured, worst absolute error over strikes 80-120 against a Lewis integral
+of the same transform, at this module's own settings:
 
-Clipping `[a, b]` turns the overflow back into an ordinary truncation error:
-the range is now too narrow in the corner, so the price is wrong there, but it
-is finite, of a plausible order and carrying a usable gradient, and the search
-walks back out instead of dying. The measured trade-off, worst over five
-strikes and six maturities on the two study sets, against the worst |price|
-the four corner sets report:
+    b       set / T          call direct    put then parity
+     1.73   reference 0.25     2.2e-13          3.6e-07
+     2.95   violating 0.25     2.1e-12          1.7e-10
+     4.56   reference 1        1.5e-12          2.7e-08
+     6.69   violating 1        1.5e-10          4.8e-08
+     8.49   reference 3        1.3e-10          1.6e-11
+    12.80   reference 10       2.1e-08          2.1e-14
+    14.13   violating 3        2.9e-05          1.9e-07
+    16.00   violating 10       7.8e+01          1.2e-03
 
-    clip        reference set   violating set   worst corner |price|
-      10          1.30e-10         1.20e-03            1.8e+03
-      12          1.30e-10         2.20e-04            7.5e+03
-      14          1.30e-10         4.01e-05            3.2e+04
-      16          1.30e-10         2.90e-05            1.4e+05
-      20          1.30e-10         2.90e-05            2.6e+06
-      25          1.30e-10         2.90e-05            1.0e+08
+The crossover is between 6.69 and 8.49 and it is sharp; `7.5` is the midpoint
+of that gap, and any threshold inside it picks the better leg in all eight
+cells. The worst error over the eight drops from 7.8e+01 (call only) and
+3.6e-07 (put only) to 1.2e-03, and over the six cells with `T <= 3` -- the
+region a calibration actually visits -- from 2.9e-05 and 3.6e-07 to 1.9e-07.
 
-`16.0` is the knee: the smallest clip at which the Feller-violating set is at
-its **unclipped** accuracy (2.90e-05, which is the `c4 = 0` range rule's own
-residual error at `T = 3` and not the clip's), while the corner is still 38
-decimal orders short of overflowing. The reference set never notices the clip
-at any of these values. A strike outside `e^{+-16}` times spot is 9 million
-times the forward and is not a quote.
-
-This lives here rather than in `qpl.engines.fourier.cos` on purpose: that
-module prices one option at settings its caller chose and should not silently
-second-guess them, while this one is called hundreds of times at parameters
-nobody chose. The clip is continuous in the parameters (a `min` and a `max` of
-continuous functions), so the residual stays continuous where it binds; the
-kink is not differentiable and the analytic Jacobian reports the unclipped
-derivative, which is one more reason this is a guard for the corners and not a
-setting to calibrate inside."""
+This is the one place this module does something `qpl.engines.fourier.cos`
+deliberately does not. Slice 15 recorded the put-then-parity route as a recipe
+and refused to put it in the engine, because doing so would destroy the one
+test where put-call parity is a real check on the COS coefficients rather than
+an identity of the implementation. That argument is about the engine's test
+coverage and does not apply to a residual function, so the recipe is applied
+here and the engine is left alone."""
 
 
 def default_cos_settings(parameters) -> CosSettings:
@@ -432,9 +436,8 @@ def cos_call_prices(
     evaluated once on the frequency grid and reused for every strike, which is
     the whole reason a calibration is cheap.
 
-    Calls, not puts: under Heston with `rho < 0` the COS call is four decimal
-    orders more accurate than the COS put at the same settings (Slice 15), and
-    a put is recovered by parity in `heston_quote_values`.
+    The call is always what comes back, but which cosine sum produces it is
+    decided by `COS_PUT_LEG_THRESHOLD`: see that constant for the measurement.
     """
     v0, kappa, theta, xi, rho = (float(x) for x in parameters)
     c1, c2 = heston_log_return_cumulants(
@@ -452,12 +455,8 @@ def cos_call_prices(
         raise InvalidInputError(
             "COS truncation range is degenerate: the log return has zero variance"
         )
-    a = max(c1 - width, -COS_LOG_RANGE_CAP)
-    b = min(c1 + width, COS_LOG_RANGE_CAP)
-    if b <= a:
-        raise InvalidInputError(
-            "COS truncation range collapsed under COS_LOG_RANGE_CAP"
-        )
+    a = c1 - width
+    b = c1 + width
     k = np.arange(settings.n_terms, dtype=float)
     u = k * math.pi / (b - a)
     phi, dphi = heston_charfn_gradient(
@@ -480,15 +479,28 @@ def cos_call_prices(
     discount = math.exp(-rate * expiry)
     scale = 2.0 / (b - a)
 
+    use_put_leg = b >= COS_PUT_LEG_THRESHOLD
+    spot_leg = s0 * math.exp(-dividend * expiry)
+
     strike_grid = np.asarray(strikes, dtype=float)
     values = np.empty(strike_grid.size)
     gradients = np.zeros((5, strike_grid.size)) if gradient else None
     for j, strike in enumerate(strike_grid):
         boundary = min(max(math.log(strike / s0), a), b)
-        chi = chi_coefficients(k, boundary, b, a, b)
-        psi = psi_coefficients(k, boundary, b, a, b)
-        payoff_k = scale * (s0 * chi - strike * psi)
-        values[j] = discount * float(np.sum(weights * payoff_k))
+        if use_put_leg:
+            chi = chi_coefficients(k, a, boundary, a, b)
+            psi = psi_coefficients(k, a, boundary, a, b)
+            payoff_k = scale * (strike * psi - s0 * chi)
+        else:
+            chi = chi_coefficients(k, boundary, b, a, b)
+            psi = psi_coefficients(k, boundary, b, a, b)
+            payoff_k = scale * (s0 * chi - strike * psi)
+        value = discount * float(np.sum(weights * payoff_k))
+        if use_put_leg:
+            # C = P + S e^{-qT} - K e^{-rT}. Both corrections are free of the
+            # Heston parameters, so the gradient is the put's unchanged.
+            value = value + spot_leg - strike * discount
+        values[j] = value
         if gradient:
             gradients[:, j] = discount * (d_weights @ payoff_k)
     return values, gradients

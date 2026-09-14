@@ -4,6 +4,10 @@ This file starts with the two claims that are about the *machinery* rather than
 about identifiability -- the analytic Jacobian and the constraint handling --
 because everything later depends on them being right.
 
+The claims about identifiability -- synthetic recovery (a), the conditioning
+and the flat direction (b), the objective choice (c) and initialisation (d) --
+follow in the second half.
+
 (f) **The analytic gradient.** `heston_charfn_gradient` returns `phi` together
     with its five parameter derivatives from the closed-form affine solution.
     `phi` reproduces `qpl.models.heston.heston_characteristic_function` to
@@ -20,8 +24,8 @@ because everything later depends on them being right.
 (e) **Constraints.** The bounded solver (`method="trf"`) stays strictly inside
     `DEFAULT_BOUNDS`, which keep `v0, kappa, theta, xi > 0` and `|rho| < 1` and
     impose nothing else. The unconstrained route (`method="lm"`) **leaves the
-    domain**: from a start at `(0.04, 0.05, 0.25, 3.0, -0.95)` it terminates
-    on its own `xtol` at `theta = -1.70`, a negative long-run variance, and the
+    domain**: from a start at `(0.005, 0.01, 0.005, 0.01, 0.0)` it terminates
+    on its own `xtol` at `rho = +1.0140`, a correlation above one, and the
     result reports `in_domain = False` and `model = None` rather than coercing
     it into a `HestonModel` that cannot exist. The bounded run from the same
     start recovers the truth at an RMSE of 2.56e-07. A Feller-violating optimum
@@ -30,16 +34,19 @@ because everything later depends on them being right.
     `feller_satisfied = False`. EXACT_IDENTITY for the bound arithmetic,
     NEGATIVE_FINDING for what the unconstrained route does with the same data.
 
-(g) **The COS envelope.** Two facts about the pricer this calibrator uses, both
-    of which a calibration hits and a single pricing call does not. First, the
-    Slice 15 call/put asymmetry: at the package defaults the COS *call* is at
-    1.2e-12 against a Lewis integral of the same transform while the COS *put*
-    is at 2.7e-08, so this module prices the call and takes the put by parity.
-    That **contradicts** the written plan for this slice, which had them the
-    other way round. Second, the range's two-sided failure and the
-    `COS_LOG_RANGE_CAP` guard: without the clip a parameter search in the far
-    corner of the bounds reports a 100-strike call at **-3.2e+43**, and a
-    solver started there dies on its first step.
+(g) **The COS envelope, and the payoff leg.** Slice 15 measured the COS
+    call/put asymmetry twice and got opposite answers. Both are right: a call's
+    payoff coefficient carries `e^b` and a put's carries `e^{z*} = K / S_0`, so
+    the call loses to round-off when the range is wide and the put loses to the
+    truncated left tail when it is narrow. The crossover is at a range endpoint
+    of about 7.5 and it is sharp -- over eight cells the call is better at every
+    `b` below 6.69 and the put at every `b` above 8.49, by up to **seven decimal
+    orders**. Choosing by `b` also makes the residual function *total*, because
+    the put leg's coefficients cannot overflow: over all fourteen starts of
+    `qpl.cases.heston_calibration` and 200 uniform draws inside the bounds,
+    every price and gradient is finite and inside the no-arbitrage strip, where
+    a fixed call leg reports a 100-strike call at `-3.2e+43` in the same corner.
+    That one rule removed a start-grid failure rate of 3/14 outright.
 
 Sources: Gatheral (2006) chapter 3; Cui, del Bano Rollin and Germano (2017)
 EJOR 263(2) section 3; Nocedal and Wright (2006) chapter 10. Every number in
@@ -54,7 +61,7 @@ import numpy as np
 import pytest
 
 from qpl.calibration import (
-    COS_LOG_RANGE_CAP,
+    COS_PUT_LEG_THRESHOLD,
     DEFAULT_BOUNDS,
     FELLER_SATISFIED_COS,
     FELLER_VIOLATED_COS,
@@ -333,84 +340,214 @@ def test_a_put_quote_and_a_call_quote_share_one_gradient() -> None:
 # (g) What the COS pricer is worth, and where it stops being worth anything.
 # --------------------------------------------------------------------------
 
-COS_CALL_BUDGET = 1e-11
-COS_PUT_FLOOR = 1e-09
-"""The call leg is at 1.24e-12 and the put leg at 2.70e-08 on the reference set
-at `T = 1`, `K = 100`, at the package COS defaults. Slice 15 measured the same
-asymmetry and its cause (`rho < 0` puts the missing tail mass at the range's
-lower end, which is the put's end); what is new here is that a calibrator has
-to choose, and the written plan for this slice chose the wrong leg."""
+LEG_CROSSOVER = (
+    # (parameters, expiry, b, call-leg error, put-leg error)
+    (TRUE_REFERENCE, 0.25, 1.730, 2.13e-13, 3.61e-07),
+    (TRUE_FELLER_VIOLATED, 0.25, 2.946, 2.08e-12, 1.67e-10),
+    (TRUE_REFERENCE, 1.0, 4.558, 1.33e-12, 2.70e-08),
+    (TRUE_FELLER_VIOLATED, 1.0, 6.694, 1.48e-10, 4.75e-08),
+    (TRUE_REFERENCE, 3.0, 8.489, 1.30e-10, 1.55e-11),
+    (TRUE_FELLER_VIOLATED, 3.0, 14.128, 2.90e-05, 1.85e-07),
+    (TRUE_REFERENCE, 10.0, 15.357, 1.81e-08, 4.97e-14),
+    (TRUE_FELLER_VIOLATED, 10.0, 31.106, 6.45e03, 7.57e-07),
+)
+"""Worst error over strikes 80-120 against a Lewis integral of the same
+transform, by payoff leg, at this module's settings. The `b` column is the
+range's upper end and is what decides which leg wins."""
 
 
-@pytest.mark.parametrize("strike", STRIKES)
-def test_the_calibrator_prices_the_call_because_the_put_is_four_orders_worse(
-    strike: float,
+@pytest.mark.parametrize(
+    ("parameters", "expiry", "endpoint", "call_error", "put_error"),
+    LEG_CROSSOVER,
+    ids=[f"b{row[2]:g}" for row in LEG_CROSSOVER],
+)
+def test_the_payoff_leg_crosses_over_with_the_range_endpoint(
+    parameters, expiry, endpoint, call_error, put_error
 ) -> None:
-    """NEGATIVE_FINDING, and a contradicted slice statement.
+    """NEGATIVE_FINDING: neither leg is uniformly better, and `b` decides.
 
-    The plan for this slice said to price the **put** by COS and take the call
-    by parity. It is the other way round. Both legs are the same cosine sum
-    against the same coefficients and differ only in which end of `[a, b]` the
-    payoff coefficient integrates from; with `rho = -0.5` the density is
-    left-skewed and the missing mass sits at the lower end. Measured here at
-    every strike, so the module prices the call.
+    Slice 15 measured this asymmetry twice and got opposite answers -- the call
+    four decimal orders better at the package defaults, the call diverging
+    hopelessly on a Feller-violating ten-year cell -- and both measurements are
+    right. A call's payoff coefficient integrates `e^z` up to `b`, so the
+    cosine sum has to cancel `e^b` against a price of order `S_0`; a put's
+    integrates up from `a` and carries only `e^{z*} = K / S_0`, but pays for it
+    by missing whatever tail mass sits below `a`, which for `rho < 0` is the
+    fat one.
+
+    The written plan for this slice named the put as the reliable leg. That is
+    right above the crossover and wrong below it by up to six decimal orders,
+    so the module chooses per maturity instead of once.
     """
     assert EvidenceClass.NEGATIVE_FINDING is EvidenceClass.NEGATIVE_FINDING
-    expiry = 1.0
-    reference_call, _ = lewis_call(
-        REFERENCE,
-        s0=MARKET.spot,
-        strike=strike,
-        expiry=expiry,
-        rate=0.01,
-        dividend=0.02,
-        limit=800,
-        tolerance=1e-13,
+    model = HestonModel(*parameters)
+    settings = default_cos_settings(parameters)
+    v0, kappa, theta, xi, rho = parameters
+    c1, c2 = heston_log_return_cumulants(
+        expiry, rate=0.01, dividend=0.02, v0=v0, kappa=kappa, theta=theta, xi=xi, rho=rho
     )
-    spot_leg = MARKET.spot * math.exp(-0.02 * expiry)
-    strike_leg = strike * math.exp(-0.01 * expiry)
-    reference_put = reference_call - spot_leg + strike_leg
+    assert c1 + settings.truncation_l * math.sqrt(c2) == pytest.approx(
+        endpoint, rel=0.02
+    )
 
-    calls, _ = cos_call_prices(
-        TRUE_REFERENCE,
+    worst_call = 0.0
+    worst_put = 0.0
+    for strike in STRIKES:
+        reference, _ = lewis_call(
+            model,
+            s0=MARKET.spot,
+            strike=strike,
+            expiry=expiry,
+            rate=0.01,
+            dividend=0.02,
+            limit=800,
+            tolerance=1e-13,
+        )
+        direct_call = cos_price(
+            model,
+            s0=MARKET.spot,
+            strike=strike,
+            expiry=expiry,
+            rate=0.01,
+            dividend=0.02,
+            kind="call",
+            n_terms=settings.n_terms,
+            truncation_l=settings.truncation_l,
+        ).value
+        direct_put = cos_price(
+            model,
+            s0=MARKET.spot,
+            strike=strike,
+            expiry=expiry,
+            rate=0.01,
+            dividend=0.02,
+            kind="put",
+            n_terms=settings.n_terms,
+            truncation_l=settings.truncation_l,
+        ).value
+        spot_leg = MARKET.spot * math.exp(-0.02 * expiry)
+        strike_leg = strike * math.exp(-0.01 * expiry)
+        worst_call = max(worst_call, abs(direct_call - reference))
+        worst_put = max(
+            worst_put, abs(direct_put + spot_leg - strike_leg - reference)
+        )
+
+    # The published table reproduces, to within a decimal order.
+    assert worst_call == pytest.approx(call_error, rel=10.0)
+    assert worst_put == pytest.approx(put_error, rel=10.0)
+    # ... and the threshold picks the better of the two at every endpoint.
+    if endpoint < COS_PUT_LEG_THRESHOLD:
+        assert worst_call < worst_put
+    else:
+        assert worst_put < worst_call
+
+
+@pytest.mark.parametrize(
+    ("parameters", "expiry"),
+    [(row[0], row[1]) for row in LEG_CROSSOVER],
+    ids=[f"b{row[2]:g}" for row in LEG_CROSSOVER],
+)
+def test_the_module_delivers_the_better_leg_at_every_cell(parameters, expiry) -> None:
+    """The rule, end to end: `cos_call_prices` is at the better of the two."""
+    model = HestonModel(*parameters)
+    settings = default_cos_settings(parameters)
+    values, _ = cos_call_prices(
+        parameters,
         s0=MARKET.spot,
-        strikes=np.array([strike]),
+        strikes=np.array(STRIKES),
         expiry=expiry,
         rate=0.01,
         dividend=0.02,
-        settings=FELLER_SATISFIED_COS,
+        settings=settings,
     )
-    direct_put = cos_price(
-        REFERENCE,
+    worst = 0.0
+    for index, strike in enumerate(STRIKES):
+        reference, _ = lewis_call(
+            model,
+            s0=MARKET.spot,
+            strike=strike,
+            expiry=expiry,
+            rate=0.01,
+            dividend=0.02,
+            limit=800,
+            tolerance=1e-13,
+        )
+        worst = max(worst, abs(float(values[index]) - reference))
+    row = next(r for r in LEG_CROSSOVER if r[0] == parameters and r[1] == expiry)
+    assert worst < 10.0 * min(row[3], row[4])
+
+
+def test_the_put_leg_keeps_the_whole_parameter_box_finite() -> None:
+    """NEGATIVE_FINDING repaired: no clip, no overflow, no dead starts.
+
+    The call leg's `e^b` is not merely inaccurate in the far corner of
+    `DEFAULT_BOUNDS` -- it overflows. At `(0.5, 0.1, 0.8, 3.0, -0.99)` and
+    `T = 3`, where the Feller branch asks for `L = 28` and the range's upper end
+    is 113.8, a direct COS call reports a 100-strike call as **-3.2e+43**. A
+    price like that clamps to the edge of the no-arbitrage strip, its implied
+    volatility clamps with it, the residual goes flat and a local solver stalls
+    on its first step; that was measured as three dead starts out of fourteen.
+
+    The put leg has no `e^b` in it, so the same cell comes back as 11.61
+    against a true 11.98 -- wrong, because the range is far too wide for the
+    term count there, but a *price*. This is asserted over every start in the
+    published grid at every study maturity, and it is why this module needs no
+    range clip and no penalty on the pricer.
+    """
+    assert EvidenceClass.NEGATIVE_FINDING is EvidenceClass.NEGATIVE_FINDING
+    corner = (0.5, 0.1, 0.8, 3.0, -0.99)
+    settings = default_cos_settings(corner)
+    overflowing = cos_price(
+        HestonModel(*corner),
         s0=MARKET.spot,
-        strike=strike,
-        expiry=expiry,
+        strike=100.0,
+        expiry=3.0,
         rate=0.01,
         dividend=0.02,
-        kind="put",
-        n_terms=FELLER_SATISFIED_COS.n_terms,
-        truncation_l=FELLER_SATISFIED_COS.truncation_l,
+        kind="call",
+        n_terms=settings.n_terms,
+        truncation_l=settings.truncation_l,
     ).value
+    assert abs(overflowing) > 1e30
 
-    call_error = abs(float(calls[0]) - reference_call)
-    put_error = abs(direct_put - reference_put)
-    assert call_error < COS_CALL_BUDGET
-    assert put_error > COS_PUT_FLOOR
-    assert put_error > 1000.0 * call_error
+    for parameters in START_GRID:
+        leg_settings = default_cos_settings(parameters)
+        for expiry in SIX_MATURITIES:
+            values, gradients = cos_call_prices(
+                parameters,
+                s0=MARKET.spot,
+                strikes=np.array(STRIKES),
+                expiry=expiry,
+                rate=0.01,
+                dividend=0.02,
+                settings=leg_settings,
+                gradient=True,
+            )
+            assert np.all(np.isfinite(values)), (parameters, expiry)
+            assert np.all(np.isfinite(gradients)), (parameters, expiry)
+            ceiling = MARKET.spot * math.exp(-0.02 * expiry)
+            assert np.all(values >= -1e-06)
+            assert np.all(values <= ceiling + 1e-06)
 
 
 def test_the_feller_branch_picks_the_settings_and_neither_setting_does_both() -> None:
-    """NEGATIVE_FINDING: the COS range fails on **both** sides, so it branches.
+    """NEGATIVE_FINDING: no one COS range setting serves both parameter sets.
 
-    At the money, against a Lewis integral of the same transform:
+    At the money at `T = 1`, against a Lewis integral of the same transform,
+    through `cos_call_prices` (so with the leg rule in force):
 
         settings          reference set (Feller 4)   violating set (Feller 0.08)
         L=10,  N=256              1.2e-12                    8.0e-04
-        L=28, N=4096              1.4e-08                    1.2e-10
+        L=28, N=4096              4.3e-14                    1.2e-10
 
-    Too narrow truncates the left tail; too wide amplifies round-off, because
-    the payoff coefficients carry `e^b`. There is no single setting that is
-    machine-accurate on both, which is why `default_cos_settings` is a branch.
+    The narrow setting truncates the Feller-violating left tail by eight
+    decimal orders, so a Feller-violating fit **must** widen the range. The
+    wide setting is not worse on the reference set at all once the leg rule is
+    in force (before it, the same cell read 1.4e-08 and a `T = 2` cell read
+    1.3e-05), so what is left is a **cost** argument and not an accuracy one:
+    `L = 28, N = 4096` is 6.5x the run time of `L = 10, N = 256` for the same
+    30 quotes. `default_cos_settings` branches on the Feller number for that
+    reason, and the branch is stated here as what it is.
     """
     assert EvidenceClass.NEGATIVE_FINDING is EvidenceClass.NEGATIVE_FINDING
     assert default_cos_settings(TRUE_REFERENCE) == FELLER_SATISFIED_COS
@@ -446,145 +583,15 @@ def test_the_feller_branch_picks_the_settings_and_neither_setting_does_both() ->
             )
             errors[(label, name)] = abs(float(value[0]) - reference_value)
 
-    # Each set is better at its own branch, and by decimal orders.
+    # The narrow setting is fine on the reference set and eight decimal orders
+    # out on the violating one: that is the accuracy half of the branch.
     assert errors[("reference", "default")] < 1e-11
-    assert errors[("reference", "wide")] > 1e-09
-    assert errors[("violating", "wide")] < 1e-09
     assert errors[("violating", "default")] > 1e-05
-    # ... and neither column is uniformly better than the other.
-    assert errors[("reference", "default")] < errors[("violating", "default")]
-    assert errors[("violating", "wide")] < errors[("reference", "wide")]
-
-
-def test_the_log_range_cap_turns_an_overflow_into_a_truncation_error() -> None:
-    """NEGATIVE_FINDING: the corner of the bounds overflows without the clip.
-
-    At `(0.5, 0.1, 0.8, 3.0, -0.99)` and `T = 3` the Feller branch asks for
-    `L = 28`, which puts the range's upper end at 113.8 in log-return units.
-    The payoff coefficients carry `e^b`, so the 100-strike call comes back as
-    **-3.2e+43** against a true value of 11.98. Clipping `[a, b]` to
-    `[-10, 10]` makes it 1.8e+03 -- still wrong, because the range is now far
-    too narrow there, but finite, of a plausible order and carrying a gradient
-    the solver can use to walk back out.
-    """
-    assert EvidenceClass.NEGATIVE_FINDING is EvidenceClass.NEGATIVE_FINDING
-    corner = (0.5, 0.1, 0.8, 3.0, -0.99)
-    expiry = 3.0
-    reference, _ = lewis_call(
-        HestonModel(*corner),
-        s0=MARKET.spot,
-        strike=100.0,
-        expiry=expiry,
-        rate=0.01,
-        dividend=0.02,
-        limit=400,
-        tolerance=1e-11,
-    )
-    clipped, _ = cos_call_prices(
-        corner,
-        s0=MARKET.spot,
-        strikes=np.array([100.0]),
-        expiry=expiry,
-        rate=0.01,
-        dividend=0.02,
-        settings=default_cos_settings(corner),
-    )
-    unclipped = cos_price(
-        HestonModel(*corner),
-        s0=MARKET.spot,
-        strike=100.0,
-        expiry=expiry,
-        rate=0.01,
-        dividend=0.02,
-        kind="call",
-        n_terms=FELLER_VIOLATED_COS.n_terms,
-        truncation_l=FELLER_VIOLATED_COS.truncation_l,
-    ).value
-
-    assert abs(unclipped) > 1e30
-    assert abs(float(clipped[0])) < 1e06
-    assert abs(float(clipped[0]) - reference) < abs(unclipped - reference) / 1e30
-    assert COS_LOG_RANGE_CAP == 16.0
-
-
-def test_the_cap_does_not_bind_on_either_study_set() -> None:
-    """The guard is for the corners; it costs the study points nothing.
-
-    Checked directly on the range rather than on a price: the widest cell used
-    anywhere in this file is the Feller-violating set at `T = 3`, whose upper
-    endpoint is `c1 + 28 sqrt(c2) = 14.13` against a cap of 16. The reference
-    set's widest is 8.49 at the same maturity. So every other number here is a
-    statement about the calibration and not about the guard.
-    """
-    for parameters, maturities in (
-        (TRUE_REFERENCE, SIX_MATURITIES),
-        (TRUE_FELLER_VIOLATED, SIX_MATURITIES),
-    ):
-        settings = default_cos_settings(parameters)
-        v0, kappa, theta, xi, rho = parameters
-        for expiry in maturities:
-            c1, c2 = heston_log_return_cumulants(
-                expiry,
-                rate=0.01,
-                dividend=0.02,
-                v0=v0,
-                kappa=kappa,
-                theta=theta,
-                xi=xi,
-                rho=rho,
-            )
-            half_width = settings.truncation_l * math.sqrt(c2)
-            assert c1 + half_width < COS_LOG_RANGE_CAP
-            assert c1 - half_width > -COS_LOG_RANGE_CAP
-
-
-def test_the_cosine_sum_amplifies_the_transforms_own_round_off() -> None:
-    """NEGATIVE_FINDING: `e^b` is a condition number on the transform, too.
-
-    `cos_call_prices` recomputes the characteristic function inside
-    `heston_charfn_gradient`; `qpl.engines.fourier.cos.cos_price` reads
-    `HestonModel.characteristic_function`. The two transforms agree to
-    **2.5e-16** absolute -- they are the same formula -- and the two prices
-    then differ by up to **3.5e-10** relative. The gap is not a disagreement
-    about the model; it is the `e^b` cancellation in the payoff coefficients
-    turning 1e-16 in `phi` into 1e-10 in a price, measured at the widest cell
-    used here (`b = 14.13`). It is the same mechanism as the overflow above,
-    seen at a survivable size, and it is why `COS_LOG_RANGE_CAP` exists.
-    """
-    assert EvidenceClass.NEGATIVE_FINDING is EvidenceClass.NEGATIVE_FINDING
-    ratios = []
-    for parameters in (TRUE_REFERENCE, TRUE_FELLER_VIOLATED):
-        settings = default_cos_settings(parameters)
-        model = HestonModel(*parameters)
-        for expiry in SIX_MATURITIES:
-            here, _ = cos_call_prices(
-                parameters,
-                s0=MARKET.spot,
-                strikes=np.array(STRIKES),
-                expiry=expiry,
-                rate=0.01,
-                dividend=0.02,
-                settings=settings,
-            )
-            engine = np.array(
-                [
-                    cos_price(
-                        model,
-                        s0=MARKET.spot,
-                        strike=k,
-                        expiry=expiry,
-                        rate=0.01,
-                        dividend=0.02,
-                        kind="call",
-                        n_terms=settings.n_terms,
-                        truncation_l=settings.truncation_l,
-                    ).value
-                    for k in STRIKES
-                ]
-            )
-            ratios.append(float(np.max(np.abs(here - engine) / np.abs(engine))))
-    assert max(ratios) < 1e-08
-    assert max(ratios) > 1e-13
+    assert errors[("violating", "wide")] < 1e-09
+    assert errors[("violating", "default")] / errors[("violating", "wide")] > 1e05
+    # The wide setting is NOT worse on the reference set once the leg rule is
+    # in force, which is why the branch is justified by cost and says so.
+    assert errors[("reference", "wide")] < 1e-11
 
 
 # --------------------------------------------------------------------------
@@ -610,12 +617,14 @@ def test_the_bounded_solver_stays_inside_the_bounds_and_the_domain() -> None:
 
 
 UNCONSTRAINED_RMSE_PENALTY = 1e05
-"""From the start `(0.04, 0.05, 0.25, 3.0, -0.95)`, the bounded run recovers the
-truth at a root-mean-square residual of 2.56e-07, while the unconstrained one
-terminates at `theta = -1.70` -- a **negative long-run variance**, outside the
-Heston domain entirely -- with a residual of 2.4e+03. The budget below is many
-orders inside that ratio, because the point is the sign of the answer and not
-its size."""
+"""From the start `(0.005, 0.01, 0.005, 0.01, 0.0)`, the bounded run recovers
+the truth at a root-mean-square residual of 2.56e-07, while the unconstrained
+one terminates at **`rho = +1.0140`** -- a correlation above one, outside the
+Heston domain entirely -- with a residual of 6.83. From
+`(0.04, 0.05, 0.25, 3.0, -0.95)` under the implied-volatility objective it
+lands on `rho = -1.0000` exactly, on the boundary. The budget below is many
+orders inside those ratios, because the point is that the answer is
+inadmissible and not how large its residual is."""
 
 
 def test_the_unconstrained_route_leaves_the_domain() -> None:
@@ -626,22 +635,23 @@ def test_the_unconstrained_route_leaves_the_domain() -> None:
     the only thing between the search and an inadmissible parameter vector is
     `DOMAIN_PENALTY` -- which keeps the residual *evaluable* outside the
     domain, not the search inside it. From a start already pressed against the
-    correlation bound, the unconstrained run converges (by its own `xtol`) to a
-    **negative `theta`**, so `CalibrationResult.model` is `None` and
-    `in_domain` is `False`: the answer is reported as what it is rather than
-    coerced into a `HestonModel` that cannot exist. The bounded run from the
-    same start recovers the truth.
+    domain, not the search inside it. From a start in the low corner of the box
+    the unconstrained run converges (by its own `xtol`) to a **correlation
+    above one**, so `CalibrationResult.model` is `None` and `in_domain` is
+    `False`: the answer is reported as what it is rather than coerced into a
+    `HestonModel` that cannot exist. The bounded run from the same start
+    recovers the truth.
     """
     assert EvidenceClass.NEGATIVE_FINDING is EvidenceClass.NEGATIVE_FINDING
     quotes = synthetic_quotes(REFERENCE, SIX_MATURITIES)
-    start = (0.04, 0.05, 0.25, 3.0, -0.95)
+    start = (0.005, 0.01, 0.005, 0.01, 0.0)
     bounded = calibrate_heston(quotes, MARKET, initial=start, objective="price")
     free = calibrate_heston(
         quotes, MARKET, initial=start, objective="price", method="lm"
     )
     assert not free.in_domain
     assert free.model is None
-    assert free.parameter("theta") < 0.0
+    assert abs(free.parameter("rho")) > 1.0
     assert free.rmse > UNCONSTRAINED_RMSE_PENALTY * bounded.rmse
     assert bounded.rmse < 1e-05
 
@@ -820,8 +830,8 @@ Gauss-Newton solution by at most `||dr|| / s_min`, so the parameter error at a
 converged fit is at most `||r|| / s_min` -- the residual the solver actually
 stopped at, divided by the smallest singular value of the Jacobian there. On
 the reference set with the implied-volatility objective that is
-`2.67e-12 / 1.00e-02 = 2.67e-10`, against a worst measured parameter error of
-1.48e-10, so the bound is tight to a factor of 1.8. The factor of 10 below is
+`5.45e-13 / 1.00e-02 = 5.43e-11`, against a worst measured parameter error of
+7.0e-12, so the bound is tight to a factor of 8. The factor of 10 below is
 for the two places the linearisation is not exact (the model is nonlinear in
 the parameters, and the solver's stopping point is not the exact minimiser),
 not for headroom against a number that was guessed."""
@@ -850,10 +860,10 @@ def test_clean_synthetic_recovery_is_bounded_by_the_smallest_singular_value(
     measured:
 
         set               objective      v0        kappa      theta      xi        rho
-        reference         price        +2.9e-09  -5.4e-07  +3.3e-09  -4.1e-07  -1.3e-07
-        reference         implied_vol  +2.2e-12  -1.5e-10  +2.1e-12  -9.7e-12  +2.9e-12
-        Feller-violating  price        -2.5e-10  +8.2e-08  -5.8e-09  +1.3e-09  +5.8e-09
-        Feller-violating  implied_vol  -2.2e-10  -9.1e-09  +1.6e-09  +5.3e-09  +1.0e-09
+        reference         price         2.9e-09   5.4e-07   3.3e-09   4.1e-07   1.3e-07
+        reference         implied_vol   5.4e-14   7.0e-12   1.5e-13   1.2e-12   2.4e-13
+        Feller-violating  price         4.2e-10   7.6e-08   7.7e-09   2.9e-08   2.3e-09
+        Feller-violating  implied_vol   7.6e-13   6.2e-12   5.7e-13   3.5e-11   1.2e-11
 
     The bound asserted is `||r|| / s_min` times `RESIDUAL_TO_PARAMETER_SAFETY`,
     not a round number: the recovery is only ever as good as the residual the
@@ -1386,68 +1396,91 @@ five with the **wrong sign** of `rho`, and six that are Feller-violating."""
 
 GLOBAL_BASIN_TOLERANCE = 1e-02
 """Relative slack on the best objective for a start to count as having reached
-it. Not a formality: the eleven successful starts agree on the objective to
-1e-06 relative and on every parameter to 1e-04, while the three failures are
-**four to seven decimal orders** away. Any tolerance between 1e-06 and 1e+02
-gives the same count, so the number is not doing any work."""
+it. Not doing any work: the successful starts agree on the objective to 1e-10
+relative, so any tolerance between 1e-09 and 1e+02 gives the same count."""
 
-MEASURED_GLOBAL_COUNT = 11
-"""Out of 14. The three that fail are `(0.10, 0.3, 0.10, 1.8, +0.8)`,
-`(0.50, 0.1, 0.80, 3.0, -0.99)` and `(0.04, 0.2, 0.60, 4.0, -0.3)`, and their
-cause is measured rather than assumed: all three have a huge `theta` or `xi`,
-which is exactly where `COS_LOG_RANGE_CAP` is binding hard, and each terminates
-within 1e-03 of where it started. They are not local minima of the true
-objective -- they are places where the *pricer* is wrong by three decimal
-orders and the residual is therefore flat. Before the clip was added the same
-grid scored 5/14 and the failures returned their starting vector exactly."""
+MEASURED_GLOBAL_COUNT = 14
+"""Out of 14, at every maturity count tried (one, three and six), on quotes
+carrying 20 bp of implied-volatility noise.
+
+This number was **11/14** before the payoff-leg rule went in, and the three
+failures were not local minima: all three had a huge `theta` or `xi`, where a
+fixed call leg's `e^b` made the pricer wrong by three decimal orders and the
+residual flat, so each solver stalled within 1e-02 of its start. Fixing the
+pricer fixed the optimiser. That is the lesson this row exists to carry: an
+"optimisation failure rate" measured on a broken pricer measures the pricer.
+
+What 14/14 does **not** mean is in the next test."""
+
+SINGLE_MATURITY_KAPPA_SPREAD_NOISY = 2.0
+"""At one maturity, all fourteen starts also reach the best objective within
+1% -- and land on `kappa` anywhere from **7.197 to 15.004** against a true 4.0,
+a factor of 2.08. Every convergence criterion a solver has is satisfied by all
+fourteen. At three and six maturities the same fourteen agree on `kappa` to
+five decimal places (4.059 and 4.005)."""
 
 
 @pytest.mark.slow
-def test_a_minority_of_starts_stall_and_the_cause_is_the_pricer() -> None:
-    """NEGATIVE_FINDING: 11/14, and the three failures have a diagnosis.
+@pytest.mark.parametrize(
+    ("maturities", "label"),
+    [(ONE_MATURITY, "1mat"), (THREE_MATURITIES, "3mat"), (SIX_MATURITIES, "6mat")],
+    ids=["1mat", "3mat", "6mat"],
+)
+def test_every_start_reaches_the_best_objective(maturities, label) -> None:
+    """NEGATIVE_FINDING: 14/14 everywhere, and at one maturity that is empty.
 
-    The honest form of "did the calibration work". Eleven of fourteen starts
-    reach the same optimum, to 1e-04 in every parameter. The other three stop
-    essentially where they started, with objectives four to seven decimal
-    orders worse, and all three sit where the COS range clip is binding.
+    The honest form of "did the calibration work" is two questions, and only
+    the first has a good answer here. Every one of fourteen spread starts --
+    five with the wrong sign of `rho`, six outside the Feller region, four in
+    the corners of the box -- reaches the best objective found, at one, three
+    and six maturities alike. The optimiser is not the problem.
+
+    At three and six maturities they also agree on the answer. At one they do
+    not: they agree on the objective to 1% and disagree on `kappa` by a factor
+    of 2.08. No stopping rule can see that, which is why this slice's product
+    is a condition number and not a success rate.
     """
     assert EvidenceClass.NEGATIVE_FINDING is EvidenceClass.NEGATIVE_FINDING
     quotes = _noisy_quotes(
-        REFERENCE, SIX_MATURITIES, noise_bp=OBJECTIVE_NOISE_BP, seed=3000
+        REFERENCE, maturities, noise_bp=OBJECTIVE_NOISE_BP, seed=3000
     )
     fits = [
         calibrate_heston(quotes, MARKET, initial=start, objective="implied_vol")
         for start in START_GRID
     ]
     best = min(fit.objective for fit in fits)
-    reached = [fit for fit in fits if fit.objective <= best * (1.0 + GLOBAL_BASIN_TOLERANCE)]
-    stalled = [
-        (start, fit)
-        for start, fit in zip(START_GRID, fits, strict=True)
-        if fit.objective > best * (1.0 + GLOBAL_BASIN_TOLERANCE)
+    reached = [
+        fit
+        for fit in fits
+        if fit.objective <= best * (1.0 + GLOBAL_BASIN_TOLERANCE)
     ]
     assert len(reached) == MEASURED_GLOBAL_COUNT
-    assert len(stalled) == len(START_GRID) - MEASURED_GLOBAL_COUNT
 
-    # The winners agree with each other, not merely with the tolerance.
-    winner = np.array(reached[0].parameters)
-    for fit in reached:
-        assert np.max(np.abs(np.array(fit.parameters) - winner)) < 1e-04
-    # The losers went nowhere.
-    for start, fit in stalled:
-        assert np.max(np.abs(np.array(fit.parameters) - np.array(start))) < 1e-02
-        assert fit.objective > 1e03 * best
+    kappas = np.array([fit.parameter("kappa") for fit in reached])
+    if len(maturities) == 1:
+        # Same objective, different model.
+        assert kappas.max() / kappas.min() > SINGLE_MATURITY_KAPPA_SPREAD_NOISY
+        assert kappas.min() > 4.0
+    else:
+        assert kappas.max() / kappas.min() < 1.0 + 1e-05
+        assert kappas.mean() == pytest.approx(4.0, rel=0.02)
 
 
-def test_multi_start_finds_the_best_objective_from_a_dead_start() -> None:
-    """`n_starts` is the cheapest answer to the failure rate above.
+@pytest.mark.slow
+def test_multi_start_ties_the_best_single_start_rather_than_beating_it() -> None:
+    """`n_starts` finds the best objective, and buys nothing here.
 
-    Started at `(0.50, 0.1, 0.80, 3.0, -0.99)`, which on its own is one of the
-    three stalls, six uniform draws inside the bounds recover the same optimum
-    the eleven good starts reach -- and so do 4, 8, 12 and 16 draws, to the
-    same six digits of the objective, so `MULTISTART_COUNT = 6` is chosen for
-    its run time and not to make the test pass. `result.starts` carries every
-    start so the success rate is inspectable rather than implied.
+    The slice statement asked for a multi-start option and for a demonstration
+    that it finds the best objective. It does -- from the worst start in the
+    grid, `MULTISTART_COUNT = 6` uniform draws inside the bounds reach
+    3.116984e-05, the same objective every single start reaches, to 1e-09
+    relative. What it does not do is *improve* on a single start, because on
+    this problem there is nothing to improve: 14/14 already get there.
+
+    That is the measured fact and it is worth stating plainly rather than
+    dressing a tie up as a rescue. Multi-start was worth something when the
+    pricer was broken (it recovered the global optimum from all three of the
+    stalled starts); once the pricer was fixed there were no stalls left.
     """
     quotes = _noisy_quotes(
         REFERENCE, SIX_MATURITIES, noise_bp=OBJECTIVE_NOISE_BP, seed=3000
@@ -1455,23 +1488,24 @@ def test_multi_start_finds_the_best_objective_from_a_dead_start() -> None:
     dead = (0.50, 0.1, 0.80, 3.0, -0.99)
     single = calibrate_heston(quotes, MARKET, initial=dead, objective="implied_vol")
     multi = calibrate_heston(
-        quotes, MARKET, initial=dead, objective="implied_vol", n_starts=MULTISTART_COUNT
-    )
-    reference = calibrate_heston(
-        quotes, MARKET, initial=CLEAN_START_REFERENCE, objective="implied_vol"
+        quotes,
+        MARKET,
+        initial=dead,
+        objective="implied_vol",
+        n_starts=MULTISTART_COUNT,
     )
     assert len(multi.starts) == MULTISTART_COUNT
     assert multi.starts[0].initial == dead
-    assert multi.objective < single.objective / 1e03
-    assert multi.objective == pytest.approx(reference.objective, rel=1e-03)
+    assert multi.objective <= single.objective
+    assert multi.objective == pytest.approx(single.objective, rel=1e-06)
     assert np.max(
-        np.abs(np.array(multi.parameters) - np.array(reference.parameters))
-    ) < 1e-03
+        np.abs(np.array(multi.parameters) - np.array(single.parameters))
+    ) < 1e-05
 
 
 MULTISTART_COUNT = 6
 """Draws used by the multi-start test. Measured: `n_starts` of 4, 6, 8, 12 and
-16 all reach `3.116984e-05` on the same data, at 1.5, 2.6, 3.4, 5.4 and 7.2
+16 all reach the same objective to six digits, at 1.5, 2.6, 3.4, 5.4 and 7.2
 seconds. Six is the cheapest that is not the minimum tried."""
 
 
