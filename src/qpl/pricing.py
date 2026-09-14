@@ -55,6 +55,16 @@ from .engines.mc.digital import (
     greeks_digital as greeks_digital_mc,
     price_digital as price_digital_mc,
 )
+from .engines.mc.heston_pricers import (
+    greeks_asian as greeks_asian_mc_heston,
+    greeks_barrier as greeks_barrier_mc_heston,
+    greeks_digital as greeks_digital_mc_heston,
+    greeks_european as greeks_european_mc_heston,
+    price_asian as price_asian_mc_heston,
+    price_barrier as price_barrier_mc_heston,
+    price_digital as price_digital_mc_heston,
+    price_european as price_european_mc_heston,
+)
 from .engines.mc.pricers import (
     MC_METHOD_SPEC,
     greeks_european as greeks_european_mc,
@@ -132,11 +142,6 @@ _HESTON_REFUSAL_REASONS = (
     (
         ANALYTIC_METHOD_SPEC,
         "the Heston call has no elementary closed form, only a Fourier integral",
-    ),
-    (
-        MC_METHOD_SPEC,
-        "simulating Heston needs a variance scheme (Andersen's QE), which is a "
-        "later slice",
     ),
     (
         PDE_METHOD_SPEC,
@@ -377,11 +382,11 @@ def _register_builtin_engines() -> None:
                 else greeks_digital_fourier
             ),
         )
-    # The other four methods are registered with callables that always raise.
-    # Not registering would give "Unsupported instrument/model/market
-    # combination", which is true but tells a caller nothing about the route
-    # that does work or about which slice will open the one they asked for.
-    # Same registered-and-raising pattern as the Slice 6 MC digital Greeks.
+    # The other three deterministic methods are registered with callables that
+    # always raise. Not registering would give "Unsupported instrument/model/
+    # market combination", which is true but tells a caller nothing about the
+    # route that does work or about which slice will open the one they asked
+    # for. Same registered-and-raising pattern as the Slice 6 MC digital Greeks.
     for spec, refusal in _HESTON_REFUSALS:
         for instrument_type in (EuropeanOption, DigitalOption):
             register(
@@ -391,6 +396,30 @@ def _register_builtin_engines() -> None:
                 price=refusal,
                 greeks=refusal,
             )
+
+    # Slice 16: Heston Monte Carlo. Four instrument types on one method key,
+    # and the first engines in this package whose model axis decides the
+    # *sampler* rather than only the parameters -- `qpl.engines.mc.heston`
+    # discretises `(ln S, v)` where the Black-Scholes engines step the exact
+    # lognormal law. They are separate engine callables rather than a branch
+    # inside the existing ones because `MCConfig.n_steps` changes meaning
+    # (time discretisation, not a cost knob) and because the Asian's
+    # Kemna-Vorst control variate has no Heston analogue; the Black-Scholes
+    # engines are untouched and `tests/test_mc_heston_pricing.py` pins that
+    # their output is unchanged bit for bit.
+    for instrument_type, price_fn, greeks_fn in (
+        (EuropeanOption, price_european_mc_heston, greeks_european_mc_heston),
+        (DigitalOption, price_digital_mc_heston, greeks_digital_mc_heston),
+        (AsianOption, price_asian_mc_heston, greeks_asian_mc_heston),
+        (BarrierOption, price_barrier_mc_heston, greeks_barrier_mc_heston),
+    ):
+        register(
+            instrument_type=instrument_type,
+            model_type=HestonModel,
+            spec=MC_METHOD_SPEC,
+            price=price_fn,
+            greeks=greeks_fn,
+        )
 
 
 _register_builtin_engines()

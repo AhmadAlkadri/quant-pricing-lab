@@ -123,6 +123,7 @@ __all__ = [
     "NO_CORRECTION",
     "barrier_terminal_sample",
     "bridge_survival",
+    "bridge_survival_from_step_variance",
     "greeks_barrier",
     "normalise_barrier_correction",
     "price_barrier",
@@ -243,11 +244,35 @@ def bridge_survival(
     per-interval survivals is exact: the increments are independent given the
     sampled points.
     """
+    return bridge_survival_from_step_variance(
+        log_ratio, step_variance=sigma * sigma * dt[None, :]
+    )
+
+
+def bridge_survival_from_step_variance(
+    log_ratio: np.ndarray, *, step_variance: np.ndarray
+) -> np.ndarray:
+    """:func:`bridge_survival` with the per-step variance supplied directly.
+
+    `step_variance` is `sigma^2 dt_i` broadcast against the intervals -- a
+    `(1, n_grid)` row under Black-Scholes, where the volatility is constant, and
+    a full `(n_paths, n_grid)` block under a stochastic-volatility model, where
+    each path has its own integrated variance over each interval. Splitting the
+    function this way is what lets `qpl.engines.mc.heston_pricers` reuse the
+    reflection-principle formula instead of copying it; the Black-Scholes call
+    above passes exactly the expression it used to compute inline, so its
+    output is unchanged bit for bit.
+
+    The *approximation* this makes under stochastic volatility is stated where
+    it is used: a Brownian bridge has constant volatility between its
+    endpoints, so feeding it an integrated variance is a one-term
+    approximation whose residual is measured, not assumed.
+    """
     a = log_ratio[:, :-1]
     b = log_ratio[:, 1:]
     product = a * b
     with np.errstate(over="ignore", under="ignore"):
-        crossing = np.exp(-2.0 * product / (sigma * sigma * dt[None, :]))
+        crossing = np.exp(-2.0 * product / step_variance)
     # Endpoints on opposite sides (or exactly on the barrier): certain crossing.
     crossing = np.where(product <= 0.0, 1.0, crossing)
     return np.prod(1.0 - crossing, axis=1)

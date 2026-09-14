@@ -777,21 +777,26 @@ def test_greeks_are_refused_for_the_methods_that_have_none() -> None:
             )
 
 
-@pytest.mark.parametrize("method", ("analytic", "mc", "pde", "tree"))
-def test_the_other_four_methods_refuse_heston_and_name_the_route(method: str) -> None:
+@pytest.mark.parametrize("method", ("analytic", "pde", "tree"))
+def test_the_other_three_methods_refuse_heston_and_name_the_route(method: str) -> None:
     """Registered-and-raising, so the message says *why* and what to use.
 
     An unregistered key would report "Unsupported instrument/model/market
     combination", which says nothing about the transform route that does work
     or about the slice that will open the one the caller asked for.
+
+    `method="mc"` was on this list in Slice 15 and is **not** any more: Slice 16
+    ships `qpl.engines.mc.heston_pricers` and simulation is now a real Heston
+    route (`tests/test_mc_heston_pricing.py`). The three left are the three
+    whose refusal is structural rather than unbuilt -- no elementary closed
+    form, a two-dimensional grid with a mixed derivative, and a lattice that
+    needs one state variable.
     """
-    from qpl.engines.mc.pricers import MCConfig
     from qpl.engines.pde.pricers import PDEConfig
     from qpl.engines.tree.pricers import TreeConfig
 
     kwargs: dict[str, Any] = {
         "analytic": {},
-        "mc": {"cfg": MCConfig()},
         "pde": {"cfg": PDEConfig()},
         "tree": {"cfg": TreeConfig()},
     }[method]

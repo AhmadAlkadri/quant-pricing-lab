@@ -92,6 +92,26 @@ class MCConfig:
         path by its conditional survival probability and is unbiased for the
         continuous one at any number of dates. Every other engine ignores it,
         so no existing behaviour changes whatever it is set to.
+    heston_scheme
+        Which `(ln S, v)` discretisation `qpl.engines.mc.heston_pricers` uses
+        under `HestonModel`: `"qe"` (Andersen's quadratic-exponential scheme,
+        the default), `"euler_full_truncation"`, or
+        `"exact_variance_euler_log_spot"`. Read by the Heston engines and by
+        nothing else, so no Black-Scholes result depends on it. Under Heston
+        `n_steps` becomes the **time discretisation** rather than a cost knob,
+        and `n_steps = 1` is refused: none of the three schemes is exact in a
+        single step, so a one-step answer would be a discretisation error
+        reported as a price.
+    heston_conditional
+        Whether the Heston engines estimate a terminal payoff by its
+        **conditional expectation given the variance driver** (a Black-Scholes
+        formula per path, `qpl.engines.mc.heston.ConditionalTerminalLaw`)
+        rather than by the realised terminal spot. Same estimator mean, 10x to
+        54x less variance, and it costs nothing at simulation time -- but it is
+        off by default because it changes what the reported standard error is
+        the standard error *of*, and a default that silently swaps estimators
+        is how a variance ratio stops being a measurement. Ignored by every
+        engine that is not pricing a terminal payoff under Heston.
     lsm_in_sample
         Whether the exercise policy is fitted and applied on the **same**
         paths. `False` (the default) fits on one path set and values on an
@@ -113,6 +133,10 @@ class MCConfig:
     lsm_degree: int = 3
     lsm_in_sample: bool = False
     barrier_correction: Literal["none", "bgk", "brownian_bridge"] = "none"
+    heston_scheme: Literal[
+        "qe", "euler_full_truncation", "exact_variance_euler_log_spot"
+    ] = "qe"
+    heston_conditional: bool = False
 
 
 def _validate_bumps(value: object) -> None:
