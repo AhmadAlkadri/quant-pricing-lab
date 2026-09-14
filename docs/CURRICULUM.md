@@ -296,20 +296,21 @@ contract) that none of the three earlier motivations would have produced.
   nothing like the smooth-function test they were built against (trapezoid
   spectral rather than order 2; Simpson six decimal orders *worse* than
   trapezoid at the same cost). See `docs/notes/fourier_pricing_methods.md`.
-- **Heston is next.** The characteristic function in the branch-cut-safe
-  (Lewis / Lord-Kahl) form, plus `log_return_cumulants` for the COS range. The
-  pricing side is already built: `qpl.engines.fourier` reads a model only
-  through `CharacteristicFunctionModel`, so Heston is a model implementing two
-  methods plus two `register(...)` lines and no change to any pricer. Slice
-  14's QuantLib oracle left one concrete instruction for it: QuantLib's
-  `COSHestonEngine` *diverges* as vol-of-vol goes to zero, and no term count
-  helps, because its truncation range comes from cumulant formulas with the
-  vol-of-vol in denominators. A Heston COS engine must be tested at small
-  vol-of-vol specifically.
-- Lewis and Carr-Madan pricing validated against published reference values
-  and, optionally, QuantLib. **Half delivered in Slice 14**: both are
-  implemented and validated against QuantLib under Black-Scholes; the published
-  Heston reference values wait for the model.
+- ~~Heston: the characteristic function in the branch-cut-safe (Albrecher /
+  Lord-Kahl) form, plus `log_return_cumulants` for the COS range.~~
+  **Delivered in Slice 15** (see below), and the Slice 14 prediction held
+  exactly: `HestonModel` implements two methods, `qpl.pricing` gains two
+  `register(...)` lines, and **no pricer changed**. The Slice 14 instruction
+  was followed and answered -- this package's cumulants carry `xi` only in
+  numerators, so at `xi = 1e-06` it reproduces Black-Scholes to 1e-09 where
+  QuantLib's `COSHestonEngine` diverges. See
+  `docs/notes/heston_characteristic_function.md`.
+- ~~Lewis and Carr-Madan pricing validated against published reference
+  values and, optionally, QuantLib.~~ **Completed in Slice 15**: the six Alan
+  Lewis reference values reproduce to 4.5e-05 (the published table's own
+  four-decimal rounding) by all four methods, and all four are checked against
+  `AnalyticHestonEngine` at `T = 1` and `T = 10` on both sides of the Feller
+  condition.
 - Heston Monte Carlo with the QE scheme and a bias study. **Its prerequisite
   is delivered**: Slice 9 built the scalar-SDE layer, measured the Euler and
   Milstein orders, and implemented the CIR variance process with both an exact
@@ -320,8 +321,20 @@ contract) that none of the three earlier motivations would have produced.
   Feller-violated regime at h = 1/4 ... 1/32), and a coupled weak-error
   estimator's noise floor is the scheme's own *strong* error, which is why the
   bias study needs the exact sampler as a reference rather than a finer run.
-- Implied-vol surface utilities.
-- Synthetic-recovery calibration with identifiability diagnostics.
+- ~~Implied-vol surface utilities.~~ **Delivered in Slice 15** as
+  `qpl.engines.fourier.smile`: `implied_vol`, `implied_vol_surface`,
+  `atm_implied_variance`, `smile_skew`, composing the transform price with the
+  Brent inverter already in `qpl.engines.analytic.black_scholes`. The three
+  shape claims (`rho` sets the sign of the skew, the smile flattens with
+  maturity, at-the-forward implied variance runs from `v0` to `theta`) are
+  measured, not asserted.
+- Synthetic-recovery calibration with identifiability diagnostics. Slice 15
+  left one concrete instruction for it: **Lewis and Gil-Pelaez are the only two
+  methods here with no parameter to get wrong**, so they are the ones a
+  calibrator should call. COS and Carr-Madan each need a setting chosen per
+  parameter set, and on a Feller-violating long-dated cell the COS *call* has
+  no usable setting at all -- which a calibrator walking a parameter search
+  would hit silently.
 - Fusai & Roncoroni Ch. 15 Laplace approach to arithmetic Asians, reusing
   `qpl.transforms`.
 
@@ -1646,6 +1659,122 @@ interface built so that Heston can satisfy it without touching a pricer.
   Transform methods are cheap: 200 cosine terms is 200 evaluations of a closed
   form.
 - Full derivation and tables: `docs/notes/fourier_pricing_methods.md`.
+
+### Slice 15
+**The second model, and the test of whether Slice 14's interface was real.**
+`HestonModel(v0, kappa, theta, xi, rho)` implements `characteristic_function`
+and `log_return_cumulants` and nothing else; `qpl.pricing` gains two
+`register(...)` lines; **no pricer changed**. Everything below is about the
+model, and all of it is about the three places a Heston transform goes wrong:
+the branch of a complex logarithm, the cumulants that set a truncation range,
+and the moment explosion that bounds a damping parameter.
+
+- `qpl.models.heston` (new), exported from `qpl.models`. Registered as
+  `method="fourier"` for `(EuropeanOption, HestonModel)` and
+  `(DigitalOption, HestonModel)`, **price and Greeks**; analytic, mc, pde and
+  tree are registered with callables that refuse and name the transform route
+  and the later MC slice.
+- **The stable form, in two sentences.** `d` on the principal branch, so
+  `Re(d) >= 0`, which makes `|g| <= 1` and `|g e^{-dT}| <= 1`, which keeps
+  `arg(1 - g e^{-dT})` inside `(-pi/2, pi/2)` -- worst measured **0.0852**
+  against `pi/2` -- so the principal branch of the logarithm is the continuous
+  one and the cut is never crossed. `beta - d` and the logarithm are further
+  rewritten through `beta^2 - d^2 = -xi^2 (u^2 + i u)` and `log1p`, which
+  removes the `kappa theta / xi^2` prefactor: the literal transcription bottoms
+  out at `xi = 1e-04` and is wrong by 0.135 at `xi = 1e-08`, while this form
+  converges monotonically for six decades.
+- **The little Heston trap cannot be shown on the reference parameters.** A
+  branch jump multiplies the transform by `exp(-4 pi i kappa theta / xi^2)`,
+  which is **1 whenever `2 kappa theta / xi^2` is an integer** -- and on the
+  Alan Lewis set it is exactly 2. Demonstrated instead on a set differing in
+  `theta` alone (so `d`, `g` and the windings are identical): relative error
+  1.6e-08 at `T = 1`, 2.2e-03 at `T = 1.2`, **8.6e-01 at `T = 2`**, 8.6e+07 at
+  `T = 30`, against 1.1e-14 to 4.9e-07 on the reference set at the same
+  maturities. First crossing at `u T ~ 5.04`.
+- **The cumulants are derived from the variance dynamics, not from `ln phi`**
+  (Itô isometry on `int v` and `int sqrt(v) dW1`), so the finite-difference
+  check is a real cross-check. `xi` appears only in numerators, which is the
+  direct repair of Slice 14's `COSHestonEngine` finding: at `xi = 1e-06` this
+  package reproduces Black-Scholes to 1e-09.
+- **`c4 = 0` is a lie with a measured price.** Measured `sqrt(c4)/c2` is 1.05 on
+  the reference set and **6.85** on a Feller-violating one, so the range is too
+  narrow by 1.43x and **2.80x**. The consequence is a range error -- flat in the
+  term count at 9.13e-04 (`L = 10`), 2.75e-05 (14), 1.28e-07 (20) and 1.22e-10
+  (28) -- and the repair is the derived factor, published as
+  `HESTON_TRUNCATION_L_FELLER_VIOLATED = 28`. QuantLib's own `COSHestonEngine`
+  has the same failure on the same set, so it is the Fang-Oosterlee rule and not
+  this implementation.
+- **The COS call and the COS put are not the same problem.** The call's payoff
+  coefficient carries `e^b` with `b ~ L sqrt(c2)`; the put's carries only
+  `e^{z*} = K/S_0`. So a wide range amplifies round-off in the call and costs
+  the put nothing, and a narrow one costs the put left-tail mass. Under
+  Black-Scholes the asymmetry was invisible (Slice 14's parity residual
+  2.4e-14); under Heston the parity residual is **2.70e-08**, identical at every
+  strike. At `v0 = 0.04, kappa = 0.5, theta = 0.04, xi = 1, rho = -0.9, T = 10`
+  the window between the two errors is **empty**: the call runs 7.2e+00 /
+  1.3e+01 / 4.9e+01 / 4.1e+02 / 1.6e+05 / 9.4e+08 / 4.4e+15 over `L = 8 ... 50`,
+  monotone upward, while the put falls to 2.1e-06. Recipe recorded (price the
+  put, take the call by parity: worst 7.66e-07 over the 24 oracle cells); the
+  engine is deliberately **not** changed, because COS building its put from its
+  own coefficients is the only reason parity is a check here rather than an
+  identity of the implementation.
+- **The Black-Scholes limit is first order, not second.** Order **1.99 in `xi`
+  at `rho = 0`** and **1.00 at `rho = -0.5`**: the leading correction is the
+  covariance term `rho xi`. It is odd in log-moneyness, so it changes sign
+  across the strike and vanishes near the money -- where a fitted order is 0.32
+  with a log-space residual of 0.33 and is pinned as meaningless. At `xi = 0`
+  exactly the formula reduces to the Gaussian transform of the integrated
+  deterministic variance, and at `v0 = theta` to the Black-Scholes transform at
+  `sigma = sqrt(theta)`, to 1.1e-16 over 4001 values of `u`.
+- **Carr-Madan's damping is now bounded, and by the right bound.**
+  `critical_moment(T)` is derived from this package's own `d` and `g` (the
+  Andersen-Piterbarg criterion, re-derived): `alpha_max = 10.6905` at `T = 1` on
+  the reference set. Measured error 3.1e-08 at `alpha = 10.60`
+  (`T* = 1.0233`) and **2.7e+02 at 10.65** (`T* = 1.0103`), at all three strikes
+  alike -- unlike Slice 14's moneyness-dependent cancellation failure, because a
+  moment explosion is a property of the law. Separately, the default reach
+  `12/sqrt(c2)` is a statement about a Gaussian and is 4.9e-02 wrong on a
+  fat-tailed law; `u_max = 1000` takes it to 1.0e-13.
+- **The smile**, through `qpl.engines.fourier.smile` (`implied_vol`,
+  `implied_vol_surface`, `atm_implied_variance`, `smile_skew`): skew -0.2235 /
+  -0.0943 / -0.0231 at `T = 0.25 / 1 / 5` with `rho = -0.5` against +0.2248 /
+  +0.0972 / +0.0245 at `rho = +0.5` (same magnitudes within 6%, sign reversed)
+  and **exactly 0.0** at `rho = 0`; |skew| falls with maturity at fitted
+  exponent 0.804 (log-space residual 0.097, so a summary rather than a theorem);
+  at-the-forward implied variance runs 0.0434 -> 0.2326 with `v0 = 0.04,
+  theta = 0.25` and 0.2448 -> 0.0387 with the two swapped, monotone in both
+  directions and **undershooting `theta` from both sides**.
+- **Oracle**: `AnalyticHestonEngine` with adaptive Gauss-Lobatto at 1e-13, two
+  parameter sets either side of Feller, `T = 1` and `T = 10` exact under
+  `Actual365Fixed`, 24 cells. Worst residual **Lewis 2.38e-10, Gil-Pelaez
+  1.24e-11, Carr-Madan 1.00e-13, COS put+parity 7.66e-07**; on the
+  Feller-satisfying set every method is at 1e-13 or better. The slice statement
+  hoped for 1e-08. Practical conclusion: **Lewis and Gil-Pelaez are the only two
+  methods here with no parameter to get wrong.** Two findings about QuantLib
+  itself: its `Gatheral` and `BranchCorrection` formulations agree to 4.2e-14 at
+  matched quadrature (so its default is already branch-safe and the trap needs a
+  deliberately unstable implementation to show), and its default
+  `AnalyticHestonEngine(model, 144)` is 2.9e-08 off on the Feller-violating set
+  and is not used as a reference.
+- **Cases**: `qpl.cases.heston`, 28 rows. The published family is this
+  repository's first `PUBLISHED_BENCHMARK` whose model has no closed form to
+  fall back on; its tolerance is the source's four-decimal resolution and says
+  so. Shape claims are carried as indicator rows (`SHAPE_HOLDS`) so that they
+  keep an evidence class and a citation instead of living in a test body.
+- `examples/heston_smile.py` (`--case smile | cos | trap | alpha`), four
+  invocations curated in the example smoke list.
+- **Refused / out of scope**: Heston Monte Carlo and the QE scheme, calibration,
+  the two-dimensional Heston PDE, Bates and any jump component, and automating
+  the COS put-then-parity recipe inside the engine.
+- Suite: **2320 tests, 188.8 s** (from 1958 / 180.9 s), with the `[oracle]`
+  extra installed. 362 new tests for **7.9 s**, and more than a third of that is
+  the example harness: the three core test files run in **1.5 s** together (0.34
+  s model, 0.78 s fourier, 0.35 s smile), the cases file is 0.6 s, the 105
+  QuantLib oracle tests are 2.9 s, and the four new curated example invocations
+  (run twice each) are 2.9 s. A transform method is cheap: 256 cosine terms is
+  256 evaluations of a closed form, and the expensive cells here are the
+  adaptive-quadrature oracle and the subprocess launches.
+- Full derivation and tables: `docs/notes/heston_characteristic_function.md`.
 
 ## Reconciled old roadmap
 

@@ -1,5 +1,146 @@
 # Steering Brief
 
+What changed in Slice 15 (files + bullets)
+
+**The second model, and the test of whether Slice 14's interface was real.**
+It was: `HestonModel` implements two methods, `qpl.pricing` gains two
+`register(...)` lines, and **no pricer changed**. Still on `dev/curriculum`;
+not pushed.
+
+- `src/qpl/models/heston.py` (new): `HestonModel`,
+  `heston_characteristic_function`,
+  `heston_characteristic_function_original_branch` (labelled diagnostic),
+  `heston_log_return_cumulants`, `numerical_log_return_cumulant` (labelled
+  diagnostic), `HESTON_TRUNCATION_L_FELLER_VIOLATED`. Exported from
+  `qpl.models`.
+- `src/qpl/pricing.py`: `method="fourier"` for `(EuropeanOption, HestonModel)`
+  and `(DigitalOption, HestonModel)`, price and Greeks; analytic/mc/pde/tree
+  registered-and-raising with messages naming the transform route.
+- `src/qpl/engines/fourier/pricers.py`: `_meta` reports the real model name; the
+  vega bump goes through `model.with_volatility_bump` when the model has one, so
+  the Heston vega is `dV/d sqrt(v0)` and `meta["vega_units"]` says so.
+- `src/qpl/engines/fourier/smile.py` (new): `implied_vol`,
+  `implied_vol_surface`, `atm_implied_variance`, `smile_skew`.
+- `src/qpl/cases/heston.py` (new, 28 rows), `tests/heston_points.py`,
+  `tests/test_heston_model.py`, `tests/test_heston_fourier.py`,
+  `tests/test_heston_smile.py`, `tests/cases/test_heston_cases.py`,
+  `tests/oracle/test_heston_vs_quantlib.py`, `examples/heston_smile.py`,
+  `docs/notes/heston_characteristic_function.md`.
+
+**The stable form, in two sentences.** `d` is taken on the principal branch so
+that `Re(d) >= 0`, which forces `|g| <= 1` and `|g e^{-dT}| <= 1` and therefore
+keeps `arg(1 - g e^{-dT})` inside `(-pi/2, pi/2)` (worst measured **0.0852**
+against `pi/2 = 1.5708`), so the principal branch of the logarithm is the
+continuous one and the cut is never crossed. `beta - d` and the logarithm are
+then rewritten through `beta^2 - d^2 = -xi^2(u^2 + iu)` and a hand-written
+complex `log1p`, which removes the `kappa theta / xi^2` prefactor entirely --
+the literal transcription bottoms out at `xi = 1e-04` and is wrong by 0.135 at
+`xi = 1e-08`, this one converges monotonically for six decades.
+
+**Four things the slice statement predicted that did not happen.**
+
+1. *"The Feller condition is violated in this set."* It is not, and the slice
+   statement computed as much in the same sentence: `2 kappa theta = 2.0`
+   against `xi^2 = 1.0`. The Feller-violating measurements use the
+   repository's own CIR-violating variance parameters instead (Feller number
+   0.08).
+2. *"Demonstrate the trap at T = 10 or 30 with the Lewis parameters."*
+   Impossible. A branch jump multiplies the transform by
+   `exp(-4 pi i kappa theta / xi^2)`, which is **1 when `2 kappa theta / xi^2`
+   is an integer** -- and on that set it is exactly 2. The trap is invisible
+   there at every maturity to 30 years (1.1e-14 to 4.9e-07). Demonstrated on a
+   set differing in `theta` alone, so `d`, `g` and the windings are identical:
+   1.6e-08 at `T = 1`, 2.2e-03 at 1.2, **8.6e-01 at 2**, 8.6e+07 at 30.
+3. *"Expected O(xi^2) for the price."* Only at `rho = 0` (measured 1.99). The
+   leading correction is the covariance term `rho xi`, so the order is **1.00**
+   whenever `rho != 0` -- and that term is odd in log-moneyness, so it changes
+   sign across the strike and vanishes near the money, where a fitted order is
+   0.32 with a log-space residual of 0.33 and is pinned as meaningless.
+4. *"QuantLib agrees to ~1e-8 or better."* Better by two to five orders: Lewis
+   2.38e-10, Gil-Pelaez 1.24e-11, Carr-Madan **1.00e-13** over 24 cells, and
+   1e-13 or better on every Feller-satisfying cell.
+
+**`c4 = 0` is a lie and it has a measured price.** Fang and Oosterlee set the
+fourth cumulant to zero for Heston; the fourth difference of `ln phi` says
+`sqrt(c4)/c2` is 1.05 on the reference set and **6.85** on the Feller-violating
+one, so the COS range is too narrow by `sqrt(1 + sqrt(c4)/c2)` = 1.43x and
+**2.80x**. The error that produces is flat in the term count -- a *range* error,
+the exact signature Slice 14 measured on QuantLib's `COSHestonEngine`:
+
+    L        N=512     1024      2048      4096      8192
+    10     9.12e-04  9.13e-04  9.13e-04  9.13e-04  9.13e-04
+    14     4.33e-05  2.75e-05  2.75e-05  2.75e-05  2.75e-05
+    20     3.84e-04  1.32e-06  1.28e-07  1.28e-07  1.28e-07
+    28     2.42e-03  1.56e-04  1.30e-07  1.22e-10  1.22e-10
+
+and `L = 10 x 2.80 = 28` is the derived repair, published as
+`HESTON_TRUNCATION_L_FELLER_VIOLATED`. QuantLib's own COS engine has the same
+failure on the same set (-1.096e-02 flat over 200/800/3200 terms at `L = 10`,
+-3.0e-09 only at `L = 32`), so it is the range rule and not this
+implementation.
+
+**The slice's least expected result: the COS call and the COS put are not the
+same problem.** The call's payoff coefficient is `chi_k(z*, b) ~ e^b` with
+`b ~ L sqrt(c2)`; the put's is `chi_k(a, z*) ~ e^{z*} = K/S_0`, bounded. So a
+wide range amplifies round-off in the call exponentially and costs the put
+nothing, while a narrow one costs the put left-tail mass (`rho < 0` skews the
+density left) and costs the call almost nothing. Under Black-Scholes both are
+invisible; under Heston the parity residual is **2.70e-08**, identical at every
+strike, against Slice 14's 2.4e-14. And the window between the two errors can be
+**empty** -- at `v0 = 0.04, kappa = 0.5, theta = 0.04, xi = 1, rho = -0.9`,
+`T = 10`:
+
+    L          8        10        14        20        28        36        50
+    call    7.2e+00  1.3e+01  4.9e+01  4.1e+02  1.6e+05  9.4e+08  4.4e+15
+    put     3.1e-02  1.0e-02  1.2e-03  4.6e-05  1.5e-06  2.1e-06  2.1e-06
+
+The recipe (price the put, take the call by parity; worst 7.66e-07 over the 24
+oracle cells) is recorded and the engine is **deliberately not changed**: COS
+building its put from its own coefficients is the only reason parity is a check
+on those coefficients rather than an identity of the implementation.
+
+**Carr-Madan's alpha is finally bounded by what Slice 14 said would bound it.**
+`critical_moment(T)` is derived from this package's own `d` and `g` (the
+Andersen-Piterbarg criterion, re-derived): `alpha_max = 10.6905` at `T = 1`.
+
+    alpha        0.5      1.5      5.0      10.0     10.6     10.65    11.0
+    T*(a+1)      inf      inf      inf     1.2169   1.0233   1.0103   0.9287
+    error      1.6e-10  1.0e-09  6.0e-09 1.7e-08  3.1e-08  2.7e+02  6.1e+03
+
+-- exact while the pole is off the contour, broken within 1% of it, and at the
+**same** alpha at every strike, unlike Slice 14's moneyness-dependent
+cancellation failure. Separately the default reach `12/sqrt(c2)` is a statement
+about a Gaussian and is 4.9e-02 wrong on a fat-tailed law (`u_max = 1000` gives
+1.0e-13).
+
+**The smile, measured.** Skew `d sigma / d ln(K/F)` is -0.2235 / -0.0943 /
+-0.0231 at `T = 0.25 / 1 / 5` with `rho = -0.5`, +0.2248 / +0.0972 / +0.0245
+with `rho = +0.5` (same magnitudes within 6%), and **exactly 0.0** at `rho = 0`,
+where the smile is symmetric but not flat. |skew| falls with maturity at fitted
+exponent 0.804 with a log-space residual of 0.097 -- a summary, not a theorem,
+and measurably not `1/T`. At-the-forward implied variance runs 0.0434 -> 0.2326
+(`v0 = 0.04, theta = 0.25`) and 0.2448 -> 0.0387 with the two swapped, monotone
+in both directions and **undershooting theta from both sides** (the smile's own
+curvature).
+
+**Two findings about QuantLib itself.** Its `Gatheral` and `BranchCorrection`
+formulations agree to **4.2e-14** at matched quadrature, so its default is
+already branch-safe and the trap needs a deliberately unstable implementation to
+show. And its default `AnalyticHestonEngine(model, 144)` -- a fixed 144-point
+Gauss-Laguerre rule -- is 2.9e-08 off on the Feller-violating set, so the oracle
+drives it with adaptive Gauss-Lobatto at 1e-13 instead.
+
+**Next.** Heston Monte Carlo with Andersen's QE scheme (Slice 9's SDE layer is
+the prerequisite and is done; its two findings -- full truncation does not stop
+the scheme going negative, and a coupled weak estimator's noise floor is the
+scheme's own strong error -- should be read first). Then calibration, with one
+instruction from this slice: **Lewis and Gil-Pelaez are the only two methods
+here with no parameter to get wrong**, so they are the ones a calibrator should
+call. After that, the Fusai chapter 15 Laplace Asian -- the one remaining Part I
+building block that has never priced anything.
+
+---
+
 What changed in Slice 14 (files + bullets)
 
 **Phase 4's first item, and the slice where the Chapter 6 quadrature toolkit

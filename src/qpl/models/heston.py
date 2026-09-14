@@ -138,9 +138,9 @@ this law is large -- larger than `c2` -- for Feller-violating parameters, and
 the COS range `[c1 - L w, c1 + L w]` with `w = sqrt(c2 + sqrt(c4))` is then too
 narrow at the default `L = 10`. The error that produces is a *range* error: it
 is flat in the term count `N`, and it is repaired by raising `truncation_l`, by
-the measured factor `sqrt(1 + sqrt(c4) / c2)`. `tests/test_heston_fourier.py`
-measures all of that, `numerical_log_return_cumulant` computes the `c4` the
-statement refers to, and `HESTON_TRUNCATION_L_FELLER_VIOLATED` records the
+the measured factor `sqrt(1 + sqrt(c4) / c2)`. `tests/test_heston_model.py`
+measures the `c4` itself (through `numerical_log_return_cumulant`),
+`tests/test_heston_fourier.py` measures what it costs a price, and `HESTON_TRUNCATION_L_FELLER_VIOLATED` records the
 value that works.
 
 Sources (nothing below is quoted or transcribed from any of them; the algebra
@@ -288,7 +288,7 @@ def _deterministic_variance_transform(
     term to `theta D_- (e^{-kappa T} - 1)`), so the branch below is the limit
     and not a separate model. In particular at `v0 = theta` it is the
     Black-Scholes transform with `sigma^2 = theta`, which is what
-    `tests/test_heston_fourier.py` checks as an algebraic identity.
+    `tests/test_heston_model.py` checks as an algebraic identity.
     """
     u_c = np.asarray(u, dtype=complex)
     variance = _variance_integrals(expiry, v0=v0, kappa=kappa, theta=theta)[0]
@@ -370,7 +370,7 @@ def heston_characteristic_function(
     # `max_u |phi_xi(u) - phi_0(u)|`, the literal form reads
     #
     #     xi     1e-03     1e-04     1e-05     1e-06     1e-07     1e-08
-    #     err   1.15e-06  1.18e-08  2.15e-07  1.63e-05  1.72e-03  1.35e-01
+    #     err   1.15e-06  1.18e-08  1.87e-07  1.21e-05  1.30e-03  1.35e-01
     #
     # -- a minimum near `xi = 1e-04` and then divergence, which is the same
     # *shape* as Slice 14's QuantLib `COSHestonEngine` finding with a different
