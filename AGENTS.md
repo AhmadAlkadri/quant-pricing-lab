@@ -34,6 +34,22 @@ ruff check .
 pytest -q
 ```
 
+Quick inner loop (deselects the `slow` marker):
+```bash
+ruff check .
+pytest -q -m "not slow"
+```
+`pytest -q` is unchanged and still runs everything -- it is the CI contract and
+nothing is deselected there. `-m "not slow"` drops 50 cases and takes **120.5 s**
+against the full suite's **214.0 s** (measured locally, 2434 tests). The marker
+is applied by a measured rule, not by feel: a test function is `slow` when its
+worst individual case (setup + call + teardown, read off `pytest --durations=0`)
+exceeds about 3 s. Parametrised functions carry the mark as a whole. Everything
+it selects is a subprocess or notebook harness (`tests/test_examples_smoke.py`,
+`tests/test_labs_smoke.py`, `tests/test_notebooks_smoke.py`) plus two
+simulation-heavy American tests, so the quick loop still runs every engine,
+case and oracle assertion.
+
 ```bash
 QPL_LAB_SMOKE=1 MPLBACKEND=Agg pytest -q tests/test_labs_smoke.py
 ```

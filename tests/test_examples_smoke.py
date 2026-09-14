@@ -699,6 +699,7 @@ def _run(script_name: str, script_args: list[str]) -> subprocess.CompletedProces
     )
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("script_name", "script_args", "required_keys"), _SMOKE_CASES, ids=_SMOKE_IDS
 )

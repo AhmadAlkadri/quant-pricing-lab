@@ -39,6 +39,7 @@ def _resolve_lab_path(labs_root: Path, lab_filename: str) -> Path:
     return lab_path
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("lab_filename", LAB_FILENAMES)
 def test_lab_smoke(tmp_path: Path, lab_filename: str) -> None:
     repo_root = _repo_root()

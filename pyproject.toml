@@ -35,6 +35,16 @@ oracle = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `pytest -q` still runs everything: the CI contract is unchanged and no test
+# is deselected by default. `slow` exists so that `pytest -q -m "not slow"` is
+# a usable inner loop. The rule for applying it is measured, not guessed: a
+# test function is `slow` when its worst individual case (setup + call +
+# teardown, `pytest --durations=0`) exceeds ~3 s. Parametrised functions are
+# marked as a whole, because a mark on one generated id is not stable across
+# a change to the parameter list.
+markers = [
+  "slow: worst individual case exceeds ~3 s; deselect with -m 'not slow'",
+]
 
 [tool.ruff]
 line-length = 100

@@ -204,6 +204,7 @@ def test_day_count_makes_the_expiry_exact() -> None:
     assert _DAY_COUNT.yearFraction(_EVALUATION_DATE, maturity) == LS2001_ROW1.expiry
 
 
+@pytest.mark.slow
 def test_quantlib_lsm_agrees_on_the_longstaff_schwartz_row(
     ls_row_prices: dict[str, tuple[float, float]],
 ) -> None:

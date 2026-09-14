@@ -347,6 +347,7 @@ def test_the_lsm_estimator_cannot_resolve_the_bermudan_gap_at_250_dates(
 # (d) Three discretisations of the ATM American put.
 # --------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_atm_put_agrees_with_the_lattice_and_the_grid() -> None:
     """Evidence class: INDEPENDENT_ENGINE, third discretisation: simulation.
 
