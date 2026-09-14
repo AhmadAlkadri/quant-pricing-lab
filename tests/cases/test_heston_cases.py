@@ -13,6 +13,7 @@ and a citation.
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from itertools import pairwise
 
 import numpy as np
@@ -26,6 +27,13 @@ from qpl.cases import (
     HESTON_CALL_TOLERANCE,
     HESTON_CROSS_METHOD_CASES,
     HESTON_LEWIS_SPEC,
+    HESTON_MC_CASES,
+    HESTON_MC_FELLER_SPEC,
+    HESTON_MC_ORDER_LEVELS,
+    HESTON_MC_ORDER_PATHS,
+    HESTON_MC_PATHS,
+    HESTON_MC_REFERENCE_METHOD,
+    HESTON_MC_SEED,
     HESTON_PARITY_CASES,
     HESTON_PUBLISHED_CASES,
     HESTON_PUT_TOLERANCE,
@@ -49,6 +57,9 @@ from qpl.engines.fourier import (
     smile_skew,
 )
 from qpl.engines.fourier.lewis import lewis_call
+from qpl.engines.mc.heston import QE, simulate_heston
+from qpl.engines.mc.pricers import MCConfig
+from qpl.engines.mc.sde import uniform_time_grid
 from qpl.pricing import price
 from qpl.validation import EvidenceClass, fit_convergence_order
 
@@ -266,6 +277,183 @@ def test_smile_shape_rows(case: HestonCase) -> None:
     assert case.row.expected == SHAPE_HOLDS
     assert case.row.tolerance == 0.0
     assert _shape_indicator(case) == case.row.expected
+
+
+# --------------------------------------------------------------------------
+# Monte Carlo rows (Slice 16).
+# --------------------------------------------------------------------------
+
+_MC_REFERENCE_CFG = FourierConfig(method=HESTON_MC_REFERENCE_METHOD)
+
+
+def _mc_cfg(n_steps: int, *, scheme: str = QE, n_paths: int = HESTON_MC_PATHS) -> MCConfig:
+    """The estimator every Monte Carlo row is measured with.
+
+    Antithetic plus conditioning and deliberately no control variate; the
+    reason is in `qpl.cases.heston.HESTON_MC_PATHS`.
+    """
+    return MCConfig(
+        n_paths=n_paths,
+        n_steps=n_steps,
+        seed=HESTON_MC_SEED,
+        variance_reduction="antithetic",
+        heston_conditional=True,
+        heston_scheme=scheme,
+    )
+
+
+@lru_cache(maxsize=None)
+def _mc_bias(spec_id: str, scheme: str, n_steps: int, n_paths: int) -> tuple[float, float]:
+    """`(bias, stderr)` of the simulated ATM call against the transform price."""
+    spec = HESTON_LEWIS_SPEC if spec_id == "reference" else HESTON_MC_FELLER_SPEC
+    option, model, market = spec.option(), spec.model(), spec.market()
+    reference = price(
+        option, model, market, method="fourier", cfg=_MC_REFERENCE_CFG
+    ).value
+    simulated = price(
+        option,
+        model,
+        market,
+        method="mc",
+        cfg=_mc_cfg(n_steps, scheme=scheme, n_paths=n_paths),
+    )
+    return simulated.value - reference, float(simulated.stderr)
+
+
+@lru_cache(maxsize=None)
+def _martingale_defect(*, corrected: bool) -> tuple[float, float]:
+    """`(E[e^{-(r-q)T} S_T] - S_0, stderr)` for QE at `dt = 1/4`."""
+    spec = HESTON_LEWIS_SPEC
+    drift = spec.rate - spec.dividend
+    paths = simulate_heston(
+        spec.model(),
+        s0=spec.spot,
+        mu=drift,
+        t_grid=uniform_time_grid(spec.expiry, 4),
+        n_paths=HESTON_MC_PATHS,
+        seed=HESTON_MC_SEED,
+        scheme=QE,
+        antithetic=True,
+        martingale_correction=corrected,
+        store_paths=False,
+    )
+    discounted = math.exp(-drift * spec.expiry) * paths.terminal_spot
+    half = HESTON_MC_PATHS // 2
+    units = 0.5 * (discounted[:half] + discounted[half:])
+    return (
+        float(np.mean(units)) - spec.spot,
+        float(np.std(units, ddof=1) / math.sqrt(units.size)),
+    )
+
+
+def _mc_row_value(case_id: str) -> float:
+    """Evaluate the quantity one Monte Carlo row makes a claim about."""
+    if case_id == "heston_mc_qe_bias_dt_quarter":
+        return _mc_bias("reference", QE, 4, HESTON_MC_PATHS)[0]
+    if case_id == "heston_mc_euler_bias_dt_quarter":
+        return _mc_bias("reference", "euler_full_truncation", 4, HESTON_MC_PATHS)[0]
+    if case_id == "heston_mc_euler_over_qe_bias_reference_set":
+        qe = _mc_bias("reference", QE, 4, HESTON_MC_PATHS)[0]
+        euler = _mc_bias("reference", "euler_full_truncation", 4, HESTON_MC_PATHS)[0]
+        return abs(euler) / abs(qe)
+    if case_id == "heston_mc_euler_over_qe_bias_feller_violated":
+        qe = _mc_bias("feller", QE, 4, HESTON_MC_PATHS)[0]
+        euler = _mc_bias("feller", "euler_full_truncation", 4, HESTON_MC_PATHS)[0]
+        return abs(euler) / abs(qe)
+    if case_id == "heston_mc_qe_feller_violated_bias_dt_quarter":
+        return _mc_bias("feller", QE, 4, HESTON_MC_PATHS)[0]
+    if case_id == "heston_mc_qe_weak_order_resolved_levels":
+        return _fitted_bias_order("reference", QE, HESTON_MC_ORDER_PATHS)
+    if case_id == "heston_mc_euler_feller_violated_order":
+        return _fitted_bias_order(
+            "feller", "euler_full_truncation", HESTON_MC_PATHS
+        )
+    if case_id == "heston_mc_martingale_defect_without_correction":
+        return _martingale_defect(corrected=False)[0]
+    if case_id == "heston_mc_martingale_defect_with_correction":
+        return _martingale_defect(corrected=True)[0]
+    if case_id == "heston_mc_conditional_variance_factor":
+        return _conditional_variance_factor()
+    raise AssertionError(f"no evaluator for row {case_id}")  # pragma: no cover
+
+
+@lru_cache(maxsize=None)
+def _fitted_bias_order(spec_id: str, scheme: str, n_paths: int) -> float:
+    steps = np.array([1.0 / n for n in HESTON_MC_ORDER_LEVELS])
+    errors = np.array(
+        [
+            abs(_mc_bias(spec_id, scheme, n, n_paths)[0])
+            for n in HESTON_MC_ORDER_LEVELS
+        ]
+    )
+    return fit_convergence_order(steps, errors).order
+
+
+@lru_cache(maxsize=None)
+def _conditional_variance_factor() -> float:
+    spec = HESTON_LEWIS_SPEC
+    option, model, market = spec.option(), spec.model(), spec.market()
+    plain = price(
+        option,
+        model,
+        market,
+        method="mc",
+        cfg=MCConfig(
+            n_paths=HESTON_MC_PATHS,
+            n_steps=16,
+            seed=HESTON_MC_SEED,
+            variance_reduction="antithetic",
+            heston_conditional=False,
+        ),
+    )
+    conditional = price(
+        option, model, market, method="mc", cfg=_mc_cfg(16)
+    )
+    return (float(plain.stderr) / float(conditional.stderr)) ** 2
+
+
+@pytest.mark.parametrize("case", HESTON_MC_CASES, ids=_ids(HESTON_MC_CASES))
+def test_monte_carlo_rows(case: HestonCase) -> None:
+    """Evaluate one simulation row at the settings its module records.
+
+    Every row is deterministic at `HESTON_MC_SEED`, so a failure means the
+    estimator moved, not that a draw was unlucky -- and the tolerances are
+    multiples of the measured standard error (or, for the order rows, the
+    measured spread across seeds), which the row's `notes` state.
+    """
+    assert case.row.evidence in {
+        EvidenceClass.STATISTICAL,
+        EvidenceClass.CONVERGENCE_ORDER,
+        EvidenceClass.NEGATIVE_FINDING,
+    }
+    assert _mc_row_value(case.row.id) == pytest.approx(
+        case.row.expected, abs=case.row.tolerance
+    )
+
+
+def test_the_martingale_correction_is_what_removes_the_defect() -> None:
+    """The two martingale rows are only meaningful next to each other.
+
+    Evidence class: NEGATIVE_FINDING for the uncorrected drift. The corrected
+    defect has to be inside its own sampling error *and* a small fraction of
+    the uncorrected one; either alone could be satisfied by a scheme that had
+    simply become noisier.
+    """
+    uncorrected, uncorrected_stderr = _martingale_defect(corrected=False)
+    corrected, corrected_stderr = _martingale_defect(corrected=True)
+    assert uncorrected > 20.0 * uncorrected_stderr
+    assert abs(corrected) < 4.0 * corrected_stderr
+    assert abs(corrected) < 0.1 * uncorrected
+
+
+def test_the_feller_violating_spec_is_the_repositorys_own() -> None:
+    """Evidence class: EXACT_IDENTITY (a statement about the test data).
+
+    Its variance parameters are `CIR_FELLER_VIOLATED`'s, so the simulation
+    slice and the transform slice mean the same regime by "Feller violated".
+    """
+    assert HESTON_MC_FELLER_SPEC.feller_number == pytest.approx(0.08)
+    assert HESTON_LEWIS_SPEC.feller_number == pytest.approx(4.0)
 
 
 # --------------------------------------------------------------------------

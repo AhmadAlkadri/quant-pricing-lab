@@ -22,7 +22,14 @@ Four families of row:
    round-off budget -- except that under Heston at the package defaults it is
    *not* round-off, it is the COS range's truncated left tail, and the rows say
    so and pin its size.
-4. **Smile shape.** Sign of the skew against the sign of `rho`, the ordering of
+4. **Monte Carlo (Slice 16).** The three simulation schemes' measured weak
+   bias against a transform reference, the martingale defect with and without
+   Andersen's correction, and the two variance reductions' measured factors.
+   This is the first family here whose rows are `STATISTICAL` and
+   `CONVERGENCE_ORDER` rather than closed-form -- each carries the path count,
+   the seed and the estimator that produced it, because a Monte Carlo number
+   without those three is not reproducible and therefore not a claim.
+5. **Smile shape.** Sign of the skew against the sign of `rho`, the ordering of
    `|skew|` across maturities, and the term structure of at-the-forward implied
    variance between `v0` and `theta`. These are boolean-valued claims, so each
    row's ``expected`` is 1.0 with a tolerance of 0 and the test converts the
@@ -61,6 +68,15 @@ __all__ = [
     "HESTON_CROSS_METHOD_CASES",
     "HESTON_CROSS_METHOD_TOLERANCE",
     "HESTON_LEWIS_SPEC",
+    "HESTON_MC_CASES",
+    "HESTON_MC_CONDITIONAL_FACTOR",
+    "HESTON_MC_DT_LEVELS",
+    "HESTON_MC_FELLER_SPEC",
+    "HESTON_MC_ORDER_LEVELS",
+    "HESTON_MC_ORDER_PATHS",
+    "HESTON_MC_PATHS",
+    "HESTON_MC_REFERENCE_METHOD",
+    "HESTON_MC_SEED",
     "HESTON_PARITY_CASES",
     "HESTON_PARITY_TOLERANCE",
     "HESTON_PUBLISHED_CASES",
@@ -606,6 +622,295 @@ HESTON_SMILE_CASES: tuple[HestonCase, ...] = (
 )
 
 
+# --------------------------------------------------------------------------
+# (5) Monte Carlo: Slice 16.
+# --------------------------------------------------------------------------
+
+HESTON_MC_PATHS = 200_000
+HESTON_MC_SEED = 20240913
+HESTON_MC_DT_LEVELS: tuple[int, ...] = (4, 8, 16, 32, 64)
+HESTON_MC_ORDER_LEVELS: tuple[int, ...] = (4, 8, 16)
+HESTON_MC_ORDER_PATHS = 500_000
+"""Settings every Monte Carlo row below was measured at.
+
+The estimator is **antithetic plus conditioning**
+(`MCConfig(variance_reduction="antithetic", heston_conditional=True)`) and
+deliberately **not** the control variate: the discounted terminal spot's mean
+is the *model's* forward, not the *scheme's*, so subtracting it also removes
+the part of the discretisation bias collinear with the scheme's martingale
+defect -- a legitimate bias reduction and an illegitimate bias measurement.
+Measured shift on full-truncation Euler at `dt = 1/4`: -5.2e-03.
+
+`HESTON_MC_ORDER_LEVELS` stops at `dt = 1/16` because the finer levels' errors
+sit inside their own standard error at any path count this suite can afford
+(3.2e-03 at 1,000,000 paths against a bias of 4.9e-03 at `dt = 1/32`), and a
+slope fitted through noise is not an order. The full five-level ladder is
+`HESTON_MC_DT_LEVELS` and lives in `examples/heston_mc_qe.py`."""
+
+HESTON_MC_REFERENCE_METHOD = "lewis"
+"""The transform method the Monte Carlo bias is measured *against*.
+
+Slice 15's oracle conclusion: Lewis and Gil-Pelaez are the only two transform
+methods here with no parameter to get wrong (worst residual 2.4e-10 and 1.2e-11
+against QuantLib's `AnalyticHestonEngine` over 24 cells spanning both Feller
+regimes). COS needs `L = 28` on the Feller-violating set and its *call* has no
+usable setting there at `T = 10`; at `T = 1` it does agree with Lewis to
+1.2e-10 at `L = 28, N = 4096`, which `tests/test_mc_heston_pricing.py` checks
+so that the choice of reference is a measurement rather than a preference."""
+
+HESTON_MC_FELLER_SPEC = HestonSpec(
+    spot=100.0,
+    strike=100.0,
+    expiry=1.0,
+    rate=0.01,
+    dividend=0.02,
+    v0=0.04,
+    kappa=0.5,
+    theta=0.04,
+    xi=1.0,
+    rho=-0.9,
+)
+"""The Feller-violating set: number **0.08**, so the origin is attainable.
+
+Its variance parameters are `qpl.cases.sde_discretization.CIR_FELLER_VIOLATED`
+and its `rho` matches `tests/heston_points.FELLER_VIOLATED`, so the three
+slices that touch this regime mean the same model by it."""
+
+HESTON_MC_CONDITIONAL_FACTOR = 55.6
+"""Measured variance ratio of the conditional estimator over the plain one.
+
+Same estimator *mean* -- `ln S_T` is exactly Gaussian given the variance
+driver in all three schemes, so the conditional expectation of a terminal
+payoff is a Black-Scholes formula per path -- and 55.6x less variance at
+`dt = 1/16` on the reference set. It is what makes the bias rows below
+resolvable at 200,000 paths."""
+
+_MC_SOURCE = (
+    "measured in this repository (tests/test_mc_heston_pricing.py and "
+    "examples/heston_mc_qe.py); the scheme is derived in qpl.engines.mc.heston "
+    "from Andersen (2008), Journal of Computational Finance 11(3), sections "
+    "3.2-3.3 and 4.3, and the Euler comparison from Lord, Koekkoek & van Dijk "
+    "(2010), Quantitative Finance 10(2)"
+)
+
+HESTON_MC_CASES: tuple[HestonCase, ...] = (
+    HestonCase(
+        row=BenchmarkRow(
+            id="heston_mc_qe_bias_dt_quarter",
+            description=(
+                "QE weak bias of the ATM call against the Lewis price at "
+                "dt = 1/4 on the reference set"
+            ),
+            expected=-0.0912,
+            tolerance=0.03,
+            evidence=EvidenceClass.STATISTICAL,
+            source=_MC_SOURCE,
+            notes=(
+                "200k antithetic conditional paths, standard error 7.1e-03, so "
+                "the row is 13 standard errors from zero. At 1,000,000 paths "
+                "the same cell reads -1.017e-01 +- 3.2e-03. Tolerance is four "
+                "standard errors of the pinned run."
+            ),
+        ),
+        specs=(HESTON_LEWIS_SPEC,),
+    ),
+    HestonCase(
+        row=BenchmarkRow(
+            id="heston_mc_euler_bias_dt_quarter",
+            description=(
+                "full-truncation Euler weak bias of the same call at dt = 1/4 "
+                "on the reference set"
+            ),
+            expected=0.2827,
+            tolerance=0.05,
+            evidence=EvidenceClass.STATISTICAL,
+            source=_MC_SOURCE,
+            notes=(
+                "Standard error 1.3e-02. Note the SIGN: Euler errs upward "
+                "where QE errs downward, so a bias measured on one scheme says "
+                "nothing about the other even qualitatively."
+            ),
+        ),
+        specs=(HESTON_LEWIS_SPEC,),
+    ),
+    HestonCase(
+        row=BenchmarkRow(
+            id="heston_mc_euler_over_qe_bias_reference_set",
+            description=(
+                "|Euler bias| / |QE bias| at dt = 1/4 with the Feller "
+                "condition SATISFIED"
+            ),
+            expected=3.1,
+            tolerance=1.5,
+            evidence=EvidenceClass.NEGATIVE_FINDING,
+            source=_MC_SOURCE,
+            notes=(
+                "The slice statement expected QE's bias to be 'far smaller' "
+                "than Euler's at coarse steps. On the Feller-SATISFYING "
+                "reference set it is smaller by a factor of about three, which "
+                "is not orders of magnitude. The dramatic separation is a "
+                "Feller-regime effect and is the row below."
+            ),
+        ),
+        specs=(HESTON_LEWIS_SPEC,),
+    ),
+    HestonCase(
+        row=BenchmarkRow(
+            id="heston_mc_euler_over_qe_bias_feller_violated",
+            description=(
+                "|Euler bias| / |QE bias| at dt = 1/4 with the Feller "
+                "condition VIOLATED (number 0.08)"
+            ),
+            expected=131.0,
+            tolerance=60.0,
+            evidence=EvidenceClass.NEGATIVE_FINDING,
+            source=_MC_SOURCE,
+            notes=(
+                "QE -2.58e-02 against Euler +3.394 on a price of 3.5918 -- 95% "
+                "of the price. 54% of Euler's variance draws are negative here "
+                "and full truncation is the least-biased Euler fix "
+                "(Lord-Koekkoek-van Dijk); it is still unusable. The wide "
+                "tolerance is deliberate: the claim is two orders of magnitude, "
+                "not a third digit."
+            ),
+        ),
+        specs=(HESTON_MC_FELLER_SPEC,),
+    ),
+    HestonCase(
+        row=BenchmarkRow(
+            id="heston_mc_qe_feller_violated_bias_dt_quarter",
+            description=(
+                "QE weak bias at dt = 1/4 on the Feller-violating set, where "
+                "the variance is non-negative by construction"
+            ),
+            expected=-0.0258,
+            tolerance=0.012,
+            evidence=EvidenceClass.STATISTICAL,
+            source=_MC_SOURCE,
+            notes=(
+                "Standard error 2.5e-03. 0.7% of a price of 3.5918, at the "
+                "coarsest step size on the hardest parameter set in this "
+                "repository."
+            ),
+        ),
+        specs=(HESTON_MC_FELLER_SPEC,),
+    ),
+    HestonCase(
+        row=BenchmarkRow(
+            id="heston_mc_qe_weak_order_resolved_levels",
+            description=(
+                "fitted order in dt of the QE weak bias over dt = 1/4, 1/8, "
+                "1/16 on the reference set"
+            ),
+            expected=1.85,
+            tolerance=0.45,
+            evidence=EvidenceClass.CONVERGENCE_ORDER,
+            source=_MC_SOURCE,
+            notes=(
+                "500,000 antithetic conditional paths at the pinned seed; "
+                "log-space residual 2e-04. Across four seeds at the same "
+                "settings the fit reads 1.45 / 1.85 / 1.92 / 1.70, so the "
+                "tolerance is the SEED spread and not a round-off budget -- "
+                "the third level's error is only two standard errors clear of "
+                "zero and dominates the slope's uncertainty. Reported as a "
+                "measured decay rate, never as the scheme's theoretical weak "
+                "order."
+            ),
+        ),
+        specs=tuple(HESTON_LEWIS_SPEC for _ in HESTON_MC_ORDER_LEVELS),
+    ),
+    HestonCase(
+        row=BenchmarkRow(
+            id="heston_mc_euler_feller_violated_order",
+            description=(
+                "fitted order in dt of the full-truncation Euler bias on the "
+                "Feller-violating set"
+            ),
+            expected=0.78,
+            tolerance=0.25,
+            evidence=EvidenceClass.CONVERGENCE_ORDER,
+            source=_MC_SOURCE,
+            notes=(
+                "3.394 / 2.137 / 1.150 at dt = 1/4, 1/8, 1/16, log-space "
+                "residual 0.037. Below one, and with a constant of 10.3: the "
+                "boundary the scheme cannot respect costs it both the order and "
+                "the constant, which is the Slice 9 CIR finding (measured order "
+                "0.64 on the variance mean in the same regime) reappearing in a "
+                "price."
+            ),
+        ),
+        specs=tuple(HESTON_MC_FELLER_SPEC for _ in HESTON_MC_ORDER_LEVELS),
+    ),
+    HestonCase(
+        row=BenchmarkRow(
+            id="heston_mc_martingale_defect_without_correction",
+            description=(
+                "E[e^{-(r-q)T} S_T] - S_0 for QE at dt = 1/4 with the "
+                "UNCORRECTED drift"
+            ),
+            expected=1.147,
+            tolerance=0.2,
+            evidence=EvidenceClass.NEGATIVE_FINDING,
+            source=_MC_SOURCE,
+            notes=(
+                "Standard error 3.9e-02, so 29 standard errors from zero: the "
+                "scheme misprices the FORWARD by 1.1% of spot before it prices "
+                "anything else. Over 12 seeds the defect reads +1.098 / +0.272 "
+                "/ +0.058 at dt = 1/4, 1/8, 1/16 -- falling at roughly order 2, "
+                "hence invisible on a fine grid and expensive on a coarse one. "
+                "Andersen section 4.3."
+            ),
+        ),
+        specs=(HESTON_LEWIS_SPEC,),
+    ),
+    HestonCase(
+        row=BenchmarkRow(
+            id="heston_mc_martingale_defect_with_correction",
+            description=(
+                "the same quantity with Andersen's martingale correction, "
+                "which is exact by construction"
+            ),
+            expected=0.0,
+            tolerance=0.155,
+            evidence=EvidenceClass.STATISTICAL,
+            source=_MC_SOURCE,
+            notes=(
+                "Tolerance is FOUR standard errors of the pinned run "
+                "(3.9e-02), because the correction makes each step's "
+                "conditional expectation exactly e^{(r-q) dt} and the only "
+                "thing left between the estimate and S_0 is sampling error. "
+                "Measured +0.037 at the pinned seed."
+            ),
+        ),
+        specs=(HESTON_LEWIS_SPEC,),
+    ),
+    HestonCase(
+        row=BenchmarkRow(
+            id="heston_mc_conditional_variance_factor",
+            description=(
+                "variance ratio of the conditional estimator over the plain "
+                "one, same mean, dt = 1/16"
+            ),
+            expected=HESTON_MC_CONDITIONAL_FACTOR,
+            tolerance=20.0,
+            evidence=EvidenceClass.STATISTICAL,
+            source=_MC_SOURCE,
+            notes=(
+                "Conditional on the variance driver, ln S_T is exactly "
+                "Gaussian in all three schemes, so a terminal payoff has a "
+                "closed-form conditional expectation and averaging it removes "
+                "the whole spot diffusion. The tolerance is wide because a "
+                "ratio of two sample variances is itself noisy; the claim is "
+                "'an order of magnitude and then some', which is what makes "
+                "the bias rows above measurable at all."
+            ),
+        ),
+        specs=(HESTON_LEWIS_SPEC,),
+    ),
+)
+"""The Slice 16 simulation rows."""
+
+
 ALL_HESTON_CASES: tuple[HestonCase, ...] = (
     HESTON_PUBLISHED_CASES
     + HESTON_CROSS_METHOD_CASES
@@ -613,6 +918,7 @@ ALL_HESTON_CASES: tuple[HestonCase, ...] = (
     + HESTON_BS_LIMIT_ORDER_CASES
     + HESTON_PARITY_CASES
     + HESTON_SMILE_CASES
+    + HESTON_MC_CASES
 )
 """Every Heston row, for the "ids are unique and evidence is stated" meta-test."""
 
