@@ -7,6 +7,7 @@ How to use this document
 
 Agent Contract
 - Read-first files: `.agents/brain/brain.md`, `.agents/brain/steering-brief.md`, and relevant ADRs in `.agents/brain/adr/`.
+- Campaign paused for owner review on 2026-09-14: read `.agents/brain/handoff-2026-09-14.md` before resuming agent work.
 - Pre-1.0 API churn acceptable when lab-driven and tested.
 - Do-not-break invariants: CI contract, Python compatibility, numerical invariants in tests, determinism, and clean-tree hygiene.
 - Definition of done: `ruff check .` passes, `pytest -q` passes, docs are updated, and no TODOs remain in the critical path.
