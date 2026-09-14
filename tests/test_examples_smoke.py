@@ -527,6 +527,81 @@ _SMOKE_CASES = [
         ],
     ),
     (
+        # Slice 15: Heston. The curated keys are the ones a run that had lost
+        # the point would not print. `call=  16.070155 put=  17.055271` is the
+        # published reference row reproduced by the COS engine; `skew_signs`
+        # printing `---` and then `+++` when rho flips is the whole smile
+        # claim in two lines; and `parity=` is deliberately keyless on its
+        # digits -- the residual is a truncation number, not round-off, and
+        # the study that pins its size lives in `--case cos`.
+        "heston_smile.py",
+        [],
+        [
+            "example=heston_smile",
+            "case=smile",
+            "feller_number=4.00 feller_satisfied=True log_multiplier=2.00",
+            "call=  16.070155 put=  17.055271",
+            "implied_vol=0.4244",
+            "skew=-0.0942",
+            "skew_signs=--- skew_flattens=True",
+            "rho=+0.5 skew_signs=+++",
+            "parity=",  # truncation residual; its digits are studied in --case cos
+        ],
+    ),
+    (
+        # The range study. `widen_L_by=2.80 suggested_L= 28.0` is the derived
+        # repair for `c4 = 0`, and the flat `9.1e-04` column next to it is
+        # what identifies a COS error that ignores the term count as a RANGE
+        # error. `cos_call_window_empty=True` is the slice's hardest finding.
+        "heston_smile.py",
+        ["--case", "cos"],
+        [
+            "case=cos",
+            "widen_L_by=1.43 suggested_L= 14.3",
+            "widen_L_by=2.80 suggested_L= 28.0",
+            "feller_violated  L= 10.0 N=  512:9.1e-04",
+            "N= 4096:1.2e-10",
+            "L=  8.0 call_err=7.2e+00 put_err=2.7e-02",
+            "cos_call_window_empty=True cos_put_then_parity=recommended",
+        ],
+    ),
+    (
+        # The little Heston trap. `rel=8.6e-01` at T = 2 on a model that
+        # differs from the reference one in `theta` alone, next to
+        # `trap_invisible_on_reference_set=True`, is the finding: the branch
+        # jump multiplies the transform by exp(-4 pi i kappa theta / xi^2),
+        # which is 1 when 2 kappa theta / xi^2 is an integer -- and it is, on
+        # the reference set, exactly.
+        "heston_smile.py",
+        ["--case", "trap"],
+        [
+            "case=trap",
+            "model=trap 2*kappa*theta/xi^2=2.50",
+            "T=  2.0 stable=  26.180405",
+            "rel=8.6e-01",
+            "first_break_u=19.4150",
+            "u_times_T= 5.100",
+            "trap_invisible_on_reference_set=True reason=integer_log_multiplier",
+        ],
+    ),
+    (
+        # Carr-Madan against the moment-explosion bound.
+        # `alpha= 10.60 explosion_time=   1.0233` marked ok next to
+        # `alpha= 10.65 explosion_time=   1.0103` marked BROKEN is the bound
+        # and the measurement in two lines -- and it is the constraint Slice
+        # 14 predicted and could not produce under Black-Scholes.
+        "heston_smile.py",
+        ["--case", "alpha"],
+        [
+            "case=alpha",
+            "critical_moment=11.6905 alpha_max=10.6905",
+            "alpha= 10.60 explosion_time=   1.0233",
+            "alpha= 10.65 explosion_time=   1.0103",
+            "BROKEN",
+            "alpha_failure_is_moment_explosion=True",
+        ],
+    ),
+    (
         # The Chapter 6 rules on a pricing integral. `simpson_identity` printing
         # two equal columns is the mechanism, and
         # `simpson_over_trapezoid_at_n128=7.7e+03` is the consequence: the

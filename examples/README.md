@@ -19,6 +19,8 @@ fast, and designed to run without external data sources.
 - `mc_greeks_estimators.py` (also `--case h`)
 - `barrier_option_monitoring_bias.py` (also `--case sawtooth`)
 - `barrier_pde_grid.py` (also `--case mesh`, `--case discrete`)
+- `fourier_methods_bs.py` (also `--case cos`, `--case alpha`, `--case quadrature`)
+- `heston_smile.py` (also `--case cos`, `--case trap`, `--case alpha`)
 - `quadrature_demo.py`
 - `laplace_inversion_demo.py`
 - `copula_gaussian_demo.py`
