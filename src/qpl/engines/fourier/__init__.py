@@ -42,6 +42,13 @@ from .pricers import (
     greeks_european,
     price_european,
 )
+from .smile import (
+    SKEW_LOG_MONEYNESS_BUMP,
+    atm_implied_variance,
+    implied_vol,
+    implied_vol_surface,
+    smile_skew,
+)
 
 __all__ = [
     "CARR_MADAN_TRANSFORMS",
@@ -54,6 +61,7 @@ __all__ = [
     "LEWIS_STRIP_OFFSET",
     "ON_GRID_FRACTION",
     "QUADRATURE_RULES",
+    "SKEW_LOG_MONEYNESS_BUMP",
     "U_MAX_STANDARD_DEVIATIONS",
     "BlackScholesCharacteristicFunction",
     "CarrMadanGrid",
@@ -63,6 +71,7 @@ __all__ = [
     "FourierInputs",
     "GilPelaezProbabilities",
     "LogReturnCumulants",
+    "atm_implied_variance",
     "black_scholes_characteristic_function",
     "black_scholes_log_return_cumulants",
     "carr_madan_fft",
@@ -77,9 +86,12 @@ __all__ = [
     "gil_pelaez_probabilities",
     "greeks_digital",
     "greeks_european",
+    "implied_vol",
+    "implied_vol_surface",
     "lewis_call",
     "price_digital",
     "price_european",
     "psi_coefficients",
     "register_characteristic_function",
+    "smile_skew",
 ]
