@@ -278,6 +278,24 @@ get a wrong answer, not a way to learn something."""
 
 _TINY = float(np.finfo(float).tiny)
 
+_PSI_FLOOR = 1e-16
+"""Lower clip on `psi = s2 / m^2`, for a step so short that `e^{-kappa dt}`
+rounds to 1.
+
+Then `s2` evaluates to exactly zero, `psi` is `0/m^2 = 0`, and `2/psi` divides
+by zero. A degenerate step of that kind is not an error -- it is the correct
+limit, `v_{t+dt} = m` with no noise -- and clipping reproduces it: at
+`psi = 1e-16` the quadratic branch has `b^2 ~ 2e16`, so `a (b + Z)^2` equals
+`m` to within `1.4e-08 m |Z|` and its variance is `4 m^2 / b^2 ~ 2e-16 m^2`.
+Sub-ulp grid intervals do occur in practice: `heston_time_grid` unions a
+uniform grid with a contract's own schedule, and two ways of computing `i T /
+n` can differ in the last bit."""
+
+
+def _psi(m: np.ndarray, s2: np.ndarray) -> np.ndarray:
+    """`s2 / m^2`, clipped below; see `_PSI_FLOOR`."""
+    return np.maximum(s2 / (m * m), _PSI_FLOOR)
+
 
 @dataclass(frozen=True)
 class ConditionalTerminalLaw:
@@ -498,7 +516,7 @@ def qe_branch_moments(
     m, s2 = heston_variance_moments(v, dt, kappa=kappa, theta=theta, xi=xi)
     m = np.atleast_1d(np.asarray(m, dtype=float))
     s2 = np.atleast_1d(np.asarray(s2, dtype=float))
-    psi = s2 / (m * m)
+    psi = _psi(m, s2)
 
     branch = np.where(psi <= QE_PSI_C, 0, 1)
     mean = np.empty_like(m)
@@ -540,7 +558,7 @@ def qe_variance_step(
     `tests/test_mc_heston.py`.
     """
     m, s2 = heston_variance_moments(v, dt, kappa=kappa, theta=theta, xi=xi)
-    psi = s2 / (m * m)
+    psi = _psi(m, s2)
     out = np.empty_like(m)
 
     lo = psi <= QE_PSI_C
@@ -804,7 +822,7 @@ def simulate_heston(
                 m, s2 = heston_variance_moments(
                     v, dt, kappa=kappa, theta=theta, xi=xi
                 )
-                psi = s2 / (m * m)
+                psi = _psi(m, s2)
                 v_next = qe_variance_step(
                     v, dt, kappa=kappa, theta=theta, xi=xi, z=zv
                 )

@@ -243,10 +243,26 @@ def heston_time_grid(expiry: float, n_steps: int, *, dates: tuple[float, ...] = 
     uniform = expiry * np.arange(n_steps + 1, dtype=float) / float(n_steps)
     if not dates:
         return uniform
-    grid = np.unique(np.concatenate([uniform, np.asarray(dates, dtype=float)]))
-    if grid[0] != 0.0:
-        grid = np.concatenate([[0.0], grid])
-    return grid
+    schedule = np.asarray(dates, dtype=float)
+    merged = np.unique(np.concatenate([uniform, schedule, [0.0]]))
+    # Two ways of computing `i T / n` can differ in the last bit, and
+    # `numpy.unique` then keeps both -- leaving a sub-ulp interval on which
+    # `e^{-kappa dt}` rounds to 1 and the QE variance step degenerates. Collapse
+    # near-duplicates, keeping the CONTRACT's date where the pair contains one,
+    # so that `_column_indices` still finds every fixing exactly.
+    tolerance = 1e-12 * max(float(expiry), 1.0)
+
+    def _is_contract_date(value: float) -> bool:
+        return bool(np.any(np.abs(schedule - value) <= tolerance))
+
+    kept = [float(merged[0])]
+    for value in merged[1:]:
+        if value - kept[-1] <= tolerance:
+            if _is_contract_date(value) and not _is_contract_date(kept[-1]):
+                kept[-1] = float(value)
+            continue
+        kept.append(float(value))
+    return np.asarray(kept, dtype=float)
 
 
 @dataclass(frozen=True)
@@ -573,13 +589,16 @@ def price_digital(
 def _column_indices(grid: np.ndarray, dates: tuple[float, ...]) -> np.ndarray:
     """Where each contract date sits in the simulation grid.
 
-    `heston_time_grid` puts every date on the grid, so this is an exact lookup
-    and not a nearest-neighbour search; `searchsorted` returning a mismatch
-    would mean the grid construction is broken, which is asserted rather than
-    papered over.
+    `heston_time_grid` puts every date on the grid, but the *representative* it
+    keeps for a pair that differs in the last bit may be the uniform grid's
+    point rather than the contract's -- so the lookup is nearest-neighbour with
+    a relative tolerance, and a miss larger than that would mean the grid
+    construction is broken, which is asserted rather than papered over.
     """
-    index = np.searchsorted(grid, np.asarray(dates, dtype=float))
-    if not np.allclose(grid[index], dates, rtol=0.0, atol=1e-12):
+    wanted = np.asarray(dates, dtype=float)
+    index = np.abs(grid[None, :] - wanted[:, None]).argmin(axis=1)
+    tolerance = 1e-12 * max(float(grid[-1]), 1.0)
+    if np.any(np.abs(grid[index] - wanted) > tolerance):
         raise InvalidInputError(
             "contract dates are not on the simulation grid"
         )  # pragma: no cover - guarded by heston_time_grid
