@@ -77,6 +77,7 @@ from qpl.exceptions import InvalidInputError
 from qpl.instruments.options import EuropeanOption
 from qpl.market.curves import FlatDividendCurve, FlatRateCurve
 from qpl.market.market import Market
+from qpl.models.black_scholes import bs_price
 from qpl.models.heston import (
     HestonModel,
     heston_characteristic_function,
@@ -796,3 +797,715 @@ def test_the_covariance_reports_infinities_rather_than_a_pseudo_inverse() -> Non
     assert np.all(np.isinf(covariance))
     assert np.all(np.isinf(standard_errors))
     assert singular_values[-1] == pytest.approx(0.0, abs=1e-14)
+
+
+# --------------------------------------------------------------------------
+# (a) Synthetic recovery, clean and noisy.
+# --------------------------------------------------------------------------
+
+CLEAN_START_REFERENCE = (0.08, 2.0, 0.15, 0.6, -0.2)
+"""Perturbed initial guess for the reference set: `v0` doubled, `kappa` halved,
+`theta` cut by 40%, `xi` cut by 40% and `rho` moved to -0.2. Deliberately not a
+small perturbation -- a recovery from a 5% bump measures the solver's last
+iteration and nothing else."""
+
+CLEAN_START_FELLER_VIOLATED = (0.08, 0.9, 0.09, 0.6, -0.6)
+
+RESIDUAL_TO_PARAMETER_SAFETY = 10.0
+"""How much slack the clean-recovery bound below carries over the bound the
+Jacobian's smallest singular value supplies.
+
+The bound itself is not wishful: a residual perturbation `dr` moves the
+Gauss-Newton solution by at most `||dr|| / s_min`, so the parameter error at a
+converged fit is at most `||r|| / s_min` -- the residual the solver actually
+stopped at, divided by the smallest singular value of the Jacobian there. On
+the reference set with the implied-volatility objective that is
+`2.67e-12 / 1.00e-02 = 2.67e-10`, against a worst measured parameter error of
+1.48e-10, so the bound is tight to a factor of 1.8. The factor of 10 below is
+for the two places the linearisation is not exact (the model is nonlinear in
+the parameters, and the solver's stopping point is not the exact minimiser),
+not for headroom against a number that was guessed."""
+
+
+@pytest.mark.parametrize(
+    ("label", "model", "truth", "start"),
+    [
+        ("reference", REFERENCE, TRUE_REFERENCE, CLEAN_START_REFERENCE),
+        (
+            "feller_violated",
+            FELLER_VIOLATED,
+            TRUE_FELLER_VIOLATED,
+            CLEAN_START_FELLER_VIOLATED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("objective", ["price", "implied_vol"])
+def test_clean_synthetic_recovery_is_bounded_by_the_smallest_singular_value(
+    label, model, truth, start, objective
+) -> None:
+    """Evidence class: CLOSED_FORM, with a tolerance derived from the Jacobian.
+
+    Quotes generated from a known model on a 5-strike by 6-maturity grid are
+    recovered from the perturbed start above. The per-parameter errors,
+    measured:
+
+        set               objective      v0        kappa      theta      xi        rho
+        reference         price        +2.9e-09  -5.4e-07  +3.3e-09  -4.1e-07  -1.3e-07
+        reference         implied_vol  +2.2e-12  -1.5e-10  +2.1e-12  -9.7e-12  +2.9e-12
+        Feller-violating  price        -2.5e-10  +8.2e-08  -5.8e-09  +1.3e-09  +5.8e-09
+        Feller-violating  implied_vol  -2.2e-10  -9.1e-09  +1.6e-09  +5.3e-09  +1.0e-09
+
+    The bound asserted is `||r|| / s_min` times `RESIDUAL_TO_PARAMETER_SAFETY`,
+    not a round number: the recovery is only ever as good as the residual the
+    solver stopped at divided by how flat the objective is in its flattest
+    direction, and both of those come back in the result.
+
+    Note what this does **not** say. Every error above is 1e-07 or smaller, and
+    none of it is evidence that these five parameters are identifiable from
+    this data -- the quotes are exact to 1e-12 and the tolerances are the
+    solver's. What identifiability costs is measured with noise, below, and
+    what it costs at one maturity is measured after that.
+    """
+    assert EvidenceClass.CLOSED_FORM is EvidenceClass.CLOSED_FORM
+    quotes = synthetic_quotes(model, SIX_MATURITIES)
+    fit = calibrate_heston(quotes, MARKET, initial=start, objective=objective)
+    assert fit.success
+    assert fit.model is not None
+
+    smallest = float(fit.singular_values[-1])
+    budget = (
+        RESIDUAL_TO_PARAMETER_SAFETY
+        * float(np.linalg.norm(fit.residuals))
+        / smallest
+    )
+    errors = np.abs(np.array(fit.parameters) - np.array(truth))
+    assert float(np.max(errors)) < budget, (label, objective, errors, budget)
+    # ... and the bound is worth having: it is not vacuous.
+    assert budget < 1e-03
+
+
+NOISE_SEEDS = 20
+NOISE_LEVELS_BP = (5.0, 20.0)
+STDERR_AGREEMENT_BAND = (0.8, 1.5)
+"""The factor by which the empirical root-mean-square parameter error may
+differ from the mean Jacobian-based standard error, over `NOISE_SEEDS` noise
+draws. Measured ratios:
+
+    noise      v0     kappa   theta    xi     rho
+     5 bp     1.07     1.08    0.99    1.14   1.16
+    20 bp     1.09     1.10    1.00    1.15   1.23
+
+so the linearised error bars are right to about 20%, and are consistently on
+the *small* side -- which is the expected direction, because the Gauss-Newton
+covariance ignores the second-order term and the model is not linear in
+`kappa`. The band is set from that measurement and not from a hoped-for 1."""
+
+NOISE_SCALING_BAND = (3.5, 4.8)
+"""Quadrupling the quote noise should quadruple the parameter error if the
+problem is locally linear. Measured ratios of the 20 bp RMSE to the 5 bp one:
+4.05 (v0), 4.08 (kappa), 4.03 (theta), 4.03 (xi), 4.58 (rho). `rho` is the one
+that drifts, which is the nonlinearity showing up first in the parameter that
+enters the transform through `beta = kappa - rho xi i u`."""
+
+
+def _noisy_quotes(model, maturities, *, noise_bp: float, seed: int):
+    """`model`'s own smile with independent Gaussian implied-volatility noise.
+
+    Noise is added in **volatility** units because that is how a bid/ask is
+    quoted; the price objective then sees the same perturbed surface converted
+    through Black-Scholes, so the two objectives are compared on one data set
+    rather than on two.
+    """
+    rng = np.random.default_rng(seed)
+    clean = synthetic_quotes(model, maturities)
+    return [
+        OptionQuote(
+            strike=q.strike,
+            expiry=q.expiry,
+            kind="call",
+            value=float(q.value + rng.normal(0.0, noise_bp * 1e-04)),
+            value_type="implied_vol",
+        )
+        for q in clean
+    ]
+
+
+@pytest.mark.parametrize("noise_bp", NOISE_LEVELS_BP, ids=["5bp", "20bp"])
+def test_the_recovery_error_matches_the_jacobian_standard_errors(noise_bp) -> None:
+    """Evidence class: STATISTICAL -- the honest identifiability statement.
+
+    Twenty independent draws of Gaussian implied-volatility noise on the same
+    5-by-6 grid, each calibrated from the same perturbed start. What is
+    compared is the **spread of the fitted parameters across draws** against
+    the **standard errors the Jacobian predicts within a single draw**. Those
+    are two different computations of the same quantity, and their agreement
+    (0.99 to 1.23, table in `STDERR_AGREEMENT_BAND`) is what licenses quoting
+    a `CalibrationResult.standard_errors` as an error bar at all.
+
+    At 20 bp -- two-tenths of a volatility point, a narrow real spread -- the
+    fitted `kappa` carries a standard error of **0.19 on a true value of 4**
+    and `xi` **0.086 on 1.0**, while `theta` is at 1.6e-03 on 0.25 and `rho` at
+    0.033 on -0.5. That is the slice's result in one line: a fit that
+    reproduces the surface to 20 bp pins `theta` to 0.7% and `kappa` to 5%.
+    """
+    assert EvidenceClass.STATISTICAL is EvidenceClass.STATISTICAL
+    errors = []
+    standard_errors = []
+    for seed in range(NOISE_SEEDS):
+        quotes = _noisy_quotes(
+            REFERENCE, SIX_MATURITIES, noise_bp=noise_bp, seed=1000 + seed
+        )
+        fit = calibrate_heston(
+            quotes,
+            MARKET,
+            initial=CLEAN_START_REFERENCE,
+            objective="implied_vol",
+        )
+        assert fit.success
+        errors.append(np.array(fit.parameters) - np.array(TRUE_REFERENCE))
+        standard_errors.append(fit.standard_errors)
+
+    empirical = np.sqrt((np.array(errors) ** 2).mean(axis=0))
+    predicted = np.array(standard_errors).mean(axis=0)
+    low, high = STDERR_AGREEMENT_BAND
+    for index, name in enumerate(HESTON_PARAMETERS):
+        ratio = empirical[index] / predicted[index]
+        assert low < ratio < high, (name, ratio)
+
+
+def test_the_recovery_error_scales_with_the_noise() -> None:
+    """Evidence class: STATISTICAL.
+
+    Four times the quote noise, four times the parameter error. Run as its own
+    test rather than folded into the one above so that a failure says which of
+    the two claims broke.
+    """
+    assert EvidenceClass.STATISTICAL is EvidenceClass.STATISTICAL
+    rms = {}
+    for noise_bp in NOISE_LEVELS_BP:
+        errors = []
+        for seed in range(NOISE_SEEDS):
+            quotes = _noisy_quotes(
+                REFERENCE, THREE_MATURITIES, noise_bp=noise_bp, seed=2000 + seed
+            )
+            fit = calibrate_heston(
+                quotes,
+                MARKET,
+                initial=CLEAN_START_REFERENCE,
+                objective="implied_vol",
+            )
+            errors.append(np.array(fit.parameters) - np.array(TRUE_REFERENCE))
+        rms[noise_bp] = np.sqrt((np.array(errors) ** 2).mean(axis=0))
+    low, high = NOISE_SCALING_BAND
+    ratios = rms[NOISE_LEVELS_BP[1]] / rms[NOISE_LEVELS_BP[0]]
+    for index, name in enumerate(HESTON_PARAMETERS):
+        assert low < ratios[index] < high, (name, ratios[index])
+
+
+# --------------------------------------------------------------------------
+# (b) Identifiability: the flat direction and what maturities buy.
+# --------------------------------------------------------------------------
+
+CONDITION_NUMBERS_IMPLIED_VOL = {1: 6.7137e07, 3: 5.6614e02, 6: 4.7754e02}
+CONDITION_NUMBERS_PRICE = {1: 6.4804e07, 3: 7.8250e02, 6: 9.5237e02}
+"""Condition number of the residual Jacobian at the **true** parameters, on a
+5-strike grid, as maturities are added. Measured, not predicted.
+
+The implied-volatility column falls monotonically and the price column does
+**not** -- it improves by five decimal orders from one maturity to three and
+then gets *worse* by 22% going to six. That contradicts the written plan for
+this slice, which asserted the ordering for the objective without saying
+which. The reason is in the next test: a price objective weights a cell by its
+vega, so adding long-dated at-the-money cells inflates the largest singular
+value faster than the smallest. Gatheral (2006) chapter 3 argues for the
+implied-volatility objective on exactly this ground; here it is the difference
+between a condition number that improves with data and one that does not."""
+
+CONDITION_TOLERANCE = 0.05
+"""Relative budget on the pinned condition numbers above. They are pure linear
+algebra on a deterministic Jacobian, so the only drift is BLAS/round-off; 5%
+is generous and exists so that a different LAPACK does not fail the suite."""
+
+
+@pytest.mark.parametrize(
+    ("objective", "expected"),
+    [
+        ("implied_vol", CONDITION_NUMBERS_IMPLIED_VOL),
+        ("price", CONDITION_NUMBERS_PRICE),
+    ],
+)
+def test_the_condition_number_at_the_true_parameters(objective, expected) -> None:
+    """Evidence class: CLOSED_FORM (deterministic linear algebra)."""
+    assert EvidenceClass.CLOSED_FORM is EvidenceClass.CLOSED_FORM
+    for maturities in (ONE_MATURITY, THREE_MATURITIES, SIX_MATURITIES):
+        quotes = synthetic_quotes(REFERENCE, maturities)
+        residuals, jacobian = residual_jacobian(
+            quotes, MARKET, TRUE_REFERENCE, objective=objective
+        )
+        _, condition, _, _ = parameter_covariance(jacobian, residuals)
+        target = expected[len(maturities)]
+        assert condition == pytest.approx(target, rel=CONDITION_TOLERANCE)
+
+
+def test_more_maturities_condition_the_implied_vol_problem_but_not_the_price_one() -> None:
+    """NEGATIVE_FINDING: the slice statement's ordering holds for one objective.
+
+    Implied volatility: 6.71e+07 -> 5.66e+02 -> 4.78e+02, strictly falling.
+    Price: 6.48e+07 -> 7.83e+02 -> 9.52e+02, falling and then rising.
+
+    Both are measured at the same parameters on the same quotes; the only
+    difference is the units the residual is stated in.
+    """
+    assert EvidenceClass.NEGATIVE_FINDING is EvidenceClass.NEGATIVE_FINDING
+    conditions = {}
+    for objective in ("implied_vol", "price"):
+        for maturities in (ONE_MATURITY, THREE_MATURITIES, SIX_MATURITIES):
+            quotes = synthetic_quotes(REFERENCE, maturities)
+            residuals, jacobian = residual_jacobian(
+                quotes, MARKET, TRUE_REFERENCE, objective=objective
+            )
+            _, condition, _, _ = parameter_covariance(jacobian, residuals)
+            conditions[(objective, len(maturities))] = condition
+
+    implied = [conditions[("implied_vol", n)] for n in (1, 3, 6)]
+    priced = [conditions[("price", n)] for n in (1, 3, 6)]
+    assert implied[0] > implied[1] > implied[2]
+    assert priced[0] > priced[1]
+    assert priced[2] > priced[1]
+    # The one-maturity problem is five decimal orders worse under either.
+    assert implied[0] / implied[2] > 1e04
+    assert priced[0] / priced[2] > 1e04
+
+
+def test_vega_weighting_a_price_objective_is_the_implied_vol_objective() -> None:
+    """Evidence class: EXACT_IDENTITY -- Gatheral's argument, as arithmetic.
+
+    `d sigma_i / dp = (d V_i / dp) / vega_i` is the chain rule, so a price
+    residual divided by vega has **the same Jacobian** as an implied-volatility
+    residual whenever the vega is evaluated at the same volatility. On
+    noise-free quotes the market volatility and the model volatility coincide,
+    so the two Jacobians agree to **2.2e-16** relative and the condition
+    numbers agree to fifteen digits. That is why vega weighting repairs the
+    price objective's conditioning: it is not a heuristic, it is the same
+    problem.
+
+    On *noisy* quotes the two stop being identical -- the weight is frozen at
+    the market volatility while the chain rule uses the model's -- and the
+    difference is second order in the residual. The objective comparison below
+    measures what that is worth.
+    """
+    assert EvidenceClass.EXACT_IDENTITY is EvidenceClass.EXACT_IDENTITY
+    quotes = synthetic_quotes(REFERENCE, SIX_MATURITIES, as_price=True)
+    weights = vega_weights(quotes, MARKET)
+    _, weighted = residual_jacobian(
+        quotes, MARKET, TRUE_REFERENCE, objective="price", weights=weights
+    )
+    _, volatility = residual_jacobian(
+        quotes, MARKET, TRUE_REFERENCE, objective="implied_vol"
+    )
+    scale = np.maximum(np.abs(volatility), 1e-300)
+    assert float(np.max(np.abs(weighted - volatility) / scale)) < 1e-14
+
+
+FLAT_DIRECTION_KAPPA_WEIGHT = 0.90
+"""At one maturity the right singular vector of the smallest singular value is
+`v0 +0.2755, kappa -0.9259, theta -0.0750, xi -0.2474, rho +0.0009`: it is a
+`kappa` direction with a `v0`/`xi` admixture, and `rho` is not in it at all.
+That is the flat direction Gatheral (2006) chapter 3 and Cui et al. (2017)
+section 3 both name, measured here rather than quoted."""
+
+
+def test_the_flat_direction_is_kappa_against_xi_and_v0() -> None:
+    """Evidence class: CLOSED_FORM.
+
+    The smallest singular value at one maturity is 2.95e-08 against a largest
+    of 1.98 -- seven and a half decimal orders. Its direction says which
+    combination of parameters the smile at that maturity cannot see.
+    """
+    assert EvidenceClass.CLOSED_FORM is EvidenceClass.CLOSED_FORM
+    quotes = synthetic_quotes(REFERENCE, ONE_MATURITY)
+    _, jacobian = residual_jacobian(
+        quotes, MARKET, TRUE_REFERENCE, objective="implied_vol"
+    )
+    _, _, right = np.linalg.svd(jacobian)
+    direction = right[-1]
+    weights = dict(zip(HESTON_PARAMETERS, np.abs(direction), strict=True))
+    assert weights["kappa"] > FLAT_DIRECTION_KAPPA_WEIGHT
+    assert weights["xi"] > weights["theta"]
+    assert weights["v0"] > weights["theta"]
+    assert weights["rho"] < 0.01
+    # theta is in the flat direction too, but an order of magnitude behind:
+    # at T = 1 the average variance is still far from its long-run level.
+    assert 0.01 < weights["theta"] < 0.2
+
+
+SINGLE_MATURITY_STARTS = (
+    (0.04, 0.5, 0.25, 0.30, -0.5),
+    (0.04, 1.0, 0.25, 0.45, -0.5),
+    (0.04, 2.0, 0.25, 0.70, -0.5),
+    (0.04, 8.0, 0.25, 1.40, -0.5),
+    (0.04, 12.0, 0.25, 1.80, -0.5),
+    (0.05, 6.0, 0.10, 1.20, -0.4),
+)
+
+SINGLE_MATURITY_SMILE_BUDGET = 1e-05
+SINGLE_MATURITY_KAPPA_SPREAD = 2.0
+"""Measured: those six starts fit the same one-maturity smile to a worst
+implied-volatility RMSE of **2.88e-06** -- three-hundredths of a basis point --
+while landing on `kappa` anywhere from **2.918 to 7.288** (a factor of 2.50,
+against a true 4.0) and `xi` from **0.806 to 1.573** (true 1.0). Two of them
+drive `v0` to the lower bound. Over the same six fits `rho` lands in
+[-0.5012, -0.4961] and `theta` in [0.2302, 0.2494]: the two parameters the
+smile's slope and level see are recovered, and the two the *term structure*
+sees are not."""
+
+
+@pytest.mark.slow
+def test_one_maturity_recovers_the_smile_but_not_kappa_and_xi() -> None:
+    """NEGATIVE_FINDING: the slice's central claim, measured.
+
+    A calibration that finds parameters is not evidence that the parameters
+    are identified. Six starts, one maturity, exact quotes: every fit
+    reproduces the smile to better than 1e-05 in implied volatility, the
+    objective values span one decimal order around 1e-11 (i.e. all of them are
+    at the numerical floor), and the fitted `kappa` spans a factor of 2.5.
+    Nothing in any single one of those six results says so; the condition
+    number does, before the fit is run.
+    """
+    assert EvidenceClass.NEGATIVE_FINDING is EvidenceClass.NEGATIVE_FINDING
+    quotes = synthetic_quotes(REFERENCE, ONE_MATURITY)
+    fits = [
+        calibrate_heston(quotes, MARKET, initial=start, objective="implied_vol")
+        for start in SINGLE_MATURITY_STARTS
+    ]
+    for fit in fits:
+        assert fit.rmse < SINGLE_MATURITY_SMILE_BUDGET
+
+    kappas = np.array([fit.parameter("kappa") for fit in fits])
+    xis = np.array([fit.parameter("xi") for fit in fits])
+    rhos = np.array([fit.parameter("rho") for fit in fits])
+    assert kappas.max() / kappas.min() > SINGLE_MATURITY_KAPPA_SPREAD
+    assert xis.max() / xis.min() > 1.5
+    # `rho` is fine: it is the smile's slope, and one smile determines it.
+    assert float(np.max(np.abs(rhos - TRUE_REFERENCE[4]))) < 5e-03
+
+
+def test_three_maturities_recover_the_same_six_starts_exactly() -> None:
+    """The other half of the finding: it is the data, not the optimiser.
+
+    The identical six starts, on three maturities instead of one, all land on
+    `kappa = 4.00000` and `xi = 1.00000` to better than 1e-05. Nothing about
+    the solver changed.
+    """
+    quotes = synthetic_quotes(REFERENCE, THREE_MATURITIES)
+    for start in SINGLE_MATURITY_STARTS:
+        fit = calibrate_heston(
+            quotes, MARKET, initial=start, objective="implied_vol"
+        )
+        assert fit.success
+        assert fit.parameter("kappa") == pytest.approx(4.0, abs=1e-05)
+        assert fit.parameter("xi") == pytest.approx(1.0, abs=1e-05)
+
+
+# --------------------------------------------------------------------------
+# (c) The objective choice.
+# --------------------------------------------------------------------------
+
+OBJECTIVE_SEEDS = 10
+OBJECTIVE_NOISE_BP = 20.0
+OBJECTIVE_COMPARISON = {
+    "price": (0.002029, 0.079817),
+    "vega_price": (0.001908, 0.081344),
+    "implied_vol": (0.001908, 0.081348),
+}
+"""`(implied-volatility RMSE, price RMSE)` of the fit, averaged over ten noise
+draws at 20 bp on the 5-by-6 grid.
+
+Each objective wins on its own metric and loses on the other, and it is a small
+win both ways: the price fit is 1.9% better in price RMSE and 6.3% worse in
+implied-volatility RMSE. That ordering is stable -- it holds on every seed set
+and grid tried (10, 12 and 16 draws; three maturities and six).
+
+What is **not** stable is the parameter accuracy, and that is the finding. The
+mean absolute parameter errors of the three fits are within 0.87x to 1.63x of
+each other with no consistent sign: over 10 draws the price objective is 1.50x
+worse on `kappa` and 1.13x *better* on `xi`; over 16 draws it is 1.22x worse on
+`kappa` and 1.07x better on `xi`; over 12 draws at three maturities it is
+better on `v0`, `kappa` and `theta` and 1.63x worse on `rho`. At 20 bp on this
+grid the objective choice is worth a measurable amount on the **fit** and
+nothing that survives a change of seed on the **parameters**.
+
+Vega-weighted prices and implied volatilities agree to 0.4% on every parameter
+and to four significant figures on both metrics, which is the previous test's
+exact identity surviving the noise: the two objectives differ only at second
+order in the residual."""
+
+
+def _fit_rmse(parameters, quotes) -> tuple[float, float]:
+    """`(implied-volatility RMSE, price RMSE)` of one parameter vector."""
+    model = HestonModel(*parameters)
+    prices = heston_quote_values(model, MARKET, quotes, settings=FELLER_SATISFIED_COS)
+    vol_squared = 0.0
+    price_squared = 0.0
+    for quote, price in zip(quotes, prices, strict=True):
+        option = EuropeanOption(kind="call", strike=quote.strike, expiry=quote.expiry)
+        model_vol = implied_volatility(float(price), option, MARKET)
+        target_price = float(
+            bs_price(
+                S=MARKET.spot,
+                K=quote.strike,
+                T=quote.expiry,
+                r=MARKET.rate(quote.expiry),
+                sigma=quote.value,
+                q=MARKET.dividend_yield(quote.expiry),
+                kind="call",
+            )
+        )
+        vol_squared += (model_vol - quote.value) ** 2
+        price_squared += (float(price) - target_price) ** 2
+    n = len(quotes)
+    return math.sqrt(vol_squared / n), math.sqrt(price_squared / n)
+
+
+def test_each_objective_wins_on_its_own_metric() -> None:
+    """STATISTICAL for the fit, NEGATIVE_FINDING for the parameters.
+
+    The same noisy surface fitted three ways -- to prices, to vega-weighted
+    prices, and to implied volatilities. There is no free lunch: the price
+    objective is the best fit *to prices* and the worst fit to implied
+    volatilities, and the other two are the mirror image. That much is stable.
+
+    The part that contradicts the written plan for this slice is what it is
+    worth. The plan said to "report which objective wins on which metric",
+    which presumes the metric is what decides. On these quotes it is not: the
+    implied-volatility fit is 6.3% better in implied-volatility RMSE and the
+    *parameters* are not separated at all, drifting between 0.87x and 1.63x of
+    each other with no consistent sign across seed sets. Gatheral (2006)
+    chapter 3's argument for the implied-volatility objective is about
+    conditioning, and conditioning is where it shows (the previous section):
+    the price objective's condition number gets *worse* with more maturities
+    and the vega-weighted one does not. At 20 bp the residual noise swamps the
+    difference in the answer.
+    """
+    assert EvidenceClass.STATISTICAL is EvidenceClass.STATISTICAL
+    totals = {name: np.zeros(2) for name in OBJECTIVE_COMPARISON}
+    parameter_errors = {name: np.zeros(5) for name in OBJECTIVE_COMPARISON}
+    for seed in range(OBJECTIVE_SEEDS):
+        volatility_quotes = _noisy_quotes(
+            REFERENCE, SIX_MATURITIES, noise_bp=OBJECTIVE_NOISE_BP, seed=3000 + seed
+        )
+        price_quotes = [
+            OptionQuote(
+                strike=q.strike,
+                expiry=q.expiry,
+                kind="call",
+                value=float(
+                    bs_price(
+                        S=MARKET.spot,
+                        K=q.strike,
+                        T=q.expiry,
+                        r=MARKET.rate(q.expiry),
+                        sigma=q.value,
+                        q=MARKET.dividend_yield(q.expiry),
+                        kind="call",
+                    )
+                ),
+                value_type="price",
+            )
+            for q in volatility_quotes
+        ]
+        fits = {
+            "price": calibrate_heston(
+                price_quotes,
+                MARKET,
+                initial=CLEAN_START_REFERENCE,
+                objective="price",
+            ),
+            "vega_price": calibrate_heston(
+                price_quotes,
+                MARKET,
+                initial=CLEAN_START_REFERENCE,
+                objective="price",
+                weights=vega_weights(price_quotes, MARKET),
+            ),
+            "implied_vol": calibrate_heston(
+                volatility_quotes,
+                MARKET,
+                initial=CLEAN_START_REFERENCE,
+                objective="implied_vol",
+            ),
+        }
+        for name, fit in fits.items():
+            totals[name] += np.array(_fit_rmse(fit.parameters, volatility_quotes))
+            parameter_errors[name] += np.abs(
+                np.array(fit.parameters) - np.array(TRUE_REFERENCE)
+            )
+
+    means = {name: totals[name] / OBJECTIVE_SEEDS for name in totals}
+    errors = {
+        name: parameter_errors[name] / OBJECTIVE_SEEDS for name in parameter_errors
+    }
+
+    # Each objective is best on the metric it optimises.
+    assert means["price"][1] < means["implied_vol"][1]
+    assert means["implied_vol"][0] < means["price"][0]
+    # Vega weighting tracks the implied-volatility objective, not the price one.
+    assert means["vega_price"][0] == pytest.approx(means["implied_vol"][0], rel=0.05)
+    # And the parameters, which is what a calibration is actually for: the
+    # price objective is NOT uniformly worse, which is the finding.
+    ratios = errors["price"] / errors["implied_vol"]
+    assert float(np.max(ratios)) > 1.2
+    assert float(np.min(ratios)) < 1.0
+    # Vega weighting and implied volatility give the same parameters.
+    vega_ratios = errors["vega_price"] / errors["implied_vol"]
+    assert np.all(np.abs(vega_ratios - 1.0) < 0.02)
+
+
+# --------------------------------------------------------------------------
+# (d) Local minima, initialisation and multi-start.
+# --------------------------------------------------------------------------
+
+START_GRID = (
+    (0.04, 4.0, 0.25, 1.0, -0.5),
+    (0.08, 2.0, 0.15, 0.6, -0.2),
+    (0.01, 0.5, 0.05, 0.3, -0.9),
+    (0.20, 10.0, 0.50, 2.0, -0.1),
+    (0.04, 1.0, 0.04, 1.5, 0.5),
+    (0.10, 0.3, 0.10, 1.8, 0.8),
+    (0.50, 0.1, 0.80, 3.0, -0.99),
+    (0.02, 15.0, 0.02, 0.05, -0.05),
+    (0.30, 6.0, 0.30, 0.2, 0.9),
+    (0.005, 0.01, 0.005, 0.01, 0.0),
+    (0.9, 19.0, 0.9, 4.5, 0.95),
+    (0.06, 3.0, 0.90, 2.5, -0.75),
+    (0.04, 0.2, 0.60, 4.0, -0.3),
+    (0.15, 8.0, 0.02, 1.2, 0.3),
+)
+"""Fourteen starts: the truth, a mild perturbation, four corners of the box,
+five with the **wrong sign** of `rho`, and six that are Feller-violating."""
+
+GLOBAL_BASIN_TOLERANCE = 1e-02
+"""Relative slack on the best objective for a start to count as having reached
+it. Not a formality: the eleven successful starts agree on the objective to
+1e-06 relative and on every parameter to 1e-04, while the three failures are
+**four to seven decimal orders** away. Any tolerance between 1e-06 and 1e+02
+gives the same count, so the number is not doing any work."""
+
+MEASURED_GLOBAL_COUNT = 11
+"""Out of 14. The three that fail are `(0.10, 0.3, 0.10, 1.8, +0.8)`,
+`(0.50, 0.1, 0.80, 3.0, -0.99)` and `(0.04, 0.2, 0.60, 4.0, -0.3)`, and their
+cause is measured rather than assumed: all three have a huge `theta` or `xi`,
+which is exactly where `COS_LOG_RANGE_CAP` is binding hard, and each terminates
+within 1e-03 of where it started. They are not local minima of the true
+objective -- they are places where the *pricer* is wrong by three decimal
+orders and the residual is therefore flat. Before the clip was added the same
+grid scored 5/14 and the failures returned their starting vector exactly."""
+
+
+@pytest.mark.slow
+def test_a_minority_of_starts_stall_and_the_cause_is_the_pricer() -> None:
+    """NEGATIVE_FINDING: 11/14, and the three failures have a diagnosis.
+
+    The honest form of "did the calibration work". Eleven of fourteen starts
+    reach the same optimum, to 1e-04 in every parameter. The other three stop
+    essentially where they started, with objectives four to seven decimal
+    orders worse, and all three sit where the COS range clip is binding.
+    """
+    assert EvidenceClass.NEGATIVE_FINDING is EvidenceClass.NEGATIVE_FINDING
+    quotes = _noisy_quotes(
+        REFERENCE, SIX_MATURITIES, noise_bp=OBJECTIVE_NOISE_BP, seed=3000
+    )
+    fits = [
+        calibrate_heston(quotes, MARKET, initial=start, objective="implied_vol")
+        for start in START_GRID
+    ]
+    best = min(fit.objective for fit in fits)
+    reached = [fit for fit in fits if fit.objective <= best * (1.0 + GLOBAL_BASIN_TOLERANCE)]
+    stalled = [
+        (start, fit)
+        for start, fit in zip(START_GRID, fits, strict=True)
+        if fit.objective > best * (1.0 + GLOBAL_BASIN_TOLERANCE)
+    ]
+    assert len(reached) == MEASURED_GLOBAL_COUNT
+    assert len(stalled) == len(START_GRID) - MEASURED_GLOBAL_COUNT
+
+    # The winners agree with each other, not merely with the tolerance.
+    winner = np.array(reached[0].parameters)
+    for fit in reached:
+        assert np.max(np.abs(np.array(fit.parameters) - winner)) < 1e-04
+    # The losers went nowhere.
+    for start, fit in stalled:
+        assert np.max(np.abs(np.array(fit.parameters) - np.array(start))) < 1e-02
+        assert fit.objective > 1e03 * best
+
+
+def test_multi_start_finds_the_best_objective_from_a_dead_start() -> None:
+    """`n_starts` is the cheapest answer to the failure rate above.
+
+    Started at `(0.50, 0.1, 0.80, 3.0, -0.99)`, which on its own is one of the
+    three stalls, six uniform draws inside the bounds recover the same optimum
+    the eleven good starts reach -- and so do 4, 8, 12 and 16 draws, to the
+    same six digits of the objective, so `MULTISTART_COUNT = 6` is chosen for
+    its run time and not to make the test pass. `result.starts` carries every
+    start so the success rate is inspectable rather than implied.
+    """
+    quotes = _noisy_quotes(
+        REFERENCE, SIX_MATURITIES, noise_bp=OBJECTIVE_NOISE_BP, seed=3000
+    )
+    dead = (0.50, 0.1, 0.80, 3.0, -0.99)
+    single = calibrate_heston(quotes, MARKET, initial=dead, objective="implied_vol")
+    multi = calibrate_heston(
+        quotes, MARKET, initial=dead, objective="implied_vol", n_starts=MULTISTART_COUNT
+    )
+    reference = calibrate_heston(
+        quotes, MARKET, initial=CLEAN_START_REFERENCE, objective="implied_vol"
+    )
+    assert len(multi.starts) == MULTISTART_COUNT
+    assert multi.starts[0].initial == dead
+    assert multi.objective < single.objective / 1e03
+    assert multi.objective == pytest.approx(reference.objective, rel=1e-03)
+    assert np.max(
+        np.abs(np.array(multi.parameters) - np.array(reference.parameters))
+    ) < 1e-03
+
+
+MULTISTART_COUNT = 6
+"""Draws used by the multi-start test. Measured: `n_starts` of 4, 6, 8, 12 and
+16 all reach `3.116984e-05` on the same data, at 1.5, 2.6, 3.4, 5.4 and 7.2
+seconds. Six is the cheapest that is not the minimum tried."""
+
+
+def test_the_multi_start_draw_is_reproducible() -> None:
+    """The same seed draws the same points, so a reported rate is repeatable."""
+    quotes = synthetic_quotes(REFERENCE, THREE_MATURITIES)
+    first = calibrate_heston(
+        quotes,
+        MARKET,
+        initial=CLEAN_START_REFERENCE,
+        objective="implied_vol",
+        n_starts=MULTISTART_COUNT,
+    )
+    second = calibrate_heston(
+        quotes,
+        MARKET,
+        initial=CLEAN_START_REFERENCE,
+        objective="implied_vol",
+        n_starts=MULTISTART_COUNT,
+    )
+    assert [s.initial for s in first.starts] == [s.initial for s in second.starts]
+    assert first.objective == second.objective
+
+
+def test_explicit_starts_take_precedence_over_the_draw() -> None:
+    quotes = synthetic_quotes(REFERENCE, THREE_MATURITIES)
+    fit = calibrate_heston(
+        quotes,
+        MARKET,
+        initial=CLEAN_START_REFERENCE,
+        objective="implied_vol",
+        starts=SINGLE_MATURITY_STARTS,
+        n_starts=99,
+    )
+    assert len(fit.starts) == len(SINGLE_MATURITY_STARTS)
+    assert fit.starts[0].initial == SINGLE_MATURITY_STARTS[0]
+    assert fit.objective == min(s.objective for s in fit.starts)
