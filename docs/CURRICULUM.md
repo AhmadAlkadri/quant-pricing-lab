@@ -311,16 +311,17 @@ contract) that none of the three earlier motivations would have produced.
   four-decimal rounding) by all four methods, and all four are checked against
   `AnalyticHestonEngine` at `T = 1` and `T = 10` on both sides of the Feller
   condition.
-- Heston Monte Carlo with the QE scheme and a bias study. **Its prerequisite
-  is delivered**: Slice 9 built the scalar-SDE layer, measured the Euler and
-  Milstein orders, and implemented the CIR variance process with both an exact
-  noncentral chi-square sampler and full-truncation Euler, measuring that
-  truncation's weak order in both Feller regimes. Two Slice 9 findings should
-  be read before that slice is written: full truncation does **not** stop the
-  scheme going negative (68-73% of terminal variances are negative in the
-  Feller-violated regime at h = 1/4 ... 1/32), and a coupled weak-error
-  estimator's noise floor is the scheme's own *strong* error, which is why the
-  bias study needs the exact sampler as a reference rather than a finer run.
+- ~~Heston Monte Carlo with the QE scheme and a bias study.~~ **Delivered in
+  Slice 16** (see below). Both Slice 9 warnings held: full truncation still
+  does not stop the scheme going negative (54-61% of variance draws on the
+  Feller-violating set) and the bias study needed a deterministic reference
+  rather than a finer run -- here the Lewis transform integral, since Slice 15
+  had established it as one of the two transform methods with no parameter to
+  get wrong. What Slice 9 did not predict is that the *statistical* floor would
+  be the binding constraint: the plain estimator's standard error at 1,000,000
+  paths is 2.8e-02 against a bias of 8.4e-03 at dt = 1/16, and the slice is
+  measurable only because `ln S_T` is exactly Gaussian conditional on the
+  variance driver (82x in variance).
 - ~~Implied-vol surface utilities.~~ **Delivered in Slice 15** as
   `qpl.engines.fourier.smile`: `implied_vol`, `implied_vol_surface`,
   `atm_implied_variance`, `smile_skew`, composing the transform price with the
@@ -334,7 +335,13 @@ contract) that none of the three earlier motivations would have produced.
   calibrator should call. COS and Carr-Madan each need a setting chosen per
   parameter set, and on a Feller-violating long-dated cell the COS *call* has
   no usable setting at all -- which a calibrator walking a parameter search
-  would hit silently.
+  would hit silently. Slice 16 adds a second: **do not calibrate to simulated
+  prices.** The simulated smile sits *below* the transform smile at every
+  strike (-5.5e-04 to -3.0e-04 in implied volatility at `dt = 1/32`, halving
+  with the step size), so a fit to Monte Carlo quotes inherits a signed
+  discretisation bias on top of its sampling error. Calibrate against Lewis or
+  Gil-Pelaez and keep the simulation for instruments the transform cannot
+  price.
 - Fusai & Roncoroni Ch. 15 Laplace approach to arithmetic Asians, reusing
   `qpl.transforms`.
 
@@ -1775,6 +1782,135 @@ and the moment explosion that bounds a damping parameter.
   256 evaluations of a closed form, and the expensive cells here are the
   adaptive-quadrature oracle and the subprocess launches.
 - Full derivation and tables: `docs/notes/heston_characteristic_function.md`.
+
+### Slice 16
+**Heston by simulation, and the first model in this package whose engines
+choose a sampler rather than only parameters.** `qpl.engines.mc.heston`
+discretises `(ln S, v)` by Andersen's quadratic-exponential scheme, with
+full-truncation Euler and an exact-variance hybrid as comparisons;
+`qpl.engines.mc.heston_pricers` registers four instrument types on
+`method="mc"`. The Black-Scholes Monte Carlo engines are **untouched** and
+pinned bit-for-bit.
+
+- `src/qpl/engines/mc/heston.py` (new): `simulate_heston`, `HestonPaths`,
+  `qe_variance_step`, `qe_branch_moments`, `heston_variance_moments`,
+  `log_spot_coefficients`, `ConditionalTerminalLaw`,
+  `conditional_vanilla_values`, `conditional_digital_values`,
+  `conditional_forward`, `HESTON_SCHEMES`, `QE_PSI_C`, `QE_GAMMA_1/2`.
+- `src/qpl/engines/mc/heston_pricers.py` (new): `price_european`,
+  `price_digital`, `price_asian`, `price_barrier`, `greeks_european`, the three
+  registered-and-raising Greeks callables, and the `PathSampler` seam
+  (`heston_path_sample`, `heston_time_grid`, `HestonPathSample`).
+- `MCConfig` gains `heston_scheme` and `heston_conditional`, both read by the
+  Heston engines alone. `n_steps` becomes the **time discretisation** under
+  Heston and `n_steps = 1` -- the Black-Scholes default -- is refused.
+- **The QE derivation is in the module docstring, from the CIR moments.** The
+  conditional mean and variance agree with
+  `qpl.engines.mc.sde.cir_moments` (a completely different route, through the
+  noncentral chi-square's degrees of freedom) to **1e-16 relative** on both
+  branches, which is the slice's EXACT_IDENTITY. The quadratic branch needs
+  `psi <= 2` and the exponential one `psi >= 1`, so any switching level in
+  `[1, 2]` works; `psi_c = 1.5` is Andersen's and the midpoint.
+- **QE matches two moments and nothing else, measured.** Skewness **1.103
+  against 1.421** and kurtosis **4.620 against 6.183** versus the exact
+  noncentral chi-square on the reference set (4% and 7% low on the
+  Feller-violating one, where the exponential branch's own tail is already
+  close). Reported, not repaired.
+- **The martingale correction is the slice's pinned NEGATIVE_FINDING.**
+  Without it, `E[e^{-(r-q)T} S_T] - S_0` is **+1.1206 on a spot of 100** at
+  `dt = 1/4` (64 stderrs), +0.2784 at 1/8, +0.0883 at 1/16 -- the forward
+  mispriced by 1.1% before anything else is priced. With it the defect is
+  inside its own sampling error at every step size, because each step's
+  conditional expectation is exactly `e^{(r-q)dt}` by construction.
+- **The bias ladder, reference set (Feller number 4.0), 1,000,000 antithetic
+  conditional paths against the Lewis integral 16.070155:** QE -1.017e-01 /
+  -2.557e-02 / -8.40e-03 / -4.92e-03 / +4.17e-03 at `dt = 1/4 ... 1/64`
+  (stderr 3.2e-03); full-truncation Euler +2.601e-01 / +3.693e-02 / -5.9e-03 /
+  -7.9e-03 / +5e-04; the exact-variance hybrid -1.465e-01 / -4.189e-02 /
+  -9.7e-03 / +4.2e-03 / +8.3e-03. **Only the two coarsest levels clear their
+  own noise** for any scheme, which the example prints per row and which is why
+  no five-level order is quoted without its log-space residual (0.36-0.58).
+  Coarse-pair decay ratios: QE **3.98** (implied order 1.99), Euler **7.04**
+  (2.82), hybrid **3.50** (1.81).
+- **Three slice-statement expectations contradicted.** (i) QE's bias is
+  **2.56x** smaller than Euler's at `dt = 1/4`, not orders of magnitude -- on a
+  set where Feller *holds*, and with opposite signs. (ii) The exact-variance
+  hybrid is **not** in between: at `dt = 1/4` it is worse than QE (-0.147
+  against -0.102), because QE's variance-law error partially cancels the
+  trapezoidal integrated-variance error and removing the first exposes the
+  second. (iii) At `rho = 0` the price does **not** agree within noise at
+  coarse `dt`: the bias is **-0.2439**, *larger* than the `rho = -0.5` one,
+  because the step degenerates to the bare trapezoidal rule for `int v ds`. The
+  correlation claim is carried instead by `corr(dX, dv)` measured directly
+  against `rho in {-0.9, -0.5, 0, +0.5}` with a 2e-05 sampling stderr, whose
+  residual falls at measured order ~1 in `dt`.
+- **The Feller-violating set is where the two schemes actually separate.**
+  `v0 = 0.04, kappa = 0.5, theta = 0.04, xi = 1, rho = -0.9`, number 0.08,
+  reference 3.591838: QE -2.14e-02 at `dt = 1/4` against Euler **+3.4076**, i.e.
+  **95% of the price**, ratio **158.9**. Euler's is the one fully resolved
+  ladder in the slice -- five levels, order **+0.974**, constant **15.0**,
+  log-residual 0.106 -- and 54-61% of its variance draws are negative. QE's
+  variance is non-negative *by construction* (measured frequency exactly 0) and
+  its own ladder resolves three levels at order **+0.893** with residual 0.015.
+- **Conditioning on the variance driver is what makes the slice measurable.**
+  `ln S_T` is exactly Gaussian given the variance path in all three schemes, so
+  a terminal payoff has a closed-form conditional expectation: measured
+  variance factors **1.49** (antithetic), **10.27** (conditional), **82.07**
+  (both). And the terminal-spot control variate is then nearly worthless
+  (correlation 0.797 plain, **0.486** conditional): the two reductions are
+  substitutes, because conditioning already integrated out what the control was
+  correlated with. Its mean is also the *model's* forward and not the
+  *scheme's*, so it removes part of the bias being measured (-5.2e-03 on Euler
+  at `dt = 1/4`) -- every bias number here is measured without it.
+- **The smile from simulated prices**, with the standard error propagated
+  through vega: five strikes agree with the transform smile to -5.50e-04 ...
+  -2.97e-04 at `dt = 1/32`, each inside 1.9 propagated standard errors, both
+  smiles strictly decreasing with slopes matching to 2%. **Every difference is
+  negative** and halves at `dt = 1/64`, so the agreement is statistical at
+  these settings and is a discretisation bias a calibrator would inherit.
+- **Both path-dependent engines lose what they relied on.** The Asian's
+  Kemna-Vorst control has no Heston analogue (the geometric average is
+  lognormal only conditional on the variance path), so the fallback is the
+  terminal spot: correlation **0.63**, factor **1.7**, against 0.9996 and 1277
+  under Black-Scholes. The Brownian-bridge barrier estimator is **no longer
+  unbiased**: the bridge assumes constant volatility over the step and is given
+  the trapezoidal integrated variance, and at `H = 95` the price runs 4.63838
+  -> 4.31367 over `n_steps = 25 ... 800` -- a residual of **+0.325**, 7.5% of
+  the price and thirteen standard errors, falling at roughly first order.
+  Pinned; the caveat travels on every result that uses the route.
+- **Greeks**: all five by common-random-numbers bump with vega in
+  `d/d sqrt(v0)`, measured against the COS closed forms (delta 0.5997/0.5995,
+  gamma 9.288e-03 both, vega 4.079/4.072, theta -9.409/-9.433, rho
+  43.90/43.88); plus a pathwise **delta**, exact because `S_T` is homogeneous
+  of degree one in `S_0`. Likelihood ratio is **refused**: the model's
+  transition density is what Broadie-Kaya reach only by numerical inversion,
+  and the QE step's own score differentiates the discretisation.
+- **Oracle**: QuantLib's `MCEuropeanHestonEngine` on a `HestonProcess` carrying
+  `QuadraticExponentialMartingale`, eight cells, worst `|z|` against the
+  combined standard error **2.04**; and the sharper check that both
+  implementations miss the transform price in the **same direction** at the
+  same step size. At matched sample counts QuantLib's standard error is 5.1e-02
+  where this package's is 7.0e-03 -- and this package's *plain* estimator is
+  also 5.1e-02, so the whole factor is one config flag.
+- **Cases**: `qpl.cases.heston.HESTON_MC_CASES`, 10 rows, the first
+  STATISTICAL / CONVERGENCE_ORDER family in that module; each carries its path
+  count, seed and estimator.
+- `examples/heston_mc_qe.py` (`--case bias | feller`, `--paths N`), two
+  invocations curated in the example smoke list.
+- **Refused / out of scope**: calibration, the two-dimensional Heston PDE,
+  Bates and any jump component, LSM under Heston, Broadie-Kaya exact
+  simulation, and multi-level Monte Carlo.
+- Suite: **2434 tests, 217.4 s** (from 2320 / 188.8 s), with the `[oracle]`
+  extra installed. 114 new tests for **28.6 s**, of which about a quarter is the
+  example harness (two curated invocations, run twice each, 7.6 s): the four
+  core test files run in **7.9 s** together (2.5 s scheme, 1.4 s registry and
+  bias, 1.0 s smile, 3.0 s path-dependent), the Heston cases file grows by
+  1.4 s and the QuantLib MC oracle is 2.6 s. Simulation is the expensive
+  method here in a way a transform never was -- every number in the slice is a
+  path count times a step count -- and the path counts in the suite are chosen
+  so that each claim's signal clears its own noise and no further: the bias
+  tables that need 1,000,000 paths live in the example, behind `--paths`.
+- Full derivation and tables: `docs/notes/heston_monte_carlo_qe.md`.
 
 ## Reconciled old roadmap
 

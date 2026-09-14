@@ -21,6 +21,9 @@ fast, and designed to run without external data sources.
 - `barrier_pde_grid.py` (also `--case mesh`, `--case discrete`)
 - `fourier_methods_bs.py` (also `--case cos`, `--case alpha`, `--case quadrature`)
 - `heston_smile.py` (also `--case cos`, `--case trap`, `--case alpha`)
+- `heston_mc_qe.py` (also `--case feller`; `--paths N` sets the path count,
+  and the tables in `docs/notes/heston_monte_carlo_qe.md` were produced at
+  `--paths 1000000`)
 - `quadrature_demo.py`
 - `laplace_inversion_demo.py`
 - `copula_gaussian_demo.py`

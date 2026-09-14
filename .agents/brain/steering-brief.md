@@ -1,5 +1,89 @@
 # Steering Brief
 
+What changed in Slice 16 (files + bullets)
+
+**Heston by simulation.** The first model in this package whose engines choose a
+*sampler* and not only parameters: `qpl.engines.mc.heston` discretises
+`(ln S, v)` by Andersen's quadratic-exponential scheme, with full-truncation
+Euler and an exact-variance hybrid as comparisons. The Black-Scholes Monte
+Carlo engines are untouched and pinned bit-for-bit. Still on `dev/curriculum`;
+not pushed.
+
+- `src/qpl/engines/mc/heston.py` (new): `simulate_heston`, `HestonPaths`,
+  `qe_variance_step`, `qe_branch_moments`, `heston_variance_moments`,
+  `log_spot_coefficients`, `ConditionalTerminalLaw`,
+  `conditional_vanilla_values`, `conditional_digital_values`,
+  `conditional_forward`, `HESTON_SCHEMES`, `QE_PSI_C`, `QE_GAMMA_1/2`.
+- `src/qpl/engines/mc/heston_pricers.py` (new): the four pricers, the European
+  Greeks, three registered-and-raising Greeks callables, and the `PathSampler`
+  seam (`heston_path_sample`, `heston_time_grid`, `HestonPathSample`).
+- `src/qpl/engines/mc/pricers.py`: `MCConfig` gains `heston_scheme` and
+  `heston_conditional`, read by the Heston engines alone.
+- `src/qpl/engines/mc/barrier.py`: `bridge_survival` split into a thin wrapper
+  over `bridge_survival_from_step_variance`, so the bridge can take a per-path
+  integrated variance. The Black-Scholes call passes the expression it used to
+  compute inline, so its output is unchanged bit for bit.
+- `src/qpl/pricing.py`: `(EuropeanOption | DigitalOption | AsianOption |
+  BarrierOption, HestonModel, 'mc')` registered; the Slice 15 MC refusal
+  removed.
+- `src/qpl/cases/heston.py`: `HESTON_MC_CASES` (10 rows).
+- `tests/test_mc_heston.py`, `tests/test_mc_heston_pricing.py`,
+  `tests/test_mc_heston_smile.py`, `tests/test_mc_heston_path_dependent.py`,
+  `tests/cases/test_heston_cases.py`,
+  `tests/oracle/test_heston_mc_vs_quantlib.py`,
+  `examples/heston_mc_qe.py`, `docs/notes/heston_monte_carlo_qe.md`.
+
+**The QE derivation is worked from the CIR conditional moments**, and the two
+moments agree with `qpl.engines.mc.sde.cir_moments` -- obtained through the
+noncentral chi-square's degrees of freedom, a completely different route -- to
+**1e-16 relative** on both branches. The quadratic branch exists for
+`psi <= 2`, the exponential one for `psi >= 1`, so the switching level is free
+in `[1, 2]`; `psi_c = 1.5` is Andersen's and the midpoint. QE matches two
+moments and nothing else: measured skewness **1.103 against 1.421** and
+kurtosis **4.620 against 6.183** on the reference set.
+
+**The martingale correction is the pinned NEGATIVE_FINDING.** Without it
+`E[e^{-(r-q)T} S_T] - S_0` is **+1.12 on a spot of 100** at `dt = 1/4` (64
+stderrs) -- the forward mispriced by 1.1% before anything else is priced -- and
+the defect falls at roughly order 2, so it is invisible on a fine grid.
+
+**Three slice-statement expectations were contradicted and encoded as such.**
+(i) QE's bias is only **2.56x** smaller than Euler's at `dt = 1/4` on the
+Feller-satisfying set, with the opposite sign; the dramatic separation is a
+Feller-regime effect (ratio **158.9** on the violating set, where Euler is 95%
+wrong on a price of 3.59 and 54-61% of its variance draws are negative).
+(ii) The exact-variance hybrid is **not** between the two -- at `dt = 1/4` it is
+worse than QE, because QE's variance-law error partially cancels the
+trapezoidal integrated-variance error. (iii) At `rho = 0` the price does **not**
+agree within noise at coarse `dt`: the bias is **-0.2439**, larger than at
+`rho = -0.5`. The correlation claim is carried by `corr(dX, dv)` measured
+against `rho` directly (2e-05 stderr, residual falling at order ~1 in `dt`).
+
+**The statistical floor was the binding constraint, and conditioning is what
+lifted it.** `ln S_T` is exactly Gaussian conditional on the variance driver in
+all three schemes, so a terminal payoff has a closed-form conditional
+expectation: measured variance factors 1.49 (antithetic), 10.27 (conditional),
+**82.07** (both). Even so, only the two coarsest levels of the reference
+ladder clear their own noise at 1,000,000 paths, which the example prints per
+row rather than fitting a five-point slope through three noise-dominated
+points. The terminal-spot control variate is then nearly worthless (correlation
+0.797 plain, 0.486 conditional): the two reductions are **substitutes**. It is
+also excluded from every bias number, because its mean is the model's forward
+and not the scheme's.
+
+**Both path-dependent engines lost what they relied on.** The Asian has no
+Kemna-Vorst control (correlation 0.63 and factor 1.7, against 0.9996 and 1277),
+and the Brownian-bridge barrier estimator is **no longer unbiased** -- residual
+**+0.325 at `n_steps = 25`**, 7.5% of the price, falling at roughly first
+order, because the bridge assumes a constant volatility over the step.
+
+**Open instruction for the calibration slice.** Calibrating to simulated
+prices inherits a discretisation bias with a *sign*: the simulated smile sits
+below the transform smile at every strike (-5.5e-04 to -3.0e-04 at
+`dt = 1/32`, halving with the step). Calibrate against the transform (Lewis or
+Gil-Pelaez, the two with no parameter to get wrong) and use the simulation for
+instruments the transform cannot price.
+
 What changed in Slice 15 (files + bullets)
 
 **The second model, and the test of whether Slice 14's interface was real.**

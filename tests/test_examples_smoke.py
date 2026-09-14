@@ -602,6 +602,59 @@ _SMOKE_CASES = [
         ],
     ),
     (
+        # Slice 16: Heston by simulation. The curated keys are the ones a run
+        # that had lost the point would not print. `resolved=1` next to a `z`
+        # column is the honest half of the bias table -- only the coarse levels
+        # clear their own noise at the default path count, and the example says
+        # so per row rather than fitting a slope through five points of which
+        # three are noise. `qe_bias_far_smaller_than_euler_on_reference_set=
+        # False` is the slice statement's expectation being contradicted in one
+        # line, and `vr_control_and_conditioning_are_substitutes=True` is the
+        # variance-reduction finding: the control variate is worth 0.80 in
+        # correlation on the plain estimator and 0.49 on the conditional one,
+        # because conditioning already integrated out what it was correlated
+        # with. Digits are kept to truncation level throughout.
+        "heston_mc_qe.py",
+        [],
+        [
+            "example=heston_mc_qe",
+            "case=bias",
+            "feller_number=4.00 feller_satisfied=True",
+            "estimator=antithetic+conditional",
+            "reference_transform_price=16.07015",
+            "resolved=1",
+            "bias_ratio_1_4_over_1_8=",
+            "reference_euler_over_qe_at_dt_quarter=",
+            "qe_bias_far_smaller_than_euler_on_reference_set=False",
+            "uncorrected=+1.0",
+            "martingale_correction_removes_the_defect=True",
+            "vr_factor conditional=",
+            "vr_control_rho plain=0.7",
+            "vr_control_and_conditioning_are_substitutes=True",
+        ],
+    ),
+    (
+        # The Feller-violating leg, which is where the two schemes actually
+        # separate. `feller_violated_euler_relative_error_at_dt_quarter=0.9`
+        # is the headline -- full-truncation Euler is 95% wrong on a price of
+        # 3.59 -- and `resolved=5 order=+0.9` next to it is the one fully
+        # resolved convergence ladder in this example, because an error that
+        # large clears its noise at every level. `qe_negative=0.00000` beside
+        # `euler_negative=0.54` is the mechanism in one line.
+        "heston_mc_qe.py",
+        ["--case", "feller"],
+        [
+            "case=feller",
+            "feller_number=0.08 feller_satisfied=False",
+            "reference_used=lewis",
+            "feller_violated_euler_over_qe_at_dt_quarter=",
+            "feller_violated_euler_relative_error_at_dt_quarter=0.9",
+            "resolved=5 order=+0.9",
+            "qe_negative=0.00000 euler_negative=0.54",
+            "qe_variance_non_negative_by_construction=True",
+        ],
+    ),
+    (
         # The Chapter 6 rules on a pricing integral. `simpson_identity` printing
         # two equal columns is the mechanism, and
         # `simpson_over_trapezoid_at_n128=7.7e+03` is the consequence: the
