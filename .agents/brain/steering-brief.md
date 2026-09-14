@@ -1,5 +1,75 @@
 # Steering Brief
 
+What changed in Slice 17 (files + bullets)
+
+**Calibration, and the difference between a fit and an answer.** The first
+inverse problem in this package, and the first case family keyed by one.
+`qpl.calibration.calibrate_heston` fits the five Heston parameters by
+`scipy.optimize.least_squares` (bounded `trf` or unconstrained `lm`) against a
+COS pricer vectorised over the strikes of one maturity, differentiated by an
+analytic gradient of the characteristic function, and returns the Jacobian,
+its singular values, the Gauss-Newton covariance and the condition number
+alongside the model -- because those are what say whether the fitted `kappa`
+means anything. Phase 4 is complete. Still on `dev/curriculum`; not pushed.
+
+- `src/qpl/calibration/__init__.py`, `src/qpl/calibration/heston.py` (new):
+  `OptionQuote`, `CalibrationResult`, `StartSummary`, `CosSettings`,
+  `calibrate_heston`, `heston_charfn_gradient`, `cos_call_prices`,
+  `heston_quote_values`, `residual_jacobian`, `parameter_covariance`,
+  `vega_weights`, `default_cos_settings`, `DEFAULT_BOUNDS`,
+  `COS_PUT_LEG_THRESHOLD`, `DOMAIN_PENALTY`, `VEGA_FLOOR`, `RANK_TOLERANCE`,
+  `MULTISTART_SEED`, `IMPLIED_VOL_BRACKET`.
+- `src/qpl/cases/heston_calibration.py` (new): the eighth id space, 49 rows.
+- `tests/test_heston_calibration.py` (82), `tests/cases/test_heston_calibration_cases.py` (57),
+  `tests/oracle/test_heston_calibration_vs_quantlib.py` (10),
+  `examples/heston_calibration.py`,
+  `docs/notes/heston_calibration_identifiability.md`.
+- `pyproject.toml`, `AGENTS.md`, `.agents/brain/brain.md`: a `slow` marker and
+  a documented quick loop, `pytest -q -m "not slow"` at **139.2 s** against the
+  full suite's **374.6 s**. `pytest -q` is unchanged: the CI contract is the
+  same and nothing is deselected there.
+
+**The headline is a condition number, not a fit.** At one maturity the residual
+Jacobian conditions at **6.7e+07** with a flat direction of `kappa -0.926`,
+`v0 +0.276`, `xi -0.247`. Six starts fit that smile to a worst
+implied-volatility RMSE of **2.88e-06** and land on `kappa` from **2.918 to
+7.288** against a true 4.0. The same six on three maturities all return
+`kappa = 4.00000`. Nothing in any single one of those six results says which
+case you are in; the Jacobian does, before the fit.
+
+**The pricer was the biggest source of wrong answers, and it took the oracle to
+see it.** Slice 15 measured the COS call/put asymmetry twice and reported
+opposite answers. Both are right in different regimes -- a call's payoff
+coefficient carries `e^b` and a put's carries `K / S_0` -- and they cross over
+at a range endpoint of about **7.5**. The first commit of this slice picked one
+half, added a range clip to stop the other half overflowing, and measured a
+start-grid failure rate of 11/14. The clip was the wrong fix: choosing the leg
+by `b` removed the overflow structurally (the put leg cannot overflow), let the
+clip be deleted, cut the worst pricer error over eight cells from 6.45e+03 to
+**1.85e-07**, and took the failure rate to **14/14**. An optimisation failure
+rate measured on a broken pricer measures the pricer.
+
+**Five slice-statement expectations contradicted and encoded.** (i) The put is
+not the reliable leg; neither is. (ii) The condition number falls with more
+maturities under the implied-volatility objective and **rises** under the price
+objective (6.48e+07 -> 782 -> 952), because a vega-weighted price Jacobian *is*
+the implied-volatility Jacobian to 2.2e-16. (iii) Each objective wins on its own
+metric by a few percent, stably, and the *parameter* accuracy does not separate
+them at all across seed blocks. (iv) Multi-start ties the best single start
+rather than rescuing anything, once the pricer is right. (v) The five-decimal
+gap between the two objectives' clean recovery is the implied-volatility round
+trip in the synthetic quotes, not the objective -- fed prices directly, the
+price objective recovers `kappa` to 4.45e-12.
+
+**Oracle.** QuantLib recovers both study sets (3.7e-07, 5.9e-07). On the price
+objective the two fitted vectors differ by **1.30e-10** while both sit
+-5.41e-07 from the truth with the same sign, which is what found (v). Both fail
+to identify `kappa` at one maturity and fail *differently*. On twenty starts
+this package reaches the optimum from twenty and QuantLib from eleven, pinned
+as a statement about the measurement rather than a ranking.
+
+---
+
 What changed in Slice 16 (files + bullets)
 
 **Heston by simulation.** The first model in this package whose engines choose a

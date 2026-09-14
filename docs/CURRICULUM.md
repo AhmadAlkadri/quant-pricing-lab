@@ -329,21 +329,75 @@ contract) that none of the three earlier motivations would have produced.
   shape claims (`rho` sets the sign of the skew, the smile flattens with
   maturity, at-the-forward implied variance runs from `v0` to `theta`) are
   measured, not asserted.
-- Synthetic-recovery calibration with identifiability diagnostics. Slice 15
-  left one concrete instruction for it: **Lewis and Gil-Pelaez are the only two
-  methods here with no parameter to get wrong**, so they are the ones a
-  calibrator should call. COS and Carr-Madan each need a setting chosen per
-  parameter set, and on a Feller-violating long-dated cell the COS *call* has
-  no usable setting at all -- which a calibrator walking a parameter search
-  would hit silently. Slice 16 adds a second: **do not calibrate to simulated
-  prices.** The simulated smile sits *below* the transform smile at every
-  strike (-5.5e-04 to -3.0e-04 in implied volatility at `dt = 1/32`, halving
-  with the step size), so a fit to Monte Carlo quotes inherits a signed
-  discretisation bias on top of its sampling error. Calibrate against Lewis or
-  Gil-Pelaez and keep the simulation for instruments the transform cannot
-  price.
+- ~~Synthetic-recovery calibration with identifiability diagnostics.~~
+  **Delivered in Slice 17** (see below). Both prior instructions were followed
+  and both turned out to be half right. Slice 15 said Lewis and Gil-Pelaez are
+  the only two methods with no parameter to get wrong, so a calibrator should
+  call them -- but they are **70x** slower than COS on the same quotes, and a
+  calibration makes hundreds of calls, so Slice 17 used COS and paid the
+  instruction's price in full: the COS *payoff leg* had to be chosen by the
+  truncation range's upper end (`COS_PUT_LEG_THRESHOLD`), because the call
+  overflows to `-3.2e+43` in a corner of the parameter box and the put
+  truncates the fat left tail at short maturity. Slice 15 had also measured
+  the call/put asymmetry twice and reported opposite answers; both were right,
+  in different regimes, and the threshold is where they cross. Slice 16's
+  instruction -- do not calibrate to simulated prices -- was simply obeyed:
+  every quote in Slice 17 is a transform price.
 - Fusai & Roncoroni Ch. 15 Laplace approach to arithmetic Asians, reusing
   `qpl.transforms`.
+
+**Phase 4 is complete.** Five items, five slices (14, 15, 16, 17 and the
+implied-vol utilities inside 15), with the Laplace-Asian item deliberately
+left as a Part I loose end rather than a transform one -- it is the Fusai
+chapter 15 case for `qpl.transforms`, which is still the one Part I building
+block that has never priced anything, and it belongs to whichever slice picks
+that up.
+
+### Phase 5 gate
+
+Phase 5 is **multi-asset, rates and performance**, and none of it starts until
+a *case* forces it. The gate is the same one ADR-0004 sets for everything
+else: a capability enters the curriculum when there is an instrument or a
+measurement that cannot be made without it, not when it would round out a
+feature list. Four phases of evidence say this is the right rule -- the
+digital drove `payoff_projection`, the barrier drove the non-uniform mesh, the
+Asian drove the control variate, Heston drove the transform interface -- and
+in every case the method came out better for having a case to answer to.
+
+Candidate forcing cases, in the order their evidence is nearest:
+
+- **Multi-asset.** A two-asset basket or spread option under correlated
+  Brownian motion is the first instrument here whose price is not a
+  one-dimensional integral. It forces: a `Market` that carries more than one
+  spot (which ADR-0005 explicitly flags as an interface change every engine
+  must absorb, not a new dispatch axis), a correlated sampler, and a
+  two-dimensional transform or PDE. `qpl.dependence` already ships the
+  Gaussian copula and its Kendall/Spearman identities from Part I and has
+  never priced anything either, so the basket is that module's case as well as
+  the multi-asset one. The cheapest honest first step is an exchange option,
+  because Margrabe gives it a closed form and therefore an error to measure.
+- **Rates.** Slice 9 already ships the CIR *process* with its exact
+  noncentral-chi-square transition and its moments; what a rates slice adds is
+  the **term structure** built on it, not the simulation. The forcing case is
+  a zero-coupon bond option or a caplet under Vasicek or Hull-White, where the
+  affine bond price is closed form and the option has a Jamshidian
+  decomposition -- so, like the exchange option, it arrives with its own
+  reference. Until then `Market`'s flat curves are honest about what they are.
+- **Performance.** Explicitly gated on reference paths existing to benchmark
+  against, and they now do: every engine in Phases 1-4 has a measured
+  reference. The forcing case is a calibration or a convergence study whose
+  run time is the binding constraint on the *evidence*, and Slice 17 produced
+  the first real candidate -- its single-maturity start sweeps take 16.5 s
+  because each fit crawls along a flat valley for hundreds of residual
+  evaluations, and the suite grew from 214 s to 375 s largely on that. A
+  benchmark harness with reproducibility metadata (instrument, model, engine,
+  grid/paths, tolerance, hardware, seed, wall time, error against reference)
+  would turn that from a nuisance into a measurement.
+- **The two outstanding Part I loose ends**, both cheap and both already
+  cited: the Derman-Kani-Ergener-Bardhan interpolation for the lattice
+  barrier (cited twice, still not implemented, and the reason QuantLib's
+  binomial barrier engine has no sawtooth where this one does), and the
+  Fusai chapter 15 Laplace Asian for `qpl.transforms`.
 
 ### Phase 5+ — only when forced by a case
 - Multi-asset (correlated Brownian motion, baskets via existing copulas).
@@ -1911,6 +1965,115 @@ pinned bit-for-bit.
   so that each claim's signal clears its own noise and no further: the bias
   tables that need 1,000,000 paths live in the example, behind `--paths`.
 - Full derivation and tables: `docs/notes/heston_monte_carlo_qe.md`.
+
+### Slice 17
+**Calibration, and the difference between a fit and an answer.** Phase 4's last
+item and the phase's completion. `qpl.calibration.calibrate_heston(quotes,
+market, initial=..., objective=..., weights=..., bounds=..., method=...)` fits
+the five Heston parameters by bounded trust-region or unconstrained
+Levenberg-Marquardt least squares and returns a `CalibrationResult` carrying
+the Jacobian at the optimum, its singular values, the Gauss-Newton covariance,
+the condition number and the Feller flag -- because those, and not the fitted
+`kappa`, are what say whether the fitted `kappa` means anything.
+
+- `src/qpl/calibration/heston.py` (new): `OptionQuote`, `CalibrationResult`,
+  `StartSummary`, `CosSettings`, `calibrate_heston`, `heston_charfn_gradient`,
+  `cos_call_prices`, `heston_quote_values`, `residual_jacobian`,
+  `parameter_covariance`, `vega_weights`, `default_cos_settings`,
+  `DEFAULT_BOUNDS`, `COS_PUT_LEG_THRESHOLD`, `DOMAIN_PENALTY`, `VEGA_FLOOR`,
+  `RANK_TOLERANCE`, `MULTISTART_SEED`.
+- `src/qpl/cases/heston_calibration.py` (new): the eighth id space, 49 rows in
+  six families, the first keyed by an **inverse** problem.
+- `tests/test_heston_calibration.py`, `tests/cases/test_heston_calibration_cases.py`,
+  `tests/oracle/test_heston_calibration_vs_quantlib.py`,
+  `examples/heston_calibration.py`,
+  `docs/notes/heston_calibration_identifiability.md`.
+- Also `chore(test)`: a `slow` marker registered in `pyproject.toml` and applied
+  by a measured rule, so `pytest -q -m "not slow"` is a 139 s inner loop
+  against the full suite's 375 s. `pytest -q` still runs everything; the CI
+  contract is unchanged.
+
+**The analytic gradient.** `heston_charfn_gradient` differentiates the affine
+solution rather than the price (Cui, del Bano Rollin and Germano (2017) EJOR
+263(2) section 3 for the strategy; the five derivatives are re-derived here for
+this repository's arrangement, which has no `g` in theirs). `phi` reproduces
+`qpl.models.heston` to 2.5e-16, the derivatives match central differences to
+1.3e-09 -- 4.6e-08 relative, the price Jacobian matches central differences of
+the **full** pricer to 6.8e-07, and it is **9.4x** faster than a five-parameter
+central-difference Jacobian and **3.4x** end to end. A 5 x 6 calibration takes
+41 ms.
+
+**The headline.** At one maturity the residual Jacobian's condition number is
+**6.7e+07** and its flat direction is `kappa -0.926` with `v0 +0.276` and
+`xi -0.247`. Six starts fit that one smile to a worst implied-volatility RMSE
+of **2.88e-06** -- three hundredths of a basis point -- and land on `kappa`
+from **2.918 to 7.288** (true 4.0) and `xi` from 0.806 to 1.573 (true 1.0),
+with two of them driving `v0` to its lower bound; `rho` and `theta` are
+recovered from every start. The same six starts on three maturities all return
+`kappa = 4.00000`. The condition number says this before any fit is run; no
+convergence criterion says it afterwards.
+
+**Five slice-statement expectations contradicted and encoded.**
+(i) The plan named the COS *put* as the reliable leg. Neither leg is: a call's
+payoff coefficient carries `e^b` and a put's carries `K / S_0`, they cross over
+at a range endpoint of about 7.5, and the first commit of this slice picked the
+wrong half before the oracle showed the other. Choosing by `b` cut the worst
+pricer error over eight cells from 6.45e+03 (call only) and 3.61e-07 (put only)
+to **1.85e-07** and made the residual function total -- before it, a search in
+a corner of `DEFAULT_BOUNDS` priced a 100-strike call at **-3.2e+43**.
+(ii) The plan asked to assert that the condition number falls with more
+maturities. It does under the implied-volatility objective (6.71e+07 -> 566 ->
+478) and does **not** under the price objective (6.48e+07 -> 782 -> 952), for a
+reason that is an exact identity: a vega-weighted price Jacobian *is* the
+implied-volatility Jacobian, to 2.2e-16.
+(iii) The plan asked which objective wins on which metric, presuming the metric
+decides. Each wins on its own metric by a few percent, stably; the *parameter*
+accuracy does not separate them at all, with the price/implied-vol error ratio
+running 1.48/1.76/1.17/1.18/1.27 on one block of eight seeds and
+0.92/0.84/0.79/0.71/1.18 on the next.
+(iv) The plan expected a measured start-grid failure rate that multi-start
+rescues. The rate was **11/14** and it was the *pricer*: all three failures sat
+where the fixed call leg was wrong by three decimal orders and the residual was
+flat. After the leg rule it is **14/14**, and multi-start ties the best single
+start instead of rescuing anything -- which is the honest result and is
+reported as one.
+(v) Clean recovery was five decimal orders better under the implied-volatility
+objective (7.0e-12) than under the price objective (5.4e-07), which looked like
+an objective effect. It is not: the synthetic quotes are implied volatilities
+from a Brent inversion at `xtol = 1e-07`, so converting them back to prices
+displaces the price objective's minimum. Fed prices directly the same objective
+recovers `kappa` to 4.45e-12.
+
+**The honest identifiability statement** is statistical, not algebraic. Over 20
+noise draws the empirical spread of each fitted parameter matches the
+Jacobian's own standard error to **0.99-1.23** at 5 bp and 20 bp, consistently
+on the small side (Gauss-Newton drops the second-order term). At 20 bp the fit
+pins `theta` to 0.65% of its value and `kappa` only to **4.7%**, `xi` to 8.6%
+and `v0` to 9.5%.
+
+**Oracle.** QuantLib's `HestonModel` + `HestonModelHelper` +
+`LevenbergMarquardt` recovers both study sets to 3.7e-07 and 5.9e-07. The
+sharpest result is that on the price objective the two fitted vectors differ by
+**1.30e-10** while both sit -5.41e-07 from the truth with the same sign, which
+is what identified (v) above. Both libraries also fail to identify `kappa` at
+one maturity and fail *differently* ([2.918, 7.288] against [3.930, 10.956]),
+and on twenty starts this package reaches the optimum from twenty and QuantLib
+from **eleven** -- pinned as a finding about the measurement, not as a ranking,
+because three things differ between the two solvers at once.
+
+- **Refused / out of scope**: local volatility and Dupire, SABR, Bates, market
+  data of any kind (the `[data]` extra stays frozen), regularisation or a
+  Tikhonov prior (it would hide the flat direction this slice exists to
+  measure), a global optimiser, and calibration to simulated prices (Slice 16's
+  instruction, obeyed).
+- Suite: **2585 tests, 374.6 s** (from 2434 / 214.0 s), with the `[oracle]`
+  extra installed; quick loop `pytest -q -m "not slow"` **139.2 s**. 151 new
+  tests. The cost is concentrated and it is the finding: the single-maturity
+  start sweeps take 16.5 s in-repo and 18.6 s against QuantLib because each fit
+  crawls along a flat valley for hundreds of residual evaluations, which is
+  exactly what "not identified" looks like from inside a solver.
+- Full derivation and tables:
+  `docs/notes/heston_calibration_identifiability.md`.
 
 ## Reconciled old roadmap
 

@@ -646,6 +646,7 @@ def test_barrier_grid_greeks_are_second_order(greek: str) -> None:
     assert fit.residual < 0.05
 
 
+@pytest.mark.slow
 def test_gamma_flips_sign_approaching_the_barrier() -> None:
     """Evidence class: NEGATIVE_FINDING -- Slice 12's finding, reproduced on a grid.
 

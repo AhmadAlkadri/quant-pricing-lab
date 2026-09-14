@@ -655,6 +655,56 @@ _SMOKE_CASES = [
         ],
     ),
     (
+        # Slice 17: Heston calibration. The curated keys are the ones a run
+        # that had lost the point would not print. `one_maturity_kappa_spread`
+        # of 2.50 sitting next to `one_maturity_worst_iv_rmse=2.88e-06` is the
+        # whole slice in two lines -- six fits that all reproduce the smile to
+        # three hundredths of a basis point and disagree about kappa by a
+        # factor of two and a half -- and `three_maturities_recover_kappa=True`
+        # is the control that says it is the data and not the solver.
+        # `price_condition_falls_with_maturities=False` is the contradicted
+        # slice statement, kept as a printed False rather than removed.
+        "heston_calibration.py",
+        ["--case", "identifiability"],
+        [
+            "example=heston_calibration",
+            "case=identifiability",
+            "cond implied_vol n_maturities=1 cond=6.7",
+            "cond implied_vol n_maturities=6 cond=4.7",
+            "flat_direction implied_vol v0=+0.275 kappa=-0.926",
+            "implied_vol_condition_falls_with_maturities=True",
+            "price_condition_falls_with_maturities=False",
+            "one_maturity_is_at_least_1e4_worse=True",
+            "one_maturity_worst_iv_rmse=2.8",
+            "one_maturity_kappa_spread=2.50",
+            "one_maturity_xi_spread=1.9",
+            "the_smile_is_recovered_and_kappa_is_not=True",
+            "three_maturities_recover_kappa=True",
+        ],
+    ),
+    (
+        # The optimisation half. `reached=14/14` is a fact about this solver on
+        # this pricer and says so in the comment stream; the two `multistart`
+        # booleans are the honest version of "multi-start helps" (it finds the
+        # best objective and does not improve on a single start); and
+        # `the_unconstrained_route_leaves_the_domain=True` next to
+        # `unconstrained ... rho=+1.0` is a correlation above one, reported
+        # rather than coerced.
+        "heston_calibration.py",
+        ["--case", "starts"],
+        [
+            "case=starts",
+            "reached=14/14",
+            "every_start_reaches_the_best_objective=True",
+            "a_success_rate_is_not_an_identifiability_statement=True",
+            "multistart_finds_the_best_objective=True",
+            "multistart_improves_on_a_single_start=False",
+            "bounded in_domain=True",
+            "unconstrained in_domain=False rho=+1.0",
+            "the_unconstrained_route_leaves_the_domain=True",
+        ],
+    ),
+    (
         # The Chapter 6 rules on a pricing integral. `simpson_identity` printing
         # two equal columns is the mechanism, and
         # `simpson_over_trapezoid_at_n128=7.7e+03` is the consequence: the

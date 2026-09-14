@@ -232,6 +232,7 @@ def test_quantlib_lsm_agrees_on_the_longstaff_schwartz_row(
     assert quantlib[1] == pytest.approx(ours[1], rel=0.05), (quantlib[1], ours[1])
 
 
+@pytest.mark.slow
 def test_quantlib_lsm_also_reproduces_the_published_value(
     ls_row_prices: dict[str, tuple[float, float]],
 ) -> None:
@@ -255,6 +256,7 @@ def test_quantlib_lsm_also_reproduces_the_published_value(
     assert stderr <= LS2001_PUBLISHED_LSM_STDERR
 
 
+@pytest.mark.slow
 def test_quantlibs_own_basis_choice_moves_it_less_than_its_noise(
     ls_row_prices: dict[str, tuple[float, float]],
 ) -> None:

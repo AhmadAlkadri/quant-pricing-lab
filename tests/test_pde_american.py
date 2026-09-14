@@ -584,6 +584,7 @@ def test_grid_greeks_refuse_the_degenerate_limits(sigma: float) -> None:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_grid_greeks_agree_with_the_fine_lattice() -> None:
     """Evidence class: INDEPENDENT_ENGINE.
 

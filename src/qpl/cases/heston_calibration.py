@@ -316,7 +316,17 @@ _RECOVERY_MEASURED = {
 Recorded in the module rather than only in the rows' notes so that a reader can
 see the whole table at once. The rows below do not assert *these* numbers -- a
 per-parameter tolerance read off a single run would be cherry-picking -- they
-assert the Jacobian-derived bound and carry these as the notes."""
+assert the Jacobian-derived bound and carry these as the notes.
+
+The price rows are five decimal orders worse than the implied-volatility rows
+and it is **not** the objective's fault. The quotes here are implied
+volatilities produced by a Brent inversion at `xtol = 1e-07`, so converting them
+back to prices displaces the price objective's minimum by that tolerance times
+vega. Fed prices directly, the same objective on the same grid from the same
+start recovers `kappa` to 4.45e-12. QuantLib's independent Levenberg-Marquardt
+lands on the same displaced point to 1.30e-10 with the same sign, which is what
+identified the cause; see
+`tests/oracle/test_heston_calibration_vs_quantlib.py`."""
 
 _RECOVERY_SPECS = {
     ("reference", "price"): CalibrationSpec(

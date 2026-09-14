@@ -24,6 +24,10 @@ fast, and designed to run without external data sources.
 - `heston_mc_qe.py` (also `--case feller`; `--paths N` sets the path count,
   and the tables in `docs/notes/heston_monte_carlo_qe.md` were produced at
   `--paths 1000000`)
+- `heston_calibration.py` (default `--case identifiability`; also
+  `--case recovery`, `--case objective`, `--case starts`, `--all`; `--seeds N`
+  sets the noise-draw count). Two invocations are in the smoke list; the other
+  two run the same studies at a cost the suite does not carry
 - `quadrature_demo.py`
 - `laplace_inversion_demo.py`
 - `copula_gaussian_demo.py`
