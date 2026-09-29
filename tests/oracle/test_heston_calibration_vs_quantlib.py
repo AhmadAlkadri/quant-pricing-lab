@@ -44,9 +44,11 @@ Five results.
 
 5. **The start-grid success rate is a property of the solver, not of the
    problem.** On the same twenty starts and the same exact quotes, this
-   package reaches `kappa = 4` from all twenty and QuantLib from **eleven**,
-   stopping elsewhere at `kappa` of 0.00000, 0.59951, 1.00750, 10.42008,
-   22.11941 and so on, several of them pinned against a parameter constraint.
+   package reaches `kappa = 4` from all twenty and QuantLib from **eleven**
+   (twelve on one Linux CI image; the test bounds the count, see
+   `QUANTLIB_MIN_MISSES`), stopping elsewhere at `kappa` of 0.00000, 0.59951,
+   1.00750, 10.42008, 22.11941 and so on, several of them pinned against a
+   parameter constraint.
    This is not a ranking -- three things differ between the two solvers at once
    and this slice separates none of them -- it is the generalisation of what
    this slice already learned the hard way about its own 11/14.
@@ -459,16 +461,31 @@ def test_both_libraries_fail_to_identify_kappa_at_one_maturity() -> None:
     assert max(abs(a - b) for a, b in zip(mine, theirs, strict=True)) > 0.5
 
 
-QUANTLIB_GLOBAL_COUNT = 11
-"""Out of the same 20 starts on which this package scores 20/20.
+QUANTLIB_MIN_MISSES = 6
+"""QuantLib misses `kappa = 4` from at least 6 of the 20 starts on which this
+package scores 20/20.
 
 Measured on the 5-strike by 6-maturity reference grid with exact quotes, with
 "reached" meaning `|kappa - 4| < 1e-03`: QuantLib's Levenberg-Marquardt gets
-there from 11, and stops at `kappa` of 0.00000, 0.00000, 0.59951, 0.69477,
-1.00750, 3.71951, 10.42008, 11.38892 and 22.11941 from the other nine, several
-of them pinned against a parameter constraint (`xi = 0.00000`, `xi = 0.00864`).
-One start (`(0.04, 1.0, 0.04, 1.5, +0.5)`) additionally leaves the engine in a
-state where `helper.calibrationError()` itself raises.
+there from 11 on macOS arm64 and on GitHub Actions' ubuntu-24.04 image
+20260907.300.1 (2026-09-14), and from **12** on image 20260920.314.1
+(2026-09-29), with QuantLib 1.43, numpy 2.4.6 and scipy 1.17.1 on all three.
+From the other nine it stops at `kappa` of 0.00000, 0.00000, 0.59951,
+0.69477, 1.00750, 3.71951, 10.42008, 11.38892 and 22.11941, several of them
+pinned against a parameter constraint (`xi = 0.00000`, `xi = 0.00864`).
+
+The count is an external optimiser's outcome on a deliberately hostile start
+set, so it is bounded, not pinned. Eight of the nine misses are converged stops
+at a worst helper error of 0.02 to 0.5 (two to fifty vol points) -- local minima
+and constraint pins, structural and not a rounding away from flipping. The
+ninth, `(0.04, 1.0, 0.04, 1.5, +0.5)`, is not a stop at all: the solve is
+aborted in transit at `kappa = 3.71951`, `xi = 1.4e-06` when the adaptive
+engine raises "max number of iterations reached" (unchanged by a larger
+`END_CRITERIA` budget), and `helper.calibrationError()` raises again there. An
+abort on the path of a finite-difference Jacobian is the evident candidate for
+the Linux image's twelfth success. The bound takes the eight structural
+misses and leaves two of them as margin: six misses (30% of the grid, against
+this package's zero) still state the finding.
 
 This is **not** a claim that one library's optimiser is better than the
 other's. The two differ in at least three ways at once -- a bounded
@@ -480,16 +497,18 @@ is is the (d) lesson generalised: a start-grid success rate measures a
 *solver-and-pricer pair on a data set*, never the problem. This package's own
 rate on this grid was 11/14 until a payoff-leg bug was fixed, and it is 20/20
 now; quoting either number as "the Heston calibration success rate" would have
-been wrong both times."""
+been wrong both times -- and QuantLib's own 11/20 turned into 12/20 on a new CI
+image with no library version changed."""
 
 
 @pytest.mark.slow
 def test_the_start_grid_success_rate_is_a_property_of_the_solver() -> None:
-    """NEGATIVE_FINDING: 11/20 against 20/20 on identical data.
+    """NEGATIVE_FINDING: 11/20 (12/20 on one CI image) against 20/20.
 
     The same twenty starts, the same fifteen-to-thirty exact quotes, the same
     parameters to recover. This package reaches `kappa = 4` from every one;
-    QuantLib from eleven. The point is not the ranking -- too many things
+    QuantLib from eleven or twelve, and misses from at least
+    `QUANTLIB_MIN_MISSES`. The point is not the ranking -- too many things
     differ between the two to attribute it -- but that a number quoted as "how
     often a Heston calibration converges" is a property of the pair that
     produced it.
@@ -528,7 +547,7 @@ def test_the_start_grid_success_rate_is_a_property_of_the_solver() -> None:
             < 1e-03
         )
     assert mine == len(starts)
-    assert theirs == QUANTLIB_GLOBAL_COUNT
+    assert theirs <= len(starts) - QUANTLIB_MIN_MISSES, theirs
     assert theirs < mine
 
 
@@ -536,7 +555,7 @@ def test_three_maturities_make_both_libraries_agree_on_kappa() -> None:
     """The control for the degeneracy test: it is the data, not either solver.
 
     Restricted to the starts QuantLib reaches the optimum from (see
-    `QUANTLIB_GLOBAL_COUNT` for the ones it does not), the six-maturity grid
+    `QUANTLIB_MIN_MISSES` for the ones it does not), the six-maturity grid
     makes both libraries return `kappa = 4` where the single-maturity grid made
     neither.
     """
