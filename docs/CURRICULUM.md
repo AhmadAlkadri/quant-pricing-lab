@@ -2009,8 +2009,10 @@ central-difference Jacobian and **3.4x** end to end. A 5 x 6 calibration takes
 of **2.88e-06** -- three hundredths of a basis point -- and land on `kappa`
 from **2.918 to 7.288** (true 4.0) and `xi` from 0.806 to 1.573 (true 1.0),
 with two of them driving `v0` to its lower bound; `rho` and `theta` are
-recovered from every start. The same six starts on three maturities all return
-`kappa = 4.00000`. The condition number says this before any fit is run; no
+recovered from every start. (Those endpoints are one build's; along the flat
+direction they move across platforms -- the spread has read 2.47 and 2.50 --
+while the tested bound, spread > 2, holds.) The same six starts on three
+maturities all return `kappa = 4.00000`. The condition number says this before any fit is run; no
 convergence criterion says it afterwards.
 
 **Five slice-statement expectations contradicted and encoded.**

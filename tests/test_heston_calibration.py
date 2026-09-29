@@ -1167,7 +1167,9 @@ against a true 4.0) and `xi` from **0.806 to 1.573** (true 1.0). Two of them
 drive `v0` to the lower bound. Over the same six fits `rho` lands in
 [-0.5012, -0.4961] and `theta` in [0.2302, 0.2494]: the two parameters the
 smile's slope and level see are recovered, and the two the *term structure*
-sees are not."""
+sees are not. Those endpoints are one build's values: where each fit stops
+along the flat kappa-xi direction moves across platforms (another build prints
+a spread of 2.47), which is why the assertion is the bound, spread > 2."""
 
 
 @pytest.mark.slow

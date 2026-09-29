@@ -510,7 +510,8 @@ HESTON_CALIBRATION_SINGLE_MATURITY_CASES: tuple[CalibrationCase, ...] = (
                 "six drive v0 to its lower bound. The tolerance is wide because the "
                 "ratio is a property of a nearly-flat valley and the solver's stopping "
                 "point inside it moves with the arithmetic; the claim is the factor, "
-                "not its third digit. Same objective value to within one decimal order "
+                "not its third digit; the endpoints quoted are one build's and move "
+                "across platforms along the flat direction. Same objective value to within one decimal order "
                 "(1.0e-12 to 2.1e-11) across all six."
             ),
         ),

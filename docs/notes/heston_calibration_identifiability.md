@@ -233,6 +233,13 @@ bound. Meanwhile `rho` lands in [-0.5012, -0.4961] and `theta` in [0.2302,
 0.2494] from every start: the two parameters the smile's *slope and level* see
 are recovered, and the two the *term structure* sees are not.
 
+The table is one build's output. Where each fit stops along the flat
+`kappa`-`xi` direction moves with the platform's floating-point arithmetic (on
+another build the start-0.5 fit stops at `kappa` 2.94495 and the spread reads
+2.47), so the endpoints and the spread's digits are not constants; the claims
+that hold everywhere, and are what the tests assert, are the bounds: every fit
+at an implied-volatility RMSE below 1e-05 and a `kappa` spread above 2.
+
 The same six starts on three maturities all return `kappa = 4.00000` and
 `xi = 1.00000` to better than 1e-05. Nothing about the solver changed.
 
