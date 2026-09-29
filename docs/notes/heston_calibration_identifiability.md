@@ -293,7 +293,9 @@ that; the condition number can, before the fit is run.
 
 The oracle generalises the lesson. On the same twenty starts and the same exact
 quotes, this package reaches `kappa = 4` from all twenty and QuantLib's
-`HestonModel` + `LevenbergMarquardt` from **eleven**, several of its failures
+`HestonModel` + `LevenbergMarquardt` from **eleven** (twelve on a later Linux CI
+image with the same library versions; the test bounds the count at six or more
+misses rather than pinning it), several of its failures
 pinned against a parameter constraint at `xi = 0.00000`. That is not a
 ranking — the two differ in at least three ways at once (bounded trust region
 against unconstrained MINPACK on QuantLib's internal transformations, analytic

@@ -2060,7 +2060,9 @@ sharpest result is that on the price objective the two fitted vectors differ by
 is what identified (v) above. Both libraries also fail to identify `kappa` at
 one maturity and fail *differently* ([2.918, 7.288] against [3.930, 10.956]),
 and on twenty starts this package reaches the optimum from twenty and QuantLib
-from **eleven** -- pinned as a finding about the measurement, not as a ranking,
+from **eleven** (twelve on a later Linux CI image with the same library versions,
+so the test bounds QuantLib's count rather than pinning it) -- a finding about the
+measurement, not as a ranking,
 because three things differ between the two solvers at once.
 
 - **Refused / out of scope**: local volatility and Dupire, SABR, Bates, market

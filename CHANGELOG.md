@@ -130,6 +130,9 @@ Fusai & Roncoroni chapters 1–8)
   identifiability spreads (kappa spread > 2, xi spread > 1.5, worst implied-vol RMSE
   < 1e-05) instead of pinning digits that move across platforms (4fe70fb); the note,
   curriculum entry and case row now say those endpoints are one build's values.
+- The QuantLib oracle's start-grid test bounds QuantLib's success count (at least six
+  of twenty starts missed) instead of pinning 11, which became 12 on a newer
+  GitHub Actions image with no library version changed (52f4b6c).
 
 ## v0.1.0 — 2026-02-04
 
