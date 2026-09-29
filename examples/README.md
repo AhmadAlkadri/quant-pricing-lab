@@ -1,9 +1,10 @@
 # Examples
 
-These scripts are the public-facing v0.2.0 quickstart demos. They are deterministic,
-fast, and designed to run without external data sources.
+These scripts are the public quickstart demos. They are deterministic, fast, and
+designed to run without external data sources. Most print their measurements as
+`key=value` lines, and `tests/test_examples_smoke.py` runs each curated invocation.
 
-## Public v0.2.0 scripts
+## Public scripts (smoke-tested)
 
 - `bs_analytic_greeks.py`
 - `mc_pricing_and_stderr.py`
