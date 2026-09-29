@@ -19,8 +19,10 @@ Even in exploratory mode, a few constraints stay fixed:
 
 ## Public learning surface
 
-For v0.2.0, the publication surface is centered on:
+The publication surface is centered on:
 
+- `src/qpl/cases` and `tests/` for the checked claims,
+- `docs/CURRICULUM.md` and `docs/notes/` for derivations and measurements,
 - `examples/` for quick scripts,
 - `notebooks/` for concise narrative workflows,
 - this docs site for conceptual orientation.

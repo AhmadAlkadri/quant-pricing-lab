@@ -35,3 +35,6 @@ textbooks/
 
 # private textbook-driven labs (drivers, never cargo)
 labs/
+# generated from docs/ by docs-site/scripts/sync-docs.mjs
+docs-site/docs/curriculum/
+docs-site/docs/.vitepress/cache/

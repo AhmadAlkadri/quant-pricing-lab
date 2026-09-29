@@ -2,11 +2,18 @@
 
 ## Install
 
+`qpl` is installed from a clone of the repository (it is not published on PyPI):
+
 ```bash
+git clone https://github.com/AhmadAlkadri/quant-pricing-lab.git
+cd quant-pricing-lab
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```
+
+Optional extras: `.[oracle]` (QuantLib-Python, for the oracle tests) and `.[data]`
+(market-data scripts outside the curriculum).
 
 ## Run a public example
 

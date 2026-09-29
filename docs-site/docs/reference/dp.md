@@ -26,9 +26,9 @@ result.meta["exercise_boundary"]        # per time level, NaN where none
 result.meta["early_exercise_node_count"]
 ```
 
-`greeks(...)` works the same way. The analytic, Monte Carlo and PDE engines
-are registered for European options only and raise `NotSupportedError` for an
-`AmericanOption`.
+`greeks(...)` works the same way. `method="pde"` (projected SOR) and
+`method="mc"` (least-squares Monte Carlo, which prices a Bermudan and has no
+Greeks) also accept an `AmericanOption`; `method="analytic"` does not.
 
-See `examples/american_put_binomial_dp.py` and
-`docs/notes/american_exercise_on_trees.md`.
+See `examples/american_put_binomial_dp.py`, `examples/american_put_cross_method.py`
+and the note [American exercise on a binomial tree](/curriculum/notes/american_exercise_on_trees).

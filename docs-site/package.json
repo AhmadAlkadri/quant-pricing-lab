@@ -3,8 +3,9 @@
   "private": true,
   "version": "0.2.0",
   "scripts": {
-    "docs:dev": "vitepress dev docs",
-    "docs:build": "vitepress build docs",
+    "docs:sync": "node scripts/sync-docs.mjs",
+    "docs:dev": "node scripts/sync-docs.mjs && vitepress dev docs",
+    "docs:build": "node scripts/sync-docs.mjs && vitepress build docs",
     "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
