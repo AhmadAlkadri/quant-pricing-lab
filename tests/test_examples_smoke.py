@@ -657,13 +657,20 @@ _SMOKE_CASES = [
     (
         # Slice 17: Heston calibration. The curated keys are the ones a run
         # that had lost the point would not print. `one_maturity_kappa_spread`
-        # of 2.50 sitting next to `one_maturity_worst_iv_rmse=2.88e-06` is the
-        # whole slice in two lines -- six fits that all reproduce the smile to
-        # three hundredths of a basis point and disagree about kappa by a
-        # factor of two and a half -- and `three_maturities_recover_kappa=True`
-        # is the control that says it is the data and not the solver.
+        # next to `one_maturity_worst_iv_rmse` is the whole slice in two lines
+        # -- six fits that all reproduce the smile to hundredths of a basis
+        # point and disagree about kappa by a factor of about two and a half --
+        # and `three_maturities_recover_kappa=True` is the control that says it
+        # is the data and not the solver.
         # `price_condition_falls_with_maturities=False` is the contradicted
         # slice statement, kept as a printed False rather than removed.
+        # The three `one_maturity_*` numbers are keyed on the field only and
+        # bounded in `_BOUNDED_FIELDS`: they are where six fits stopped along
+        # the flat kappa-xi direction (and the residual floor they stopped at),
+        # so their digits are not a cross-platform constant -- the kappa spread
+        # has printed 2.47, 2.50 and a third value on three builds. The
+        # Jacobian keys above them are analytic and measured at the true
+        # parameters, and print identically everywhere.
         "heston_calibration.py",
         ["--case", "identifiability"],
         [
@@ -675,9 +682,9 @@ _SMOKE_CASES = [
             "implied_vol_condition_falls_with_maturities=True",
             "price_condition_falls_with_maturities=False",
             "one_maturity_is_at_least_1e4_worse=True",
-            "one_maturity_worst_iv_rmse=2.8",
-            "one_maturity_kappa_spread=2.50",
-            "one_maturity_xi_spread=1.9",
+            "one_maturity_worst_iv_rmse=",  # solver floor; bounded below
+            "one_maturity_kappa_spread=",  # flat direction; bounded below
+            "one_maturity_xi_spread=",  # flat direction; bounded below
             "the_smile_is_recovered_and_kappa_is_not=True",
             "three_maturities_recover_kappa=True",
         ],
@@ -731,6 +738,19 @@ _SMOKE_IDS = [
     for name, args, _ in _SMOKE_CASES
 ]
 
+# Printed numbers whose digits are not a cross-platform constant but whose size
+# is the finding: `field -> (lower, upper)`, either end `None` for open, checked
+# on the keyed run whenever the field is one of the case's required keys. The
+# bounds are the ones `tests/test_heston_calibration.py` puts on the same six
+# fits (`SINGLE_MATURITY_KAPPA_SPREAD`, its `xi` bound and
+# `SINGLE_MATURITY_SMILE_BUDGET`); measured 2.47-2.50, 1.94-1.95 and 2.88e-06.
+_BOUNDED_FIELDS = {
+    "one_maturity_kappa_spread=": (2.0, None),
+    "one_maturity_xi_spread=": (1.5, None),
+    "one_maturity_worst_iv_rmse=": (None, 1e-05),
+}
+_NUMBER = r"([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)"
+
 
 def _run(script_name: str, script_args: list[str]) -> subprocess.CompletedProcess[str]:
     repo_root = os.path.dirname(os.path.dirname(__file__))
@@ -783,6 +803,15 @@ def test_public_examples_smoke_and_determinism(
         assert match is not None
         stderr_val = float(match.group(1))
         assert stderr_val >= 0.0
+
+    for field, (lower, upper) in _BOUNDED_FIELDS.items():
+        if field not in required_keys:
+            continue
+        match = re.search(re.escape(field) + _NUMBER, stdout)
+        assert match is not None, field
+        value = float(match.group(1))
+        assert lower is None or value > lower, (field, value)
+        assert upper is None or value < upper, (field, value)
 
     second = _run(script_name, script_args)
     assert second.returncode == 0, second.stderr
