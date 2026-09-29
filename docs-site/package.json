@@ -1,7 +1,7 @@
 {
   "name": "qpl-docs-site",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "scripts": {
     "docs:sync": "node scripts/sync-docs.mjs",
     "docs:dev": "node scripts/sync-docs.mjs && vitepress dev docs",
